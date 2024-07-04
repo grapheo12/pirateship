@@ -5,12 +5,12 @@ use serde_json::Result;
 #[cfg(test)]
 mod tests;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct NodeNetInfo {
     pub addr: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct NetConfig {
     pub name: String,
     pub addr: String,

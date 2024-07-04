@@ -1,7 +1,9 @@
 pub mod config;
+pub mod rpc;
 use config::Config;
-use std::{env, fs, path};
-
+use log::info;
+use rpc::net::Server;
+use std::{env, fs, io, path, sync::Arc};
 
 // Fetch json config file from command line path.
 // Panic if not found or parsed properly.
@@ -24,7 +26,24 @@ fn process_args() -> Config {
 
     Config::deserialize(&cfg_contents)
 }
-fn main() {
+
+#[tokio::main]
+async fn main() -> io::Result<()> {
+    colog::init();
     let config = process_args();
-    println!("{}", config.serialize());
+    info!("Starting {}", config.net_config.name);
+    let server = Arc::new(Server::new(&config.net_config));
+
+    let server_handle = tokio::spawn(async move {
+        let _ = server.init().await;
+    });
+
+
+
+
+    
+
+
+    let _ = tokio::join!(server_handle);
+    Ok(())
 }
