@@ -1,5 +1,7 @@
 pub mod config;
 pub mod rpc;
+pub mod crypto;
+
 use config::Config;
 use log::info;
 use rpc::net::Server;

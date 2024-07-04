@@ -1,0 +1,10 @@
+{
+    "net_config": {
+        "name": "node0",
+        "addr": "",
+        "cert_path": "tests/configs/",
+        "root_ca_cert_path": "test/configs/",
+        "nodes": {
+        }
+    }
+}
