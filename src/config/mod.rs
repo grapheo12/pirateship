@@ -22,9 +22,16 @@ pub struct NetConfig {
     pub client_max_retry: i32
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RpcConfig {
+    pub allowed_keylist_path: String,
+    pub signing_priv_key_path: String
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Config {
-    pub net_config: NetConfig
+    pub net_config: NetConfig,
+    pub rpc_config: RpcConfig
 }
 
 impl Config {

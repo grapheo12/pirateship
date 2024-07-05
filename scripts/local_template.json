@@ -8,5 +8,9 @@
         "client_max_retry": 10,
         "nodes": {
         }
+    },
+    "rpc_config": {
+        "allowed_keylist_path": "tests/configs/",
+        "signing_priv_key_path": "tests/configs/"
     }
 }

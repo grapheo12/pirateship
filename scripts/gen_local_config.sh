@@ -62,6 +62,20 @@ openssl x509 -req -in $COMMON_DNS.csr -CA $CANAME.crt -CAkey $CANAME.key -CAcrea
 # Convert pkcs8 to pkcs1 format, otherwise rustls complains
 openssl rsa -in $COMMON_DNS.key -out $COMMON_DNS.pkcs1.key
 
+# Generate all Ed25519 keys used for signatures in the consensus protocol.
+# All public keys will be pasted as "<node name> <public key>" in one file.
+# This will be read by all servers to authenticate known peers.
+# One extra key pair will be generated for client.
+rm -rf signing_pub_keys.keylist
+touch signing_pub_keys.keylist
+for i in $(seq 1 $NUMNODES);
+do
+    openssl genpkey -algorithm ed25519 -out node$i\_signing_priv_key.pem
+    echo "node$i $(openssl pkey -in node$i\_signing_priv_key.pem -pubout | grep -v 'PUBLIC KEY')" >> signing_pub_keys.keylist
+done
+openssl genpkey -algorithm ed25519 -out client_signing_priv_key.pem
+echo "client $(openssl pkey -in client_signing_priv_key.pem -pubout | grep -v 'PUBLIC KEY')" >> signing_pub_keys.keylist
+
 # Now generate all the JSON configs
 PORT_PREFIX='300'
 
@@ -79,13 +93,15 @@ BIND_ADDR_PREFIX="0.0.0.0:${PORT_PREFIX}"
 for i in $(seq 1 $NUMNODES);
 do
     cp template.json node$i.json
-
+    privkey_fname=$(pwd)/node$i\_signing_priv_key.pem
     jq ".net_config.nodes = $addrs |\
     .net_config.tls_cert_path = \"$(pwd)/$COMMON_DNS.crt\" |\
     .net_config.tls_key_path = \"$(pwd)/$COMMON_DNS.pkcs1.key\" |\
     .net_config.tls_root_ca_cert_path = \"$(pwd)/$CANAME.crt\" |\
     .net_config.name = \"node$i\" |\
-    .net_config.addr = \"$BIND_ADDR_PREFIX$i\"" node$i.json > tmp.json
+    .net_config.addr = \"$BIND_ADDR_PREFIX$i\" |\
+    .rpc_config.allowed_keylist_path = \"$(pwd)/signing_pub_keys.keylist\" |\
+    .rpc_config.signing_priv_key_path = \"$privkey_fname\"" node$i.json > tmp.json
     cp tmp.json node$i.json
 done
 rm tmp.json

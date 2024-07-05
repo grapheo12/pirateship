@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::config::{NetConfig, NodeNetInfo, Config};
+use crate::config::{Config, NetConfig, NodeNetInfo, RpcConfig};
 
 
 #[test]
@@ -24,7 +24,12 @@ fn test_nodeconfig_serialize() {
 
     }
 
-    let config = Config{net_config};
+    let rpc_config = RpcConfig {
+        allowed_keylist_path: String::from("blah/blah"),
+        signing_priv_key_path: String::from("blah/blah")
+    };
+
+    let config = Config{net_config, rpc_config};
 
     let s = config.serialize();
     println!("{}", s);
