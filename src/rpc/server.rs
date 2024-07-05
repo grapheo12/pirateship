@@ -1,6 +1,6 @@
 use std::{fs::File, io, path, sync::Arc};
 
-use crate::config::NetConfig;
+use crate::{config::NetConfig, rpc::auth};
 use rustls::{crypto::aws_lc_rs, pki_types::{CertificateDer, PrivateKeyDer}};
 use rustls_pemfile::{certs, rsa_private_keys};
 use tokio::{io::{split, AsyncReadExt}, net::{TcpListener, TcpStream}};
@@ -12,7 +12,8 @@ pub struct Server
     pub config: NetConfig,
     pub tls_certs: Vec<CertificateDer<'static>>,
     pub tls_keys: PrivateKeyDer<'static>,
-    pub msg_handler: fn(&[u8]) -> bool  // Can't be a closure as msg_handler is called from another thread.
+    pub msg_handler: fn(&[u8]) -> bool,  // Can't be a closure as msg_handler is called from another thread.
+    do_auth: bool
 }
 
 impl Server
@@ -72,11 +73,25 @@ impl Server
             config: net_cfg.clone(),
             tls_certs: Server::load_certs(&net_cfg.tls_cert_path),
             tls_keys: Server::load_keys(&net_cfg.tls_key_path),
-            msg_handler: handler
+            msg_handler: handler,
+            do_auth: true
+        }
+    }
+
+    pub fn new_unauthenticated(net_cfg: &NetConfig, handler: fn(&[u8]) -> bool) -> Server {
+        Server {
+            config: net_cfg.clone(),
+            tls_certs: Server::load_certs(&net_cfg.tls_cert_path),
+            tls_keys: Server::load_keys(&net_cfg.tls_key_path),
+            msg_handler: handler,
+            do_auth: false
         }
     }
 
     pub async fn handle_stream(_server: Arc<Server>, stream: &mut TlsStream<TcpStream>, addr: core::net::SocketAddr) -> io::Result<()> {
+        if _server.do_auth {
+            auth::handshake_server(&_server, stream).await?;
+        }
         let (mut rx, mut _tx) = split(stream);
         let mut read_buf = vec![0u8; 1 << 15];
         loop {

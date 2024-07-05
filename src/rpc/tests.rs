@@ -1,4 +1,4 @@
-use std::{fs, path, sync::Arc, time::Duration};
+use std::{fs, io::Error, path, sync::Arc, time::Duration};
 
 use log::info;
 use tokio::time::sleep;
@@ -22,18 +22,11 @@ fn mock_msg_handler(buf: &[u8]) -> bool {
     false
 }
 
-#[tokio::test]
-async fn test_unauthenticated_client_server(){
-    colog::init();
-    let config = process_args();
-    info!("Starting {}", config.net_config.name);
-    let server = Arc::new(Server::new(&config.net_config, mock_msg_handler));
-
+async fn run_body(server: &Arc<Server>, client: &Arc<Client>, config: &Config) -> Result<(), Error> {
+    let server = server.clone();
     let server_handle = tokio::spawn(async move {
         let _ = Server::run(server).await;
     });
-
-    let client = Arc::new(Client::new(&config.net_config));
     let data = String::from("Hello world!\n");
     sleep(Duration::from_millis(100)).await;
     info!("Sending test message to self!");
@@ -66,4 +59,24 @@ async fn test_unauthenticated_client_server(){
     sleep(Duration::from_millis(100)).await;
     server_handle.abort();
     let _ = tokio::join!(server_handle);
+    Ok(())
+}
+#[tokio::test]
+async fn test_authenticated_client_server(){
+    colog::init();
+    let config = process_args();
+    info!("Starting {}", config.net_config.name);
+    let server = Arc::new(Server::new(&config.net_config, mock_msg_handler));
+    let client = Arc::new(Client::new(&config.net_config));
+    run_body(&server, &client, &config).await.unwrap();
+}
+
+#[tokio::test]
+async fn test_unauthenticated_client_server(){
+    colog::init();
+    let config = process_args();
+    info!("Starting {}", config.net_config.name);
+    let server = Arc::new(Server::new_unauthenticated(&config.net_config, mock_msg_handler));
+    let client = Arc::new(Client::new_unauthenticated(&config.net_config));
+    run_body(&server, &client, &config).await.unwrap();
 }

@@ -5,6 +5,8 @@ use tokio::{io::AsyncWriteExt, net::TcpStream};
 use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
 use crate::config::NetConfig;
 
+use super::auth;
+
 
 pub struct Client {
     pub config: NetConfig,
@@ -14,6 +16,7 @@ pub struct Client {
             TlsStream<TcpStream>>
             >>
         >>,
+    do_auth: bool
 }
 
 enum SendDataType<'a> {
@@ -48,7 +51,16 @@ impl Client {
         Client {
             config: net_cfg.clone(),
             tls_ca_root_cert: Client::load_root_ca_cert(&net_cfg.tls_root_ca_cert_path),
-            sock_map: Arc::new(RwLock::new(HashMap::new()))
+            sock_map: Arc::new(RwLock::new(HashMap::new())),
+            do_auth: true
+        }
+    }
+    pub fn new_unauthenticated(net_cfg: &NetConfig) -> Client {
+        Client {
+            config: net_cfg.clone(),
+            tls_ca_root_cert: Client::load_root_ca_cert(&net_cfg.tls_root_ca_cert_path),
+            sock_map: Arc::new(RwLock::new(HashMap::new())),
+            do_auth: false
         }
     }
 
@@ -72,8 +84,11 @@ impl Client {
             .map_err(|_| Error::new(ErrorKind::InvalidInput, "invalid dnsname"))?
             .to_owned();
 
-        let stream = connector.connect(domain, stream).await?;
+        let mut stream = connector.connect(domain, stream).await?;
 
+        if client.do_auth {
+            auth::handshake_client(client, &mut stream).await?;
+        }
         let stream_safe = Arc::new(Mutex::new(stream.into()));
         client.sock_map.write().unwrap()
             .insert(name.to_string(), stream_safe.clone());
