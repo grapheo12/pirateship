@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs::File, io::{BufReader, Error, ErrorKind}, path, sync::{Arc, Mutex, RwLock}};
+use std::{collections::HashMap, fs::File, io::{BufReader, Error, ErrorKind}, path, pin::Pin, sync::{Arc, Mutex, RwLock}};
 use log::{debug, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
@@ -7,18 +7,33 @@ use crate::{config::NetConfig, crypto::KeyStore};
 
 use super::auth;
 
+#[derive(Clone)]
+pub struct PinnedHashMap<K, V>(Pin<Box<Arc<RwLock<HashMap<K, V>>>>>);
+impl<K, V> PinnedHashMap<K, V> {
+    fn new() -> PinnedHashMap<K, V> {
+        PinnedHashMap(Box::pin(Arc::new(RwLock::new(HashMap::new()))))
+    }
+}
 
+#[derive(Clone)]
+pub struct PinnedTlsStream(Pin<Box<Arc<Mutex<TlsStream<TcpStream>>>>>);
+impl PinnedTlsStream {
+    fn new(stream: TlsStream<TcpStream>) -> PinnedTlsStream {
+        PinnedTlsStream(Box::pin(Arc::new(Mutex::new(stream))))
+    }
+
+}
 pub struct Client {
     pub config: NetConfig,
     pub tls_ca_root_cert: RootCertStore,
-    pub sock_map: Arc<RwLock<
-        HashMap<String, Arc<Mutex<
-            TlsStream<TcpStream>>
-            >>
-        >>,
+    pub sock_map: PinnedHashMap<String, PinnedTlsStream>,
     pub key_store: KeyStore,
     do_auth: bool
 }
+
+#[derive(Clone)]
+pub struct PinnedClient(Pin<Box<Arc<Client>>>);
+
 
 enum SendDataType<'a> {
     ByteType(&'a [u8]),
@@ -52,7 +67,7 @@ impl Client {
         Client {
             config: net_cfg.clone(),
             tls_ca_root_cert: Client::load_root_ca_cert(&net_cfg.tls_root_ca_cert_path),
-            sock_map: Arc::new(RwLock::new(HashMap::new())),
+            sock_map: PinnedHashMap::new(),
             do_auth: true,
             key_store: key_store.to_owned()
         }
@@ -61,14 +76,13 @@ impl Client {
         Client {
             config: net_cfg.clone(),
             tls_ca_root_cert: Client::load_root_ca_cert(&net_cfg.tls_root_ca_cert_path),
-            sock_map: Arc::new(RwLock::new(HashMap::new())),
+            sock_map: PinnedHashMap::new(),
             do_auth: false,
             key_store: KeyStore::empty().to_owned()
         }
     }
 
-    async fn connect(client: &Arc<Client>, name: &String) -> Result<
-        Arc<Mutex<TlsStream<TcpStream>>>, Error>
+    async fn connect(client: &Arc<Client>, name: &String) -> Result<PinnedTlsStream, Error>
     {
         let peer = client.config.nodes.get(name).ok_or(ErrorKind::AddrNotAvailable)?;
         // Clones the root cert store. Connect() will be only be called once per node.
@@ -92,17 +106,16 @@ impl Client {
         if client.do_auth {
             auth::handshake_client(client, &mut stream).await?;
         }
-        let stream_safe = Arc::new(Mutex::new(stream.into()));
-        client.sock_map.write().unwrap()
+        let stream_safe = PinnedTlsStream::new(stream.into());
+        client.sock_map.0.write().unwrap()
             .insert(name.to_string(), stream_safe.clone());
         Ok(stream_safe)
     }
 
-    async fn get_sock(client: &Arc<Client>, name: &String) -> Result<
-        Arc<Mutex<TlsStream<TcpStream>>>, Error>
+    async fn get_sock(client: &Arc<Client>, name: &String) -> Result<PinnedTlsStream, Error>
     {
         // Is there an open connection?
-        let sock_map_reader = client.sock_map.read().unwrap();
+        let sock_map_reader = client.sock_map.0.read().unwrap();
     
         let sock = match sock_map_reader.get(name) {
             Some(s) => {
@@ -121,15 +134,15 @@ impl Client {
     }
 
     
-    async fn send_raw<'a>(client: &Arc<Client>, name: &String, sock: &Arc<Mutex<TlsStream<TcpStream>>>, data: SendDataType<'a>) -> Result<(), Error>
+    async fn send_raw<'a>(client: &Arc<Client>, name: &String, sock: &PinnedTlsStream, data: SendDataType<'a>) -> Result<(), Error>
     {
         let e = match data {
             SendDataType::ByteType(d) => {
-                sock.lock().unwrap()
+                sock.0.lock().unwrap()
                     .write_all(d).await
             },
             SendDataType::SizeType(d) => {
-                sock.lock().unwrap()
+                sock.0.lock().unwrap()
                     .write_u32(d).await   // Does this take care of endianness?
             }
         };
@@ -138,13 +151,13 @@ impl Client {
             // There is some problem.
             // Reset connection.
             warn!("Problem sending message to {}: {} ... Resetting connection.", name, e);
-            if let Err(e2) = sock.lock().unwrap()
+            if let Err(e2) = sock.0.lock().unwrap()
                 .shutdown().await
             {
                 warn!("Problem shutting down socket of {}: {} ... Proceeding anyway", name, e2);
             }
     
-            client.sock_map.write().unwrap()
+            client.sock_map.0.write().unwrap()
                 .remove(name);
             debug!("Socket removed from sock_map");
             return Err(e);
@@ -178,5 +191,11 @@ impl Client {
 
         Err(
             Error::new(ErrorKind::NotConnected, "Could not send within max_retries"))
+    }
+}
+
+impl PinnedClient {
+    pub fn convert(client: Client) -> PinnedClient {
+        PinnedClient(Box::pin(Arc::new(client)))
     }
 }
