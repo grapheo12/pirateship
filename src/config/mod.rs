@@ -14,6 +14,9 @@ pub struct NodeNetInfo {
 pub struct NetConfig {
     pub name: String,
     pub addr: String,
+    pub tls_cert_path: String,
+    pub tls_key_path: String,
+    pub tls_root_ca_cert_path: String,
     pub nodes: HashMap<String, NodeNetInfo>
 }
 

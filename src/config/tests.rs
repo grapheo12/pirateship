@@ -8,6 +8,9 @@ fn test_nodeconfig_serialize() {
     let mut net_config = NetConfig{
         name: "node1".to_string(),
         addr: "0.0.0.0:3001".to_string(),
+        tls_cert_path: String::from("blah"),
+        tls_key_path: String::from("blah"),
+        tls_root_ca_cert_path: String::from("blah"),
         nodes: HashMap::new()
     };
 

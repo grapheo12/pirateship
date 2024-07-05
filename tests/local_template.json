@@ -2,8 +2,9 @@
     "net_config": {
         "name": "node0",
         "addr": "",
-        "cert_path": "tests/configs/",
-        "root_ca_cert_path": "test/configs/",
+        "tls_cert_path": "tests/configs/",
+        "tls_key_path": "tests/configs/",
+        "tls_root_ca_cert_path": "test/configs/",
         "nodes": {
         }
     }

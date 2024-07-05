@@ -7,6 +7,7 @@ edition = "2021"
 colog = "1.3.0"
 log = "0.4.22"
 rustls = "0.23.10"
+rustls-pemfile = "2.1.2"
 serde = {version = "1.0.203", features = ["derive"]}
 serde_json = "1.0.120"
 tokio = {version = "1.38.0", features = ["full"]}

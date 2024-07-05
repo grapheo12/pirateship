@@ -1,4 +1,7 @@
 #!/bin/bash
+
+# Dependency: openssl jq
+
 # Generates a CA certificates and a certificate used by all nodes.
 # Node domain names: node$i.localhost which points to 127.0.0.1
 # Also generates all the configs.
@@ -56,6 +59,9 @@ done
 
 openssl x509 -req -in $COMMON_DNS.csr -CA $CANAME.crt -CAkey $CANAME.key -CAcreateserial -out $COMMON_DNS.crt -days 730 -sha256 -extfile $COMMON_DNS.v3.ext
 
+# Convert pkcs8 to pkcs1 format, otherwise rustls complains
+openssl rsa -in $COMMON_DNS.key -out $COMMON_DNS.pkcs1.key
+
 # Now generate all the JSON configs
 PORT_PREFIX='300'
 
@@ -73,23 +79,13 @@ BIND_ADDR_PREFIX="0.0.0.0:${PORT_PREFIX}"
 for i in $(seq 1 $NUMNODES);
 do
     cp template.json node$i.json
-    # Copy to a tmp file, copy back the tmp file
-    # Doing this repetatively is not efficient.
-    # But these files won't be bigger than few KiBs.
 
-    jq ".net_config.nodes = $addrs" node$i.json > tmp.json
-    cp tmp.json node$i.json
-    
-    jq ".net_config.cert_path = \"$(pwd)/$COMMON_DNS.crt\"" node$i.json > tmp.json
-    cp tmp.json node$i.json
-    
-    jq ".net_config.root_ca_cert_path = \"$(pwd)/$CANAME.crt\"" node$i.json > tmp.json
-    cp tmp.json node$i.json
-
-    jq ".net_config.name = \"node$i\"" node$i.json > tmp.json
-    cp tmp.json node$i.json
-
-    jq ".net_config.addr = \"$BIND_ADDR_PREFIX$i\"" node$i.json > tmp.json
+    jq ".net_config.nodes = $addrs |\
+    .net_config.tls_cert_path = \"$(pwd)/$COMMON_DNS.crt\" |\
+    .net_config.tls_key_path = \"$(pwd)/$COMMON_DNS.pkcs1.key\" |\
+    .net_config.tls_root_ca_cert_path = \"$(pwd)/$CANAME.crt\" |\
+    .net_config.name = \"node$i\" |\
+    .net_config.addr = \"$BIND_ADDR_PREFIX$i\"" node$i.json > tmp.json
     cp tmp.json node$i.json
 done
 rm tmp.json

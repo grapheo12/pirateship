@@ -4,7 +4,7 @@ pub mod crypto;
 
 use config::Config;
 use log::info;
-use rpc::net::Server;
+use rpc::server::Server;
 use std::{env, fs, io, path, sync::Arc};
 
 // Fetch json config file from command line path.
@@ -29,22 +29,21 @@ fn process_args() -> Config {
     Config::deserialize(&cfg_contents)
 }
 
+fn msg_handler(buf: &[u8]) -> bool {
+    info!("Received message{:#?}", buf);
+    false
+}
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
     colog::init();
     let config = process_args();
     info!("Starting {}", config.net_config.name);
-    let server = Arc::new(Server::new(&config.net_config));
+    let server = Arc::new(Server::new(&config.net_config, msg_handler));
 
     let server_handle = tokio::spawn(async move {
-        let _ = server.init().await;
+        let _ = Server::run(server).await;
     });
-
-
-
-
-    
-
 
     let _ = tokio::join!(server_handle);
     Ok(())
