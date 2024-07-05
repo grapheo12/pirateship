@@ -5,7 +5,7 @@
 # Generates a CA certificates and a certificate used by all nodes.
 # Node domain names: node$i.localhost which points to 127.0.0.1
 # Also generates all the configs.
-# Sample usage: sh tests/gen_local_config.sh configs 7 tests/local_template.json
+# Sample usage: sh scripts/gen_local_config.sh configs 7 scripts/local_template.json
 # Do not commit the generated configs.
 
 # Ported from: https://arminreiter.com/2022/01/create-your-own-certificate-authority-ca-using-openssl/
