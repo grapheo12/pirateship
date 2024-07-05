@@ -1,6 +1,6 @@
 use std::{fs::File, io, path, sync::Arc};
 
-use crate::{config::NetConfig, rpc::auth};
+use crate::{config::NetConfig, crypto::KeyStore, rpc::auth};
 use rustls::{crypto::aws_lc_rs, pki_types::{CertificateDer, PrivateKeyDer}};
 use rustls_pemfile::{certs, rsa_private_keys};
 use tokio::{io::{split, AsyncReadExt}, net::{TcpListener, TcpStream}};
@@ -12,6 +12,7 @@ pub struct Server
     pub config: NetConfig,
     pub tls_certs: Vec<CertificateDer<'static>>,
     pub tls_keys: PrivateKeyDer<'static>,
+    pub key_store: KeyStore,
     pub msg_handler: fn(&[u8]) -> bool,  // Can't be a closure as msg_handler is called from another thread.
     do_auth: bool
 }
@@ -68,13 +69,14 @@ impl Server
         
     }
 
-    pub fn new(net_cfg: &NetConfig, handler: fn(&[u8]) -> bool) -> Server {
+    pub fn new(net_cfg: &NetConfig, handler: fn(&[u8]) -> bool, key_store: &KeyStore) -> Server {
         Server {
             config: net_cfg.clone(),
             tls_certs: Server::load_certs(&net_cfg.tls_cert_path),
             tls_keys: Server::load_keys(&net_cfg.tls_key_path),
             msg_handler: handler,
-            do_auth: true
+            do_auth: true,
+            key_store: key_store.to_owned()
         }
     }
 
@@ -84,7 +86,8 @@ impl Server
             tls_certs: Server::load_certs(&net_cfg.tls_cert_path),
             tls_keys: Server::load_keys(&net_cfg.tls_key_path),
             msg_handler: handler,
-            do_auth: false
+            do_auth: false,
+            key_store: KeyStore::empty().to_owned()
         }
     }
 

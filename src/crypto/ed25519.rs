@@ -1,17 +1,18 @@
 use std::{collections::HashMap, fs::File, io::{BufRead, BufReader, Read}, path};
 
-use ed25519_dalek::{pkcs8::{DecodePrivateKey, DecodePublicKey}, Signature, Signer, Verifier, SigningKey, VerifyingKey};
+use ed25519_dalek::{pkcs8::{DecodePrivateKey, DecodePublicKey}, Signature, Signer, SigningKey, Verifier, VerifyingKey, SECRET_KEY_LENGTH, SIGNATURE_LENGTH};
 
 /// KeyStore is an immutable struct.
 /// It is initiated when called new.
 /// This makes it easy to share among threads.
+#[derive(Clone)]
 pub struct KeyStore {
     pub_keys: HashMap<String, VerifyingKey>,
     priv_key: SigningKey
 }
 
 impl KeyStore {
-    fn get_pubkeys(pubkey_path: String) -> HashMap<String, VerifyingKey> {
+    fn get_pubkeys(pubkey_path: &String) -> HashMap<String, VerifyingKey> {
         let mut keys = HashMap::new();
         let key_path = path::Path::new(pubkey_path.as_str());
         if !key_path.exists() {
@@ -44,7 +45,7 @@ impl KeyStore {
 
         keys
     }
-    fn get_privkeys(privkey_path: String) -> SigningKey {
+    fn get_privkeys(privkey_path: &String) -> SigningKey {
         let key_path = path::Path::new(privkey_path.as_str());
         if !key_path.exists() {
             panic!("Invalid Private Key Path: {}", privkey_path);
@@ -63,10 +64,17 @@ impl KeyStore {
         SigningKey::from_pkcs8_pem(key_str.as_str()).unwrap()
     }
     
-    pub fn new(pubkey_path: String, privkey_path: String) -> KeyStore {
+    pub fn new(pubkey_path: &String, privkey_path: &String) -> KeyStore {
         KeyStore {
             pub_keys: KeyStore::get_pubkeys(pubkey_path),
             priv_key: KeyStore::get_privkeys(privkey_path)
+        }
+    }
+
+    pub fn empty() -> KeyStore {
+        KeyStore {
+            pub_keys: HashMap::new(),
+            priv_key: SigningKey::from_bytes(&[0u8; SECRET_KEY_LENGTH])
         }
     }
 
@@ -84,7 +92,7 @@ impl KeyStore {
         sig.to_bytes()
     }
 
-    pub fn verify(&self, name: &String, sig: &[u8; 64], data: &[u8]) -> bool {
+    pub fn verify(&self, name: &String, sig: &[u8; SIGNATURE_LENGTH], data: &[u8]) -> bool {
         let key = match self.get_pubkey(name) {
             Some(k) => k,
             None => {

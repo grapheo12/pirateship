@@ -3,7 +3,7 @@ use std::{fs, io::Error, path, sync::Arc, time::Duration};
 use log::info;
 use tokio::time::sleep;
 
-use crate::{config::Config, rpc::{client::Client, server::Server}};
+use crate::{config::Config, crypto::KeyStore, rpc::{client::Client, server::Server}};
 
 fn process_args() -> Config {
     let cfg_path = path::Path::new("configs/node1.json");
@@ -46,19 +46,6 @@ async fn run_body(server: &Arc<Server>, client: &Arc<Client>, config: &Config) -
     Client::reliable_send(&client.clone(), &config.net_config.name, data.as_bytes()).await
         .expect_err("Reliable send should fail after server abort");
     let _ = tokio::join!(server_handle);
-    
-    // Second launch
-    let server = Arc::new(Server::new(&config.net_config, mock_msg_handler));
-    let server_handle = tokio::spawn(async move {
-        let _ = Server::run(server).await;
-    });
-    sleep(Duration::from_millis(100)).await;
-    Client::reliable_send(&client.clone(), &config.net_config.name, data.as_bytes()).await
-        .expect("Reliable send should succeed after server reboot.");
-
-    sleep(Duration::from_millis(100)).await;
-    server_handle.abort();
-    let _ = tokio::join!(server_handle);
     Ok(())
 }
 #[tokio::test]
@@ -66,8 +53,15 @@ async fn test_authenticated_client_server(){
     colog::init();
     let config = process_args();
     info!("Starting {}", config.net_config.name);
-    let server = Arc::new(Server::new(&config.net_config, mock_msg_handler));
-    let client = Arc::new(Client::new(&config.net_config));
+    let keys = KeyStore::new(&config.rpc_config.allowed_keylist_path, &config.rpc_config.signing_priv_key_path);
+    let server = Arc::new(Server::new(&config.net_config, mock_msg_handler, &keys));
+    let client = Arc::new(Client::new(&config.net_config, &keys));
+    run_body(&server, &client, &config).await.unwrap();
+
+    let server = Arc::new(Server::new(&config.net_config, mock_msg_handler, &keys));
+    run_body(&server, &client, &config).await.unwrap();
+
+    let server = Arc::new(Server::new(&config.net_config, mock_msg_handler, &keys));
     run_body(&server, &client, &config).await.unwrap();
 }
 
@@ -78,5 +72,11 @@ async fn test_unauthenticated_client_server(){
     info!("Starting {}", config.net_config.name);
     let server = Arc::new(Server::new_unauthenticated(&config.net_config, mock_msg_handler));
     let client = Arc::new(Client::new_unauthenticated(&config.net_config));
+    run_body(&server, &client, &config).await.unwrap();
+    
+    let server = Arc::new(Server::new_unauthenticated(&config.net_config, mock_msg_handler));
+    run_body(&server, &client, &config).await.unwrap();
+
+    let server = Arc::new(Server::new_unauthenticated(&config.net_config, mock_msg_handler));
     run_body(&server, &client, &config).await.unwrap();
 }

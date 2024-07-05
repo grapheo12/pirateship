@@ -3,6 +3,7 @@ pub mod rpc;
 pub mod crypto;
 
 use config::Config;
+use crypto::KeyStore;
 use log::info;
 use rpc::{client::Client, server::Server};
 use tokio::time::sleep;
@@ -41,13 +42,16 @@ async fn main() -> io::Result<()> {
     colog::init();
     let config = process_args();
     info!("Starting {}", config.net_config.name);
-    let server = Arc::new(Server::new(&config.net_config, msg_handler));
+    let keys = KeyStore::new(
+        &config.rpc_config.allowed_keylist_path,
+        &config.rpc_config.signing_priv_key_path);
+    let server = Arc::new(Server::new(&config.net_config, msg_handler, &keys));
 
     let server_handle = tokio::spawn(async move {
         let _ = Server::run(server).await;
     });
 
-    let client = Arc::new(Client::new(&config.net_config));
+    let client = Arc::new(Client::new(&config.net_config, &keys));
     let data = String::from("Hello world!\n");
     sleep(Duration::from_millis(100)).await;
     info!("Sending test message to self!");

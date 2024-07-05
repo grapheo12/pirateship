@@ -3,7 +3,7 @@ use log::{debug, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
-use crate::config::NetConfig;
+use crate::{config::NetConfig, crypto::KeyStore};
 
 use super::auth;
 
@@ -16,6 +16,7 @@ pub struct Client {
             TlsStream<TcpStream>>
             >>
         >>,
+    pub key_store: KeyStore,
     do_auth: bool
 }
 
@@ -47,12 +48,13 @@ impl Client {
         }
         root_cert_store
     }
-    pub fn new(net_cfg: &NetConfig) -> Client {
+    pub fn new(net_cfg: &NetConfig, key_store: &KeyStore) -> Client {
         Client {
             config: net_cfg.clone(),
             tls_ca_root_cert: Client::load_root_ca_cert(&net_cfg.tls_root_ca_cert_path),
             sock_map: Arc::new(RwLock::new(HashMap::new())),
-            do_auth: true
+            do_auth: true,
+            key_store: key_store.to_owned()
         }
     }
     pub fn new_unauthenticated(net_cfg: &NetConfig) -> Client {
@@ -60,7 +62,8 @@ impl Client {
             config: net_cfg.clone(),
             tls_ca_root_cert: Client::load_root_ca_cert(&net_cfg.tls_root_ca_cert_path),
             sock_map: Arc::new(RwLock::new(HashMap::new())),
-            do_auth: false
+            do_auth: false,
+            key_store: KeyStore::empty().to_owned()
         }
     }
 
