@@ -8,6 +8,7 @@ mod tests;
 #[derive(Serialize, Deserialize, Clone)]
 pub struct NodeNetInfo {
     pub addr: String,
+    pub domain: String
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -17,7 +18,8 @@ pub struct NetConfig {
     pub tls_cert_path: String,
     pub tls_key_path: String,
     pub tls_root_ca_cert_path: String,
-    pub nodes: HashMap<String, NodeNetInfo>
+    pub nodes: HashMap<String, NodeNetInfo>,
+    pub client_max_retry: i32
 }
 
 #[derive(Serialize, Deserialize)]

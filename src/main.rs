@@ -4,11 +4,12 @@ pub mod crypto;
 
 use config::Config;
 use log::info;
-use rpc::server::Server;
-use std::{env, fs, io, path, sync::Arc};
+use rpc::{client::Client, server::Server};
+use tokio::time::sleep;
+use std::{env, fs, io, path, sync::Arc, time::Duration};
 
-// Fetch json config file from command line path.
-// Panic if not found or parsed properly.
+/// Fetch json config file from command line path.
+/// Panic if not found or parsed properly.
 fn process_args() -> Config {
     macro_rules! usage_str {() => ("\x1b[31;1mUsage: {} path/to/config.json\x1b[0m");}
 
@@ -30,7 +31,8 @@ fn process_args() -> Config {
 }
 
 fn msg_handler(buf: &[u8]) -> bool {
-    info!("Received message{:#?}", buf);
+
+    info!("Received message: {}", std::str::from_utf8(buf).unwrap_or("Parsing error"));
     false
 }
 
@@ -45,6 +47,17 @@ async fn main() -> io::Result<()> {
         let _ = Server::run(server).await;
     });
 
+    let client = Arc::new(Client::new(&config.net_config));
+    let data = String::from("Hello world!\n");
+    sleep(Duration::from_millis(100)).await;
+    info!("Sending test message to self!");
+    let _ = Client::send(&client.clone(), &config.net_config.name, data.as_bytes()).await;
+    info!("Send done!");
+    sleep(Duration::from_millis(100)).await;
+    let _ = Client::send(&client.clone(), &config.net_config.name, data.as_bytes()).await;
+    info!("Send done twice!");
+    Client::reliable_send(&client.clone(), &config.net_config.name, data.as_bytes()).await?;
+    info!("Reliable send!");
     let _ = tokio::join!(server_handle);
     Ok(())
 }

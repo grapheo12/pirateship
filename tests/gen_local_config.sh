@@ -69,10 +69,10 @@ addrs="{"
 
 for i in $(seq 1 $(( $NUMNODES - 1 )));
 do
-    addrs="${addrs} \"node$i\": {\"addr\": \"node$i.$COMMON_DNS:$PORT_PREFIX$i\"},"
+    addrs="${addrs} \"node$i\": {\"addr\": \"node$i.$COMMON_DNS:$PORT_PREFIX$i\", \"domain\": \"node$i.$COMMON_DNS\"},"
 done
 
-addrs="${addrs} \"node$NUMNODES\": {\"addr\": \"node$NUMNODES.$COMMON_DNS:$PORT_PREFIX$NUMNODES\"} }"
+addrs="${addrs} \"node$NUMNODES\": {\"addr\": \"node$NUMNODES.$COMMON_DNS:$PORT_PREFIX$NUMNODES\", \"domain\": \"node$i.$COMMON_DNS\"} }"
 
 BIND_ADDR_PREFIX="0.0.0.0:${PORT_PREFIX}"
 

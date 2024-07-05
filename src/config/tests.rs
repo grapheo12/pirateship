@@ -11,7 +11,8 @@ fn test_nodeconfig_serialize() {
         tls_cert_path: String::from("blah"),
         tls_key_path: String::from("blah"),
         tls_root_ca_cert_path: String::from("blah"),
-        nodes: HashMap::new()
+        nodes: HashMap::new(),
+        client_max_retry: 10
     };
 
     for n in 0..5 {
@@ -19,7 +20,7 @@ fn test_nodeconfig_serialize() {
         name.push_str(n.to_string().as_str());
         let mut addr = "127.0.0.1:300".to_string();
         addr.push_str(n.to_string().as_str());
-        net_config.nodes.insert(name, NodeNetInfo{addr: addr.to_owned()});
+        net_config.nodes.insert(name, NodeNetInfo{addr: addr.to_owned(), domain: String::from("blah.com")});
 
     }
 

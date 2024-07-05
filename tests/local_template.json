@@ -5,6 +5,7 @@
         "tls_cert_path": "tests/configs/",
         "tls_key_path": "tests/configs/",
         "tls_root_ca_cert_path": "test/configs/",
+        "client_max_retry": 10,
         "nodes": {
         }
     }

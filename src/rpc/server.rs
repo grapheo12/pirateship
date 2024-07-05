@@ -3,16 +3,9 @@ use std::{fs::File, io, path, sync::Arc};
 use crate::config::NetConfig;
 use rustls::{crypto::aws_lc_rs, pki_types::{CertificateDer, PrivateKeyDer}};
 use rustls_pemfile::{certs, rsa_private_keys};
-use tokio::{io::{sink, split, AsyncReadExt}, net::{TcpListener, TcpStream}};
-use log::info;
-use tokio_rustls::{rustls::{self, server::WebPkiClientVerifier}, TlsAcceptor, server::TlsStream};
-
-
-pub struct RemoteState {
-    socket: TcpStream,
-    session_key: String,
-    addr: core::net::SocketAddr
-}
+use tokio::{io::{split, AsyncReadExt}, net::{TcpListener, TcpStream}};
+use log::{info, warn};
+use tokio_rustls::{rustls, TlsAcceptor, server::TlsStream};
 
 pub struct Server
 {
@@ -83,12 +76,15 @@ impl Server
         }
     }
 
-    pub async fn handle_stream(_server: Arc<Server>, stream: &mut TlsStream<TcpStream>) -> io::Result<()> {
+    pub async fn handle_stream(_server: Arc<Server>, stream: &mut TlsStream<TcpStream>, addr: core::net::SocketAddr) -> io::Result<()> {
         let (mut rx, mut _tx) = split(stream);
         let mut read_buf = vec![0u8; 1 << 15];
         loop {
             // Message format: Size(u32) | Message
             // Message size capped at 4GiB.
+            // As message is multipart, TCP won't have atomic delivery.
+            // It is better to just close connection if that happens.
+            // That is why `await?` with all read calls. 
             let sz = rx.read_u32().await? as usize;
             if sz == 0 {
                 // End of socket, probably?
@@ -107,6 +103,7 @@ impl Server
             }
         }
 
+        warn!("Dropping connection from {:?}", addr);
         Ok(())
     } 
     pub async fn run(server: Arc<Server>) -> io::Result<()> {
@@ -133,7 +130,7 @@ impl Server
             // No need to have a list of sockets to select() from.
             tokio::spawn(async move {
                 let mut stream = acceptor.accept(socket).await?;
-                Server::handle_stream(server_, &mut stream).await?;
+                Server::handle_stream(server_, &mut stream, addr).await?;
                 Ok(()) as io::Result<()>
             });
         }
