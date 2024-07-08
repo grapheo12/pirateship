@@ -199,7 +199,14 @@ impl PinnedClient {
         Err(
             Error::new(ErrorKind::NotConnected, "Could not send within max_retries"))
     }
-    pub async fn broadcast(client: &PinnedClient, names: &Vec<String>, data: &PinnedMessage) -> Result<i32, Error> {
+
+    /// Sends messages to all peers in `names.`
+    /// Returns Ok(n) if >= `min_success` sends could be done.
+    /// Else returns Err(n)
+    /// Each send will be retried for `rpc_config.client_max_retry` consecutively without delay.
+    /// Any clever retry mechanism for the broadcast should be implemented by the caller of this function.
+    /// (Such as AIMD.)
+    pub async fn broadcast(client: &PinnedClient, names: &Vec<String>, data: &PinnedMessage, min_success: i32) -> Result<i32, i32> {
         let mut handles = JoinSet::new();
         for name in names {
             let _c = client.clone();
@@ -220,6 +227,11 @@ impl PinnedClient {
             }
         }
 
-        Ok(successes)
+        if successes >= min_success {
+            Ok(successes)
+        }else{
+            Err(successes)
+        }
+
     }
 }

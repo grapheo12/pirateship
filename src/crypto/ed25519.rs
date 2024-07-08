@@ -86,7 +86,7 @@ impl KeyStore {
         &self.priv_key
     }
 
-    pub fn sign(&self, data: &[u8]) -> [u8; 64] {
+    pub fn sign(&self, data: &[u8]) -> [u8; SIGNATURE_LENGTH] {
         // Import the ed25519_dalek::Signer to avoid the .sign method to take a mutable ref
         let sig: Signature =  self.priv_key.sign(data);
         sig.to_bytes()

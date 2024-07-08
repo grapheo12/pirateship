@@ -111,8 +111,8 @@ async fn test_3_node_bcast(){
     let keys2 = KeyStore::new(&config2.rpc_config.allowed_keylist_path, &config2.rpc_config.signing_priv_key_path);
     let keys3 = KeyStore::new(&config3.rpc_config.allowed_keylist_path, &config3.rpc_config.signing_priv_key_path);
     let ctx1 = Arc::new(Mutex::new(Box::pin(ServerCtx(3))));
-    let ctx2 = Arc::new(Mutex::new(Box::pin(ServerCtx(3))));
-    let ctx3 = Arc::new(Mutex::new(Box::pin(ServerCtx(3))));
+    let ctx2 = Arc::new(Mutex::new(Box::pin(ServerCtx(1))));
+    let ctx3 = Arc::new(Mutex::new(Box::pin(ServerCtx(2))));
     let server1 = Arc::new(Server::new(&config1.net_config, drop_after_n, &keys1));
     let server2 = Arc::new(Server::new(&config2.net_config, drop_after_n, &keys2));
     let server3 = Arc::new(Server::new(&config3.net_config, drop_after_n, &keys3));
@@ -133,25 +133,24 @@ async fn test_3_node_bcast(){
     let data = data.into_bytes();
     let sz = data.len();
     let data = PinnedMessage::from(data, sz, super::SenderType::Anon);
-    PinnedClient::broadcast(&client, &names, &data).await
-        .expect("Broadcast should complete!");
-    sleep(Duration::from_millis(100)).await;
-    PinnedClient::broadcast(&client, &names, &data).await
-        .expect("Broadcast should complete!");
-    sleep(Duration::from_millis(100)).await;
-    PinnedClient::broadcast(&client, &names, &data).await
-        .expect("Broadcast should complete!");
-
-
-    sleep(Duration::from_millis(100)).await;
-
-
-
+    PinnedClient::broadcast(&client, &names, &data, 3).await
+        .expect("Broadcast should complete with 3 nodes!");
     sleep(Duration::from_millis(100)).await;
     server_handle1.abort();
+    let _ = tokio::join!(server_handle1);
+    sleep(Duration::from_millis(1000)).await;
+    PinnedClient::broadcast(&client, &names, &data, 2).await
+        .expect("Broadcast should complete with 2 nodes!");
+    sleep(Duration::from_millis(100)).await;
     server_handle2.abort();
+    let _ = tokio::join!(server_handle2);
+
+    PinnedClient::broadcast(&client, &names, &data, 4).await
+        .expect_err("There are not enough nodes!");
+
+    sleep(Duration::from_millis(100)).await;
     server_handle3.abort();
-    let _ = tokio::join!(server_handle1, server_handle2, server_handle3);
+    let _ = tokio::join!(server_handle3);
 }
 
 
