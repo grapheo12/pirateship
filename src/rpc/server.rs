@@ -1,4 +1,4 @@
-use std::{fs::File, io, path, sync::{Arc, Mutex}};
+use std::{fs::File, io, path, sync::Arc};
 
 use crate::{config::Config, crypto::KeyStore, rpc::auth};
 use rustls::{crypto::aws_lc_rs, pki_types::{CertificateDer, PrivateKeyDer}};
@@ -16,12 +16,12 @@ pub struct Server<ServerContext>
     pub tls_certs: Vec<CertificateDer<'static>>,
     pub tls_keys: PrivateKeyDer<'static>,
     pub key_store: KeyStore,
-    pub msg_handler: fn(Arc<Mutex<ServerContext>>, MessageRef) -> bool,  // Can't be a closure as msg_handler is called from another thread.
+    pub msg_handler: fn(&ServerContext, MessageRef) -> bool,  // Can't be a closure as msg_handler is called from another thread.
     do_auth: bool
 }
 
 impl<S> Server<S>
-    where S: Send + Sync + 'static
+    where S: Send + Sync + Clone + 'static
 {
     // Following two functions ported from: https://github.com/rustls/tokio-rustls/blob/main/examples/server.rs
     fn load_certs(path: &String) -> Vec<CertificateDer<'static>> {
@@ -73,7 +73,7 @@ impl<S> Server<S>
         
     }
 
-    pub fn new(cfg: &Config, handler:  fn(Arc<Mutex<S>>, MessageRef) -> bool , key_store: &KeyStore) -> Server<S> {
+    pub fn new(cfg: &Config, handler:  fn(&S, MessageRef) -> bool , key_store: &KeyStore) -> Server<S> {
         Server {
             config: cfg.clone(),
             tls_certs: Server::<S>::load_certs(&cfg.net_config.tls_cert_path),
@@ -84,7 +84,7 @@ impl<S> Server<S>
         }
     }
 
-    pub fn new_unauthenticated(cfg: &Config, handler: fn(Arc<Mutex<S>>, MessageRef) -> bool) -> Server<S> {
+    pub fn new_unauthenticated(cfg: &Config, handler: fn(&S, MessageRef) -> bool) -> Server<S> {
         Server {
             config: cfg.clone(),
             tls_certs: Server::<S>::load_certs(&cfg.net_config.tls_cert_path),
@@ -95,7 +95,7 @@ impl<S> Server<S>
         }
     }
 
-    pub async fn handle_stream(_server: Arc<Self>, ctx: Arc<Mutex<S>>, stream: &mut TlsStream<TcpStream>, addr: core::net::SocketAddr) -> io::Result<()> {
+    pub async fn handle_stream(_server: Arc<Self>, ctx: &S, stream: &mut TlsStream<TcpStream>, addr: core::net::SocketAddr) -> io::Result<()> {
         let mut sender = SenderType::Anon;
         if _server.do_auth {
             let res = auth::handshake_server(&_server, stream).await;
@@ -133,7 +133,7 @@ impl<S> Server<S>
             let (buf, _) = read_buf.split_at_mut(sz); 
             rx.read_exact(buf).await?;
 
-            if !(_server.msg_handler)(ctx.clone(), MessageRef::from(&read_buf, sz, &sender)) {
+            if !(_server.msg_handler)(ctx, MessageRef::from(&read_buf, sz, &sender)) {
                 break;
             }
         }
@@ -141,7 +141,7 @@ impl<S> Server<S>
         warn!("Dropping connection from {:?}", addr);
         Ok(())
     } 
-    pub async fn run(server: Arc<Self>, ctx: Arc<Mutex<S>>) -> io::Result<()> {
+    pub async fn run(server: Arc<Self>, ctx: S) -> io::Result<()> {
         let server_addr = &server.config.net_config.addr;
         info!("Listening on {}", server_addr);
 
@@ -166,7 +166,7 @@ impl<S> Server<S>
             // No need to have a list of sockets to select() from.
             tokio::spawn(async move {
                 let mut stream = acceptor.accept(socket).await?;
-                Self::handle_stream(server_, ctx_, &mut stream, addr).await?;
+                Self::handle_stream(server_, &ctx_, &mut stream, addr).await?;
                 Ok(()) as io::Result<()>
             });
         }

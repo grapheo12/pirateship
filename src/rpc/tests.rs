@@ -21,7 +21,7 @@ fn process_args(i: i32) -> Config {
     Config::deserialize(&cfg_contents)
 }
 
-fn mock_msg_handler(_ctx: Arc<Mutex<()>>, buf: MessageRef) -> bool {
+fn mock_msg_handler(_ctx: &(), buf: MessageRef) -> bool {
     info!("Received message: {}", std::str::from_utf8(&buf).unwrap_or("Parsing error"));
     false
 }
@@ -29,8 +29,7 @@ fn mock_msg_handler(_ctx: Arc<Mutex<()>>, buf: MessageRef) -> bool {
 async fn run_body(server: &Arc<Server<()>>, client: &PinnedClient, config: &Config) -> Result<(), Error> {
     let server = server.clone();
     let server_handle = tokio::spawn(async move {
-        let _unused_ctx = Arc::new(Mutex::new(()));
-        let _ = Server::<()>::run(server, _unused_ctx).await;
+        let _ = Server::<()>::run(server, ()).await;
     });
     let data = String::from("Hello world!\n");
     let data = data.into_bytes();
@@ -89,7 +88,7 @@ async fn test_unauthenticated_client_server(){
 
 struct ServerCtx(i32);
 
-fn drop_after_n(ctx: Arc<Mutex<Pin<Box<ServerCtx>>>>, m: MessageRef) -> bool {
+fn drop_after_n(ctx: &Arc<Mutex<Pin<Box<ServerCtx>>>>, m: MessageRef) -> bool {
     let mut _ctx = ctx.lock().unwrap();
     _ctx.0 -= 1;
     info!("{:?} said: {}", m.sender(), std::str::from_utf8(&m).unwrap_or("Parsing error"));

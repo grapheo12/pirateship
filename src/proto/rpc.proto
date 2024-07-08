@@ -3,6 +3,13 @@ syntax = "proto3";
 package proto.rpc;
 import "consensus.proto";
 
+enum RPCType {
+    FastQuorumRequest = 0;
+    DiverseQuorumRequest = 1;
+    FastQuorumReply = 2;
+    DiverseQuorumReply = 3;
+}
+
 message ProtoPayload {
     oneof message {
         proto.consensus.ProtoViewChange view_change = 1;
@@ -12,5 +19,7 @@ message ProtoPayload {
         proto.consensus.ProtoVote vote = 5;       
     }
 
-    uint64 rpc_seq_num = 6;               // To be used for deduplication: (sender name, rpc seq no) is unique
+    RPCType rpc_type = 6;
+    uint64 rpc_seq_num = 7;               // To be used for deduplication: (sender name, rpc_type, rpc_seq_no) is unique
+
 }

@@ -20,7 +20,7 @@ pub enum SenderType {
 pub struct Message(Arc<Vec<u8>>, usize, SenderType);
 
 #[derive(Clone)]
-pub struct MessageRef<'a>(&'a Vec<u8>, usize, &'a SenderType);
+pub struct MessageRef<'a>(pub &'a Vec<u8>, pub usize, pub &'a SenderType);
 
 #[derive(Clone)]
 pub struct PinnedMessage(Arc<Pin<Box<(Vec<u8>, usize, SenderType)>>>);

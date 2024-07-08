@@ -66,4 +66,5 @@ message ProtoSignatureArrayEntry {
 message ProtoVote {
     repeated ProtoSignatureArrayEntry sig_array = 1;
     bytes fork_digest = 2;
+    uint64 view = 3;
 }

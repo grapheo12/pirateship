@@ -8,7 +8,7 @@ use crypto::KeyStore;
 use log::info;
 use rpc::{client::{Client, PinnedClient}, MessageRef, server::Server};
 use tokio::time::sleep;
-use std::{env, fs, io, path, sync::{Arc, Mutex}, time::Duration};
+use std::{env, fs, io, path, sync::Arc, time::Duration};
 
 /// Fetch json config file from command line path.
 /// Panic if not found or parsed properly.
@@ -32,7 +32,7 @@ fn process_args() -> Config {
     Config::deserialize(&cfg_contents)
 }
 
-fn msg_handler(_ctx: Arc<Mutex<()>>, buf: MessageRef) -> bool {
+fn msg_handler(_ctx: &(), buf: MessageRef) -> bool {
     info!("Received message: {}", std::str::from_utf8(&buf).unwrap_or("Parsing error"));
     false
 }
@@ -48,7 +48,7 @@ async fn main() -> io::Result<()> {
     let server = Arc::new(Server::new(&config, msg_handler, &keys));
 
     let server_handle = tokio::spawn(async move {
-        let _ = Server::run(server, Arc::new(Mutex::new(()))).await;
+        let _ = Server::run(server, ()).await;
     });
 
     let client = Client::new(&config, &keys).into();

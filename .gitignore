@@ -1,3 +1,4 @@
 /target
 configs/
 *.log
+.vscode

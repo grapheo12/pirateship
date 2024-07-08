@@ -1,4 +1,5 @@
 pub mod handler;
+pub mod leader_rotation;
 
 pub mod proto {
     pub mod consensus {
