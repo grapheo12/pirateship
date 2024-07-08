@@ -26,7 +26,8 @@ pub struct NetConfig {
 pub struct RpcConfig {
     pub allowed_keylist_path: String,
     pub signing_priv_key_path: String,
-    pub recv_buffer_size: u32
+    pub recv_buffer_size: u32,
+    pub channel_depth: u32
 }
 
 #[derive(Serialize, Deserialize, Clone)]

@@ -80,3 +80,9 @@ impl PinnedMessage {
         MessageRef(self.0.0.as_ref(), self.0.1, &self.0.2)
     }
 }
+
+pub mod proto {
+    pub mod auth {
+        include!(concat!(env!("OUT_DIR"), "/auth.rs"));
+    }
+}

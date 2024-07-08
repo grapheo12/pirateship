@@ -27,7 +27,8 @@ fn test_nodeconfig_serialize() {
     let rpc_config = RpcConfig {
         allowed_keylist_path: String::from("blah/blah"),
         signing_priv_key_path: String::from("blah/blah"),
-        recv_buffer_size: (1 << 15)
+        recv_buffer_size: (1 << 15),
+        channel_depth: 32
     };
 
     let config = Config{net_config, rpc_config};

@@ -161,11 +161,14 @@ pub fn test_auth_serde() {
         signature: Bytes::from(Vec::from(b"1234567812345678123456781234567812345678123456781234567812345678")),
     };
 
-    let resp_buf = h.serialize_cbor();
+    let resp_buf = h.serialize();
 
     println!("{:?}", resp_buf);
 
-    let resp = HandshakeResponse::deserialize_cbor(&resp_buf);
+    let resp = match HandshakeResponse::deserialize(&resp_buf){
+        Ok(r) => r,
+        Err(e) => panic!("{}", e),
+    };
     
     println!("{:?}", resp);
 

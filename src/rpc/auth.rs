@@ -1,40 +1,39 @@
-use std::{io::{Cursor, Error, ErrorKind}, sync::Arc};
+use std::{io::{Error, ErrorKind}, sync::Arc};
 use bytes::Bytes;
 use ed25519_dalek::SIGNATURE_LENGTH;
 use log::debug;
+use prost::Message;
 use rand::prelude::*;
-use serde::{Deserialize, Serialize};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream};
 use tokio_rustls::{server, client};
 
-use super::{client::Client, server::Server};
+use super::{client::Client, proto::auth::ProtoHandshakeResponse, server::Server};
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct HandshakeResponse {
     pub name: String,
     pub signature: Bytes
 }
 
 impl HandshakeResponse {
-    pub(crate) fn serialize_cbor(&self) -> Vec<u8> {
-        match serde_cbor::to_vec(self) {
-            Ok(b) => b,
-            Err(e) => {
-                panic!("{}", e);
-            }
-        }
+    pub(crate) fn serialize(&self) -> Vec<u8> {
+        let proto = ProtoHandshakeResponse {
+            name: self.name.clone(),
+            signature: self.signature.to_vec() 
+        };
+        proto.encode_to_vec()
     }
 
-    pub(crate) fn deserialize_cbor(arr: &Vec<u8>) -> HandshakeResponse {
-        let reader = Cursor::new(arr);
-        let deser: HandshakeResponse = match serde_cbor::from_reader(reader) {
-            Ok(resp) => resp,
+    pub(crate) fn deserialize(arr: &Vec<u8>) -> Result<HandshakeResponse, Error> {
+        let proto = ProtoHandshakeResponse::decode(arr.as_slice());
+        let deser = match proto {
+            Ok(d) => HandshakeResponse{name: d.name, signature: Bytes::from(d.signature)},
             Err(e) => {
-                panic!("{}", e);
+                return Err(Error::new(ErrorKind::InvalidData, format!("Protobuf error: {}", e)));
             },
         };
 
-        deser
+        Ok(deser)
     }
 
 }
@@ -69,13 +68,7 @@ pub async fn handshake_server<S>(server: &Arc<Server<S>>, stream: &mut server::T
     let mut buf = vec![0u8; sz];
     stream.read_exact(buf.as_mut()).await?;
 
-    let resp: HandshakeResponse = match serde_cbor::from_slice(buf.as_slice()) {
-        Ok(res) => res,
-        Err(e) => {
-            return Err(Error::new(ErrorKind::InvalidData,
-                    format!("invalid response; deserialize error: {}", e.to_string()))); 
-        }
-    };
+    let resp = HandshakeResponse::deserialize(&buf)?;
 
     let name = resp.name;
         // String::from(std::str::from_utf8(resp.name).unwrap_or(""));
@@ -103,12 +96,7 @@ pub async fn handshake_client(client: &Arc<Client>, stream: &mut client::TlsStre
     let signature = Bytes::from(Vec::from(signature));
     let name = client.config.net_config.name.clone();
     let resp = HandshakeResponse { name, signature };
-    let resp_buf = match serde_cbor::to_vec(&resp) {
-        Ok(b) => b,
-        Err(_) => {
-            return Err(Error::new(ErrorKind::InvalidData, "serialization error"));
-        }
-    };
+    let resp_buf = resp.serialize();
 
     stream.write_u32(resp_buf.len() as u32).await?;
     stream.write_all(resp_buf.as_slice()).await?;
