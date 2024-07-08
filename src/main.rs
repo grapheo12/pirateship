@@ -1,6 +1,7 @@
 pub mod config;
 pub mod rpc;
 pub mod crypto;
+pub mod consensus;
 
 use config::Config;
 use crypto::KeyStore;
@@ -44,13 +45,13 @@ async fn main() -> io::Result<()> {
     let keys = KeyStore::new(
         &config.rpc_config.allowed_keylist_path,
         &config.rpc_config.signing_priv_key_path);
-    let server = Arc::new(Server::new(&config.net_config, msg_handler, &keys));
+    let server = Arc::new(Server::new(&config, msg_handler, &keys));
 
     let server_handle = tokio::spawn(async move {
         let _ = Server::run(server, Arc::new(Mutex::new(()))).await;
     });
 
-    let client = Client::new(&config.net_config, &keys).into();
+    let client = Client::new(&config, &keys).into();
     let data = String::from("Hello world!\n");
     let data = data.into_bytes();
     sleep(Duration::from_millis(100)).await;

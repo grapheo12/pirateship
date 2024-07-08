@@ -25,10 +25,11 @@ pub struct NetConfig {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RpcConfig {
     pub allowed_keylist_path: String,
-    pub signing_priv_key_path: String
+    pub signing_priv_key_path: String,
+    pub recv_buffer_size: u32
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     pub net_config: NetConfig,
     pub rpc_config: RpcConfig

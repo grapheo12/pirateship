@@ -3,9 +3,9 @@ use log::{debug, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use tokio::{io::AsyncWriteExt, net::TcpStream, sync::Mutex, task::JoinSet};
 use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
-use crate::{config::NetConfig, crypto::KeyStore};
+use crate::{config::Config, crypto::KeyStore};
 
-use super::{auth, Message, MessageRef, PinnedMessage};
+use super::{auth, MessageRef, PinnedMessage};
 
 #[derive(Clone)]
 pub struct PinnedHashMap<K, V>(Pin<Box<Arc<RwLock<HashMap<K, V>>>>>);
@@ -24,7 +24,7 @@ impl PinnedTlsStream {
 
 }
 pub struct Client {
-    pub config: NetConfig,
+    pub config: Config,
     pub tls_ca_root_cert: RootCertStore,
     pub sock_map: PinnedHashMap<String, PinnedTlsStream>,
     pub key_store: KeyStore,
@@ -63,19 +63,19 @@ impl Client {
         }
         root_cert_store
     }
-    pub fn new(net_cfg: &NetConfig, key_store: &KeyStore) -> Client {
+    pub fn new(cfg: &Config, key_store: &KeyStore) -> Client {
         Client {
-            config: net_cfg.clone(),
-            tls_ca_root_cert: Client::load_root_ca_cert(&net_cfg.tls_root_ca_cert_path),
+            config: cfg.clone(),
+            tls_ca_root_cert: Client::load_root_ca_cert(&cfg.net_config.tls_root_ca_cert_path),
             sock_map: PinnedHashMap::new(),
             do_auth: true,
             key_store: key_store.to_owned()
         }
     }
-    pub fn new_unauthenticated(net_cfg: &NetConfig) -> Client {
+    pub fn new_unauthenticated(cfg: &Config) -> Client {
         Client {
-            config: net_cfg.clone(),
-            tls_ca_root_cert: Client::load_root_ca_cert(&net_cfg.tls_root_ca_cert_path),
+            config: cfg.clone(),
+            tls_ca_root_cert: Client::load_root_ca_cert(&cfg.net_config.tls_root_ca_cert_path),
             sock_map: PinnedHashMap::new(),
             do_auth: false,
             key_store: KeyStore::empty().to_owned()
@@ -91,7 +91,7 @@ impl Client {
 impl PinnedClient {
     async fn connect(client: &PinnedClient, name: &String) -> Result<PinnedTlsStream, Error>
     {
-        let peer = client.0.config.nodes.get(name).ok_or(ErrorKind::AddrNotAvailable)?;
+        let peer = client.0.config.net_config.nodes.get(name).ok_or(ErrorKind::AddrNotAvailable)?;
         // Clones the root cert store. Connect() will be only be called once per node.
         // Or if the connection is dropped and needs to be re-established.
         // So, this should be acceptable.
@@ -181,7 +181,7 @@ impl PinnedClient {
     }
 
     pub async fn reliable_send<'b>(client: &PinnedClient, name: &String, data: MessageRef<'b>) -> Result<(), Error> {
-        let mut i = client.0.config.client_max_retry;
+        let mut i = client.0.config.net_config.client_max_retry;
         while i > 0 {
             let done = match Self::send(client, name, data.clone()).await {
                 Ok(()) => true,

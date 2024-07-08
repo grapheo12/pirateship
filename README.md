@@ -21,3 +21,9 @@ Build the project using `cargo build` and run as follows:
 ```bash
 RUST_LOG=debug ./target/debug/pft configs/node$i.json
 ```
+
+
+# TODO
+
+(To do once a basic code structure is ready)
+- [ ] Test if a dedicated async task per connected server (with channels to pass data) is better than locked sockets.

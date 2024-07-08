@@ -11,6 +11,7 @@
     },
     "rpc_config": {
         "allowed_keylist_path": "tests/configs/",
-        "signing_priv_key_path": "tests/configs/"
+        "signing_priv_key_path": "tests/configs/",
+        "recv_buffer_size": 32768
     }
 }

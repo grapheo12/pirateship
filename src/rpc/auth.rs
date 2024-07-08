@@ -98,10 +98,10 @@ pub async fn handshake_server<S>(server: &Arc<Server<S>>, stream: &mut server::T
 pub async fn handshake_client(client: &Arc<Client>, stream: &mut client::TlsStream<TcpStream>) -> Result<(), Error> {
     let nonce = stream.read_u32().await?;
     debug!("Received nonce: {}", nonce);
-    let payload = construct_payload(nonce, &client.config.name);
+    let payload = construct_payload(nonce, &client.config.net_config.name);
     let signature = client.key_store.sign(&payload.as_slice());
     let signature = Bytes::from(Vec::from(signature));
-    let name = client.config.name.clone();
+    let name = client.config.net_config.name.clone();
     let resp = HandshakeResponse { name, signature };
     let resp_buf = match serde_cbor::to_vec(&resp) {
         Ok(b) => b,

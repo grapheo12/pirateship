@@ -1,6 +1,6 @@
 use std::{fs::File, io, path, sync::{Arc, Mutex}};
 
-use crate::{config::NetConfig, crypto::KeyStore, rpc::auth};
+use crate::{config::Config, crypto::KeyStore, rpc::auth};
 use rustls::{crypto::aws_lc_rs, pki_types::{CertificateDer, PrivateKeyDer}};
 use rustls_pemfile::{certs, rsa_private_keys};
 use tokio::{io::{split, AsyncReadExt}, net::{TcpListener, TcpStream}};
@@ -12,7 +12,7 @@ use super::{MessageRef, SenderType};
 pub struct Server<ServerContext>
     where ServerContext: Send + Sync + 'static
 {
-    pub config: NetConfig,
+    pub config: Config,
     pub tls_certs: Vec<CertificateDer<'static>>,
     pub tls_keys: PrivateKeyDer<'static>,
     pub key_store: KeyStore,
@@ -73,29 +73,27 @@ impl<S> Server<S>
         
     }
 
-    pub fn new(net_cfg: &NetConfig, handler:  fn(Arc<Mutex<S>>, MessageRef) -> bool , key_store: &KeyStore) -> Server<S> {
+    pub fn new(cfg: &Config, handler:  fn(Arc<Mutex<S>>, MessageRef) -> bool , key_store: &KeyStore) -> Server<S> {
         Server {
-            config: net_cfg.clone(),
-            tls_certs: Server::<S>::load_certs(&net_cfg.tls_cert_path),
-            tls_keys: Server::<S>::load_keys(&net_cfg.tls_key_path),
+            config: cfg.clone(),
+            tls_certs: Server::<S>::load_certs(&cfg.net_config.tls_cert_path),
+            tls_keys: Server::<S>::load_keys(&cfg.net_config.tls_key_path),
             msg_handler: handler,
             do_auth: true,
             key_store: key_store.to_owned()
         }
     }
 
-    pub fn new_unauthenticated(net_cfg: &NetConfig, handler: fn(Arc<Mutex<S>>, MessageRef) -> bool) -> Server<S> {
+    pub fn new_unauthenticated(cfg: &Config, handler: fn(Arc<Mutex<S>>, MessageRef) -> bool) -> Server<S> {
         Server {
-            config: net_cfg.clone(),
-            tls_certs: Server::<S>::load_certs(&net_cfg.tls_cert_path),
-            tls_keys: Server::<S>::load_keys(&net_cfg.tls_key_path),
+            config: cfg.clone(),
+            tls_certs: Server::<S>::load_certs(&cfg.net_config.tls_cert_path),
+            tls_keys: Server::<S>::load_keys(&cfg.net_config.tls_key_path),
             msg_handler: handler,
             do_auth: false,
             key_store: KeyStore::empty().to_owned()
         }
     }
-
-    const BUFFER_INIT_SIZE: usize = (1 << 15);
 
     pub async fn handle_stream(_server: Arc<Self>, ctx: Arc<Mutex<S>>, stream: &mut TlsStream<TcpStream>, addr: core::net::SocketAddr) -> io::Result<()> {
         let mut sender = SenderType::Anon;
@@ -114,7 +112,7 @@ impl<S> Server<S>
             sender = SenderType::Auth(name);
         }
         let (mut rx, mut _tx) = split(stream);
-        let mut read_buf = vec![0u8; Self::BUFFER_INIT_SIZE];
+        let mut read_buf = vec![0u8; _server.config.rpc_config.recv_buffer_size as usize];
         loop {
             // Message format: Size(u32) | Message
             // Message size capped at 4GiB.
@@ -144,7 +142,7 @@ impl<S> Server<S>
         Ok(())
     } 
     pub async fn run(server: Arc<Self>, ctx: Arc<Mutex<S>>) -> io::Result<()> {
-        let server_addr = &server.config.addr;
+        let server_addr = &server.config.net_config.addr;
         info!("Listening on {}", server_addr);
 
         // aws_lc_rs::default_provider() uses AES-GCM. This automatically includes a MAC.

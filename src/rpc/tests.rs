@@ -60,14 +60,14 @@ async fn test_authenticated_client_server(){
     let config = process_args(1);
     info!("Starting {}", config.net_config.name);
     let keys = KeyStore::new(&config.rpc_config.allowed_keylist_path, &config.rpc_config.signing_priv_key_path);
-    let server = Arc::new(Server::new(&config.net_config, mock_msg_handler, &keys));
-    let client = Client::new(&config.net_config, &keys).into();
+    let server = Arc::new(Server::new(&config, mock_msg_handler, &keys));
+    let client = Client::new(&config, &keys).into();
     run_body(&server, &client, &config).await.unwrap();
 
-    let server = Arc::new(Server::new(&config.net_config, mock_msg_handler, &keys));
+    let server = Arc::new(Server::new(&config, mock_msg_handler, &keys));
     run_body(&server, &client, &config).await.unwrap();
 
-    let server = Arc::new(Server::new(&config.net_config, mock_msg_handler, &keys));
+    let server = Arc::new(Server::new(&config, mock_msg_handler, &keys));
     run_body(&server, &client, &config).await.unwrap();
 }
 
@@ -76,14 +76,14 @@ async fn test_unauthenticated_client_server(){
     colog::init();
     let config = process_args(1);
     info!("Starting {}", config.net_config.name);
-    let server = Arc::new(Server::new_unauthenticated(&config.net_config, mock_msg_handler));
-    let client = Client::new_unauthenticated(&config.net_config).into();
+    let server = Arc::new(Server::new_unauthenticated(&config, mock_msg_handler));
+    let client = Client::new_unauthenticated(&config).into();
     run_body(&server, &client, &config).await.unwrap();
     
-    let server = Arc::new(Server::new_unauthenticated(&config.net_config, mock_msg_handler));
+    let server = Arc::new(Server::new_unauthenticated(&config, mock_msg_handler));
     run_body(&server, &client, &config).await.unwrap();
 
-    let server = Arc::new(Server::new_unauthenticated(&config.net_config, mock_msg_handler));
+    let server = Arc::new(Server::new_unauthenticated(&config, mock_msg_handler));
     run_body(&server, &client, &config).await.unwrap();
 }
 
@@ -113,9 +113,9 @@ async fn test_3_node_bcast(){
     let ctx1 = Arc::new(Mutex::new(Box::pin(ServerCtx(3))));
     let ctx2 = Arc::new(Mutex::new(Box::pin(ServerCtx(1))));
     let ctx3 = Arc::new(Mutex::new(Box::pin(ServerCtx(2))));
-    let server1 = Arc::new(Server::new(&config1.net_config, drop_after_n, &keys1));
-    let server2 = Arc::new(Server::new(&config2.net_config, drop_after_n, &keys2));
-    let server3 = Arc::new(Server::new(&config3.net_config, drop_after_n, &keys3));
+    let server1 = Arc::new(Server::new(&config1, drop_after_n, &keys1));
+    let server2 = Arc::new(Server::new(&config2, drop_after_n, &keys2));
+    let server3 = Arc::new(Server::new(&config3, drop_after_n, &keys3));
 
     let server_handle1 = tokio::spawn(async move {
         let _ = Server::run(server1, ctx1).await;
@@ -127,7 +127,7 @@ async fn test_3_node_bcast(){
         let _ = Server::run(server3, ctx3).await;
     });
 
-    let client = Client::new(&config1.net_config, &keys1).into();
+    let client = Client::new(&config1, &keys1).into();
     let names = vec![String::from("node1"), String::from("node2"), String::from("node3")];
     let data = String::from("HelloWorld!!\n");
     let data = data.into_bytes();
