@@ -1,4 +1,5 @@
-use std::{io::{Error, ErrorKind}, sync::Arc};
+use std::{io::{Cursor, Error, ErrorKind}, sync::Arc};
+use bytes::Bytes;
 use ed25519_dalek::SIGNATURE_LENGTH;
 use log::debug;
 use rand::prelude::*;
@@ -8,10 +9,34 @@ use tokio_rustls::{server, client};
 
 use super::{client::Client, server::Server};
 
-#[derive(Serialize, Deserialize, Clone)]
-pub(crate) struct HandshakeResponse<'a> {
-    pub name: &'a [u8],
-    pub signature: &'a [u8]
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub(crate) struct HandshakeResponse {
+    pub name: String,
+    pub signature: Bytes
+}
+
+impl HandshakeResponse {
+    pub(crate) fn serialize_cbor(&self) -> Vec<u8> {
+        match serde_cbor::to_vec(self) {
+            Ok(b) => b,
+            Err(e) => {
+                panic!("{}", e);
+            }
+        }
+    }
+
+    pub(crate) fn deserialize_cbor(arr: &Vec<u8>) -> HandshakeResponse {
+        let reader = Cursor::new(arr);
+        let deser: HandshakeResponse = match serde_cbor::from_reader(reader) {
+            Ok(resp) => resp,
+            Err(e) => {
+                panic!("{}", e);
+            },
+        };
+
+        deser
+    }
+
 }
 
 fn construct_payload(nonce: u32, name: &String) -> Vec<u8> {
@@ -29,7 +54,9 @@ fn construct_payload(nonce: u32, name: &String) -> Vec<u8> {
 /// if name in keylist && signature verifies against registered pubkey
 /// accept connection, or drop.
 /// Returns name of peer or error.
-pub async fn handshake_server(server: &Arc<Server>, stream: &mut server::TlsStream<TcpStream>) -> Result<String, Error> {
+pub async fn handshake_server<S>(server: &Arc<Server<S>>, stream: &mut server::TlsStream<TcpStream>) -> Result<String, Error>
+    where S: Send + Sync + 'static
+{
     let mut rng = rand::rngs::OsRng;
     let nonce: u32 = rng.gen();
     stream.write_u32(nonce).await?;
@@ -44,19 +71,20 @@ pub async fn handshake_server(server: &Arc<Server>, stream: &mut server::TlsStre
 
     let resp: HandshakeResponse = match serde_cbor::from_slice(buf.as_slice()) {
         Ok(res) => res,
-        Err(_) => {
-            return Err(Error::new(ErrorKind::InvalidData, "invalid response; deserialize error")); 
+        Err(e) => {
+            return Err(Error::new(ErrorKind::InvalidData,
+                    format!("invalid response; deserialize error: {}", e.to_string()))); 
         }
     };
 
-    let name = 
-        String::from(std::str::from_utf8(resp.name).unwrap_or(""));
+    let name = resp.name;
+        // String::from(std::str::from_utf8(resp.name).unwrap_or(""));
     if server.key_store.get_pubkey(&name).is_none() {
         return Err(Error::new(ErrorKind::InvalidData, "unknown peer"))
     }
 
     let payload = construct_payload(nonce, &name);
-    let sig: &[u8; SIGNATURE_LENGTH] = resp.signature.try_into()
+    let sig: &[u8; SIGNATURE_LENGTH] = resp.signature.as_ref().try_into()
         .unwrap_or(&[0u8; SIGNATURE_LENGTH]);
     // Let's hope a blank signature is never a valid signature.
 
@@ -72,8 +100,9 @@ pub async fn handshake_client(client: &Arc<Client>, stream: &mut client::TlsStre
     debug!("Received nonce: {}", nonce);
     let payload = construct_payload(nonce, &client.config.name);
     let signature = client.key_store.sign(&payload.as_slice());
+    let signature = Bytes::from(Vec::from(signature));
     let name = client.config.name.clone();
-    let resp = HandshakeResponse { name: name.as_bytes(), signature: signature.as_slice() };
+    let resp = HandshakeResponse { name, signature };
     let resp_buf = match serde_cbor::to_vec(&resp) {
         Ok(b) => b,
         Err(_) => {

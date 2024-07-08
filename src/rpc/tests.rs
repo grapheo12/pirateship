@@ -1,12 +1,16 @@
-use std::{fs, io::Error, path, sync::Arc, time::Duration};
+use std::{fs, io::Error, path, pin::Pin, sync::{Arc, Mutex}, time::Duration};
 
+use bytes::Bytes;
 use log::info;
 use tokio::time::sleep;
 
-use crate::{config::Config, crypto::KeyStore, rpc::{client::Client, server::Server}};
+use crate::{config::Config, crypto::KeyStore, rpc::{client::Client, server::Server, PinnedMessage}};
 
-fn process_args() -> Config {
-    let cfg_path = path::Path::new("configs/node1.json");
+use super::{auth::HandshakeResponse, client::PinnedClient, MessageRef};
+
+fn process_args(i: i32) -> Config {
+    let _p = format!("configs/node{i}.json");
+    let cfg_path = path::Path::new(&_p);
     if !cfg_path.exists() {
         panic!("Node configs not generated!");
     }
@@ -17,33 +21,35 @@ fn process_args() -> Config {
     Config::deserialize(&cfg_contents)
 }
 
-fn mock_msg_handler(buf: &[u8]) -> bool {
-    info!("Received message: {}", std::str::from_utf8(buf).unwrap_or("Parsing error"));
+fn mock_msg_handler(_ctx: Arc<Mutex<()>>, buf: MessageRef) -> bool {
+    info!("Received message: {}", std::str::from_utf8(&buf).unwrap_or("Parsing error"));
     false
 }
 
-async fn run_body(server: &Arc<Server>, client: &Arc<Client>, config: &Config) -> Result<(), Error> {
+async fn run_body(server: &Arc<Server<()>>, client: &PinnedClient, config: &Config) -> Result<(), Error> {
     let server = server.clone();
     let server_handle = tokio::spawn(async move {
-        let _ = Server::run(server).await;
+        let _unused_ctx = Arc::new(Mutex::new(()));
+        let _ = Server::<()>::run(server, _unused_ctx).await;
     });
     let data = String::from("Hello world!\n");
+    let data = data.into_bytes();
     sleep(Duration::from_millis(100)).await;
     info!("Sending test message to self!");
-    let _ = Client::send(&client.clone(), &config.net_config.name, data.as_bytes()).await
+    let _ = PinnedClient::send(&client.clone(), &config.net_config.name, MessageRef::from(&data, data.len(), &super::SenderType::Anon)).await
         .expect("First send should have passed!");
     info!("Send done!");
     sleep(Duration::from_millis(100)).await;
-    let _ = Client::send(&client.clone(), &config.net_config.name, data.as_bytes()).await
+    let _ = PinnedClient::send(&client.clone(), &config.net_config.name, MessageRef::from(&data, data.len(), &super::SenderType::Anon)).await
         .expect_err("Second send should have failed!");
     info!("Send done twice!");
-    Client::reliable_send(&client.clone(), &config.net_config.name, data.as_bytes()).await
+    PinnedClient::reliable_send(&client.clone(), &config.net_config.name, MessageRef::from(&data, data.len(), &super::SenderType::Anon)).await
         .expect("Reliable send should have passed");
     info!("Reliable send!");
     sleep(Duration::from_millis(100)).await;
     server_handle.abort();
     sleep(Duration::from_millis(100)).await;
-    Client::reliable_send(&client.clone(), &config.net_config.name, data.as_bytes()).await
+    PinnedClient::reliable_send(&client.clone(), &config.net_config.name, MessageRef::from(&data, data.len(), &super::SenderType::Anon)).await
         .expect_err("Reliable send should fail after server abort");
     let _ = tokio::join!(server_handle);
     Ok(())
@@ -51,11 +57,11 @@ async fn run_body(server: &Arc<Server>, client: &Arc<Client>, config: &Config) -
 #[tokio::test]
 async fn test_authenticated_client_server(){
     colog::init();
-    let config = process_args();
+    let config = process_args(1);
     info!("Starting {}", config.net_config.name);
     let keys = KeyStore::new(&config.rpc_config.allowed_keylist_path, &config.rpc_config.signing_priv_key_path);
     let server = Arc::new(Server::new(&config.net_config, mock_msg_handler, &keys));
-    let client = Arc::new(Client::new(&config.net_config, &keys));
+    let client = Client::new(&config.net_config, &keys).into();
     run_body(&server, &client, &config).await.unwrap();
 
     let server = Arc::new(Server::new(&config.net_config, mock_msg_handler, &keys));
@@ -68,10 +74,10 @@ async fn test_authenticated_client_server(){
 #[tokio::test]
 async fn test_unauthenticated_client_server(){
     colog::init();
-    let config = process_args();
+    let config = process_args(1);
     info!("Starting {}", config.net_config.name);
     let server = Arc::new(Server::new_unauthenticated(&config.net_config, mock_msg_handler));
-    let client = Arc::new(Client::new_unauthenticated(&config.net_config));
+    let client = Client::new_unauthenticated(&config.net_config).into();
     run_body(&server, &client, &config).await.unwrap();
     
     let server = Arc::new(Server::new_unauthenticated(&config.net_config, mock_msg_handler));
@@ -79,4 +85,93 @@ async fn test_unauthenticated_client_server(){
 
     let server = Arc::new(Server::new_unauthenticated(&config.net_config, mock_msg_handler));
     run_body(&server, &client, &config).await.unwrap();
+}
+
+struct ServerCtx(i32);
+
+fn drop_after_n(ctx: Arc<Mutex<Pin<Box<ServerCtx>>>>, m: MessageRef) -> bool {
+    let mut _ctx = ctx.lock().unwrap();
+    _ctx.0 -= 1;
+    info!("{:?} said: {}", m.sender(), std::str::from_utf8(&m).unwrap_or("Parsing error"));
+
+    if _ctx.0 <= 0 {
+        return false;
+    }
+    true
+
+}
+
+#[tokio::test]
+async fn test_3_node_bcast(){
+    colog::init();
+    let config1 = process_args(1);
+    let config2 = process_args(2);
+    let config3 = process_args(3);
+    let keys1 = KeyStore::new(&config1.rpc_config.allowed_keylist_path, &config1.rpc_config.signing_priv_key_path);
+    let keys2 = KeyStore::new(&config2.rpc_config.allowed_keylist_path, &config2.rpc_config.signing_priv_key_path);
+    let keys3 = KeyStore::new(&config3.rpc_config.allowed_keylist_path, &config3.rpc_config.signing_priv_key_path);
+    let ctx1 = Arc::new(Mutex::new(Box::pin(ServerCtx(3))));
+    let ctx2 = Arc::new(Mutex::new(Box::pin(ServerCtx(3))));
+    let ctx3 = Arc::new(Mutex::new(Box::pin(ServerCtx(3))));
+    let server1 = Arc::new(Server::new(&config1.net_config, drop_after_n, &keys1));
+    let server2 = Arc::new(Server::new(&config2.net_config, drop_after_n, &keys2));
+    let server3 = Arc::new(Server::new(&config3.net_config, drop_after_n, &keys3));
+
+    let server_handle1 = tokio::spawn(async move {
+        let _ = Server::run(server1, ctx1).await;
+    });
+    let server_handle2 = tokio::spawn(async move {
+        let _ = Server::run(server2, ctx2).await;
+    });
+    let server_handle3 = tokio::spawn(async move {
+        let _ = Server::run(server3, ctx3).await;
+    });
+
+    let client = Client::new(&config1.net_config, &keys1).into();
+    let names = vec![String::from("node1"), String::from("node2"), String::from("node3")];
+    let data = String::from("HelloWorld!!\n");
+    let data = data.into_bytes();
+    let sz = data.len();
+    let data = PinnedMessage::from(data, sz, super::SenderType::Anon);
+    PinnedClient::broadcast(&client, &names, &data).await
+        .expect("Broadcast should complete!");
+    sleep(Duration::from_millis(100)).await;
+    PinnedClient::broadcast(&client, &names, &data).await
+        .expect("Broadcast should complete!");
+    sleep(Duration::from_millis(100)).await;
+    PinnedClient::broadcast(&client, &names, &data).await
+        .expect("Broadcast should complete!");
+
+
+    sleep(Duration::from_millis(100)).await;
+
+
+
+    sleep(Duration::from_millis(100)).await;
+    server_handle1.abort();
+    server_handle2.abort();
+    server_handle3.abort();
+    let _ = tokio::join!(server_handle1, server_handle2, server_handle3);
+}
+
+
+#[test]
+pub fn test_auth_serde() {
+    let h = HandshakeResponse {
+        name: String::from("node1"),
+        signature: Bytes::from(Vec::from(b"1234567812345678123456781234567812345678123456781234567812345678")),
+    };
+
+    let resp_buf = h.serialize_cbor();
+
+    println!("{:?}", resp_buf);
+
+    let resp = HandshakeResponse::deserialize_cbor(&resp_buf);
+    
+    println!("{:?}", resp);
+
+    if !(resp.name == h.name && resp.signature == h.signature) {
+        panic!("Field mismatch: {:?} vs {:?}", h, resp);
+    }
+
 }

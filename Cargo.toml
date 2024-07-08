@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 async-recursion = "1.1.1"
+bytes = {version = "1.6.0", "features" = ["std", "serde"]}
 colog = "1.3.0"
 ed25519-dalek = {version = "2.1.1", features = ["alloc", "fast", "std", "zeroize", "pem", "pkcs8"]}
 log = "0.4.22"

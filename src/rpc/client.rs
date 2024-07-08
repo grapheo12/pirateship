@@ -1,11 +1,11 @@
-use std::{collections::HashMap, fs::File, io::{BufReader, Error, ErrorKind}, path, pin::Pin, sync::{Arc, Mutex, RwLock}};
+use std::{collections::HashMap, fs::File, io::{BufReader, Error, ErrorKind}, path, pin::Pin, sync::{Arc, RwLock}};
 use log::{debug, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
-use tokio::{io::AsyncWriteExt, net::TcpStream};
+use tokio::{io::AsyncWriteExt, net::TcpStream, sync::Mutex, task::JoinSet};
 use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
 use crate::{config::NetConfig, crypto::KeyStore};
 
-use super::auth;
+use super::{auth, Message, MessageRef, PinnedMessage};
 
 #[derive(Clone)]
 pub struct PinnedHashMap<K, V>(Pin<Box<Arc<RwLock<HashMap<K, V>>>>>);
@@ -36,7 +36,7 @@ pub struct PinnedClient(Pin<Box<Arc<Client>>>);
 
 
 enum SendDataType<'a> {
-    ByteType(&'a [u8]),
+    ByteType(MessageRef<'a>),
     SizeType(u32)
 }
 
@@ -82,15 +82,22 @@ impl Client {
         }
     }
 
-    async fn connect(client: &Arc<Client>, name: &String) -> Result<PinnedTlsStream, Error>
+    
+    pub fn into(self) -> PinnedClient {
+        PinnedClient(Box::pin(Arc::new(self)))
+    }
+}
+
+impl PinnedClient {
+    async fn connect(client: &PinnedClient, name: &String) -> Result<PinnedTlsStream, Error>
     {
-        let peer = client.config.nodes.get(name).ok_or(ErrorKind::AddrNotAvailable)?;
+        let peer = client.0.config.nodes.get(name).ok_or(ErrorKind::AddrNotAvailable)?;
         // Clones the root cert store. Connect() will be only be called once per node.
         // Or if the connection is dropped and needs to be re-established.
         // So, this should be acceptable.
         let tls_cfg = rustls::ClientConfig::builder_with_provider(aws_lc_rs::default_provider().into())
             .with_safe_default_protocol_versions().unwrap()
-            .with_root_certificates(client.tls_ca_root_cert.clone())
+            .with_root_certificates(client.0.tls_ca_root_cert.clone())
             .with_no_client_auth();
 
         let connector = TlsConnector::from(Arc::new(tls_cfg));
@@ -103,47 +110,47 @@ impl Client {
 
         let mut stream = connector.connect(domain, stream).await?;
 
-        if client.do_auth {
-            auth::handshake_client(client, &mut stream).await?;
+        if client.0.do_auth {
+            auth::handshake_client(&client.0, &mut stream).await?;
         }
         let stream_safe = PinnedTlsStream::new(stream.into());
-        client.sock_map.0.write().unwrap()
+        client.0.sock_map.0.write().unwrap()
             .insert(name.to_string(), stream_safe.clone());
         Ok(stream_safe)
     }
 
-    async fn get_sock(client: &Arc<Client>, name: &String) -> Result<PinnedTlsStream, Error>
+    async fn get_sock(client: &PinnedClient, name: &String) -> Result<PinnedTlsStream, Error>
     {
         // Is there an open connection?
-        let sock_map_reader = client.sock_map.0.read().unwrap();
-    
-        let sock = match sock_map_reader.get(name) {
-            Some(s) => {
-                let _s = s.clone();
-                drop(sock_map_reader);
-                _s
+        let mut sock: Option<PinnedTlsStream> = None;
+        {
+            let sock_map_reader = client.0.sock_map.0.read().unwrap();
+        
+            let sock_ = sock_map_reader.get(name);
+            if sock_.is_some() {
+                sock = Some(sock_.unwrap().clone());
             }
-            None => {
-                drop(sock_map_reader);
-                Client::connect(client, name).await?
-            }
-        };
+        }
 
-        Ok(sock)
+        if sock.is_none() {
+            sock = Some(PinnedClient::connect(&client.clone(), name).await?);
+        }
+
+        Ok(sock.unwrap())
 
     }
 
     
-    async fn send_raw<'a>(client: &Arc<Client>, name: &String, sock: &PinnedTlsStream, data: SendDataType<'a>) -> Result<(), Error>
+    async fn send_raw<'a>(client: &PinnedClient, name: &String, sock: &PinnedTlsStream, data: SendDataType<'a>) -> Result<(), Error>
     {
         let e = match data {
             SendDataType::ByteType(d) => {
-                sock.0.lock().unwrap()
-                    .write_all(d).await
+                let mut lsock = sock.0.lock().await;
+                lsock.write_all(&d).await
             },
             SendDataType::SizeType(d) => {
-                sock.0.lock().unwrap()
-                    .write_u32(d).await   // Does this take care of endianness?
+                let mut lsock = sock.0.lock().await;
+                lsock.write_u32(d).await   // Does this take care of endianness?
             }
         };
 
@@ -151,20 +158,20 @@ impl Client {
             // There is some problem.
             // Reset connection.
             warn!("Problem sending message to {}: {} ... Resetting connection.", name, e);
-            if let Err(e2) = sock.0.lock().unwrap()
-                .shutdown().await
+            let mut lsock = sock.0.lock().await;
+            if let Err(e2) = lsock.shutdown().await
             {
                 warn!("Problem shutting down socket of {}: {} ... Proceeding anyway", name, e2);
             }
     
-            client.sock_map.0.write().unwrap()
+            client.0.sock_map.0.write().unwrap()
                 .remove(name);
             debug!("Socket removed from sock_map");
             return Err(e);
         }
         Ok(())
     }
-    pub async fn send(client: &Arc<Client>, name: &String, data: &[u8]) -> Result<(), Error> {
+    pub async fn send<'b>(client: &PinnedClient, name: &String, data: MessageRef<'b>) -> Result<(), Error> {
         let sock = Self::get_sock(client, name).await?;
         let len = data.len() as u32;
 
@@ -173,10 +180,10 @@ impl Client {
         Ok(())
     }
 
-    pub async fn reliable_send(client: &Arc<Client>, name: &String, data: &[u8]) -> Result<(), Error> {
-        let mut i = client.config.client_max_retry;
+    pub async fn reliable_send<'b>(client: &PinnedClient, name: &String, data: MessageRef<'b>) -> Result<(), Error> {
+        let mut i = client.0.config.client_max_retry;
         while i > 0 {
-            let done = match Self::send(client, name, data).await {
+            let done = match Self::send(client, name, data.clone()).await {
                 Ok(()) => true,
                 Err(_) => {
                     i -= 1;
@@ -192,10 +199,27 @@ impl Client {
         Err(
             Error::new(ErrorKind::NotConnected, "Could not send within max_retries"))
     }
-}
+    pub async fn broadcast(client: &PinnedClient, names: &Vec<String>, data: &PinnedMessage) -> Result<i32, Error> {
+        let mut handles = JoinSet::new();
+        for name in names {
+            let _c = client.clone();
+            let _n = name.clone();
+            let _d = data.clone();
+            handles.spawn(async move  {
+                let d = _d.as_ref();
+                PinnedClient::reliable_send(&_c, &_n, d).await
+            });
+        }
 
-impl PinnedClient {
-    pub fn convert(client: Client) -> PinnedClient {
-        PinnedClient(Box::pin(Arc::new(client)))
+        let mut successes = 0;
+
+        while let Some(res) = handles.join_next().await {
+            match res {
+                Ok(_) => { successes += 1; },
+                Err(_) => { }
+            }
+        }
+
+        Ok(successes)
     }
 }

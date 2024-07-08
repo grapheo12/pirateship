@@ -5,9 +5,9 @@ pub mod crypto;
 use config::Config;
 use crypto::KeyStore;
 use log::info;
-use rpc::{client::Client, server::Server};
+use rpc::{client::{Client, PinnedClient}, MessageRef, server::Server};
 use tokio::time::sleep;
-use std::{env, fs, io, path, sync::Arc, time::Duration};
+use std::{env, fs, io, path, sync::{Arc, Mutex}, time::Duration};
 
 /// Fetch json config file from command line path.
 /// Panic if not found or parsed properly.
@@ -31,9 +31,8 @@ fn process_args() -> Config {
     Config::deserialize(&cfg_contents)
 }
 
-fn msg_handler(buf: &[u8]) -> bool {
-
-    info!("Received message: {}", std::str::from_utf8(buf).unwrap_or("Parsing error"));
+fn msg_handler(_ctx: Arc<Mutex<()>>, buf: MessageRef) -> bool {
+    info!("Received message: {}", std::str::from_utf8(&buf).unwrap_or("Parsing error"));
     false
 }
 
@@ -48,19 +47,20 @@ async fn main() -> io::Result<()> {
     let server = Arc::new(Server::new(&config.net_config, msg_handler, &keys));
 
     let server_handle = tokio::spawn(async move {
-        let _ = Server::run(server).await;
+        let _ = Server::run(server, Arc::new(Mutex::new(()))).await;
     });
 
-    let client = Arc::new(Client::new(&config.net_config, &keys));
+    let client = Client::new(&config.net_config, &keys).into();
     let data = String::from("Hello world!\n");
+    let data = data.into_bytes();
     sleep(Duration::from_millis(100)).await;
     info!("Sending test message to self!");
-    let _ = Client::send(&client.clone(), &config.net_config.name, data.as_bytes()).await;
+    let _ = PinnedClient::send(&client.clone(), &config.net_config.name, MessageRef::from(&data, data.len(), &rpc::SenderType::Anon)).await;
     info!("Send done!");
     sleep(Duration::from_millis(100)).await;
-    let _ = Client::send(&client.clone(), &config.net_config.name, data.as_bytes()).await;
+    let _ = PinnedClient::send(&client.clone(), &config.net_config.name, MessageRef::from(&data, data.len(), &rpc::SenderType::Anon)).await;
     info!("Send done twice!");
-    Client::reliable_send(&client.clone(), &config.net_config.name, data.as_bytes()).await?;
+    PinnedClient::reliable_send(&client.clone(), &config.net_config.name, MessageRef::from(&data, data.len(), &rpc::SenderType::Anon)).await?;
     info!("Reliable send!");
     let _ = tokio::join!(server_handle);
     Ok(())
