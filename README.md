@@ -27,3 +27,4 @@ RUST_LOG=debug ./target/debug/pft configs/node$i.json
 
 (To do once a basic code structure is ready)
 - [ ] Test if a dedicated async task per connected server (with channels to pass data) is better than locked sockets.
+- [ ] Create a good proto representation for transactions.

@@ -83,6 +83,6 @@ impl PinnedMessage {
 
 pub mod proto {
     pub mod auth {
-        include!(concat!(env!("OUT_DIR"), "/auth.rs"));
+        include!(concat!(env!("OUT_DIR"), "/proto.auth.rs"));
     }
 }

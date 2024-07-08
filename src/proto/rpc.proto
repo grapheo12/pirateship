@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package proto.rpc;
+import "consensus.proto";
+
+message ProtoPayload {
+    oneof message {
+        proto.consensus.ProtoViewChange view_change = 1;
+        proto.consensus.ProtoAppendEntries append_entries = 2;
+        proto.consensus.ProtoNewLeader new_leader = 3;
+        proto.consensus.ProtoNewLeaderOk new_leader_ok = 4;
+        proto.consensus.ProtoVote vote = 5;       
+    }
+
+    uint64 rpc_seq_num = 6;               // To be used for deduplication: (sender name, rpc seq no) is unique
+}
