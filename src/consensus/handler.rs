@@ -1,36 +1,51 @@
-use std::{collections::{HashMap, HashSet}, ops::Deref, pin::Pin, sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc}};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Deref,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 use log::warn;
 use prost::Message;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 
 use crate::{config::Config, rpc::MessageRef};
 
-use super::{leader_rotation::get_current_leader, proto::{consensus::{ProtoBlock, ProtoFork, ProtoQuorumCertificate, ProtoVote}, rpc::{self, ProtoPayload}}};
+use super::{
+    leader_rotation::get_current_leader,
+    log::Log,
+    proto::{
+        consensus::{ProtoBlock, ProtoQuorumCertificate, ProtoVote},
+        rpc::{self, ProtoPayload},
+    },
+};
 
-#[derive(Debug, Clone)]
+/// @todo: This doesn't have to be here. Unncessary Mutexes.
+/// This can be private to the protocols. More flexibility that way.
+#[derive(Debug)]
 pub struct ConsensusState {
-    pub fork: ProtoFork,
-    pub view: u64,
-    pub commit_index: u64,
-    pub byz_commit_index: u64,
-    pub byz_qc_pending: HashMap<ProtoBlock, HashSet<(String, ProtoVote)>>,
-    pub byz_commit_pending: HashMap<ProtoQuorumCertificate, HashSet<(String, ProtoVote)>>,
-    pub next_qc_list: Vec<ProtoQuorumCertificate>
+    pub fork: Mutex<Log>,
+    pub view: AtomicU64,
+    pub commit_index: AtomicU64,
+    pub byz_commit_index: AtomicU64,
+    pub byz_qc_pending: Mutex<HashMap<ProtoBlock, HashSet<(String, ProtoVote)>>>,
+    pub byz_commit_pending: Mutex<HashMap<ProtoQuorumCertificate, HashSet<(String, ProtoVote)>>>,
+    pub next_qc_list: Mutex<Vec<ProtoQuorumCertificate>>,
 }
 
 impl ConsensusState {
     fn new() -> ConsensusState {
         ConsensusState {
-            fork: ProtoFork{
-                blocks: Vec::new(),         // Block sequence numbers start from 1.
-            },
-            view: 1,
-            commit_index: 0,
-            byz_commit_index: 0,
-            byz_qc_pending: HashMap::new(),
-            byz_commit_pending: HashMap::new(),
-            next_qc_list: Vec::new()
+            fork: Mutex::new(Log::new()),
+            view: AtomicU64::new(0),
+            commit_index: AtomicU64::new(0),
+            byz_commit_index: AtomicU64::new(0),
+            byz_qc_pending: Mutex::new(HashMap::new()),
+            byz_commit_pending: Mutex::new(HashMap::new()),
+            next_qc_list: Mutex::new(Vec::new()),
         }
     }
 }
@@ -46,23 +61,32 @@ pub struct ServerContext {
     pub last_fast_quorum_request: AtomicU64,
     pub last_diverse_quorum_request: AtomicU64,
     pub i_am_leader: AtomicBool,
-    pub queue: (mpsc::Sender<ForwardedMessage>, mpsc::Receiver<ForwardedMessage>),
-    pub state: ConsensusState   // @todo: Mutex here
+    pub node_queue: (
+        mpsc::Sender<ForwardedMessage>,
+        Mutex<mpsc::Receiver<ForwardedMessage>>,
+    ),
+    pub client_queue: (
+        mpsc::Sender<ForwardedMessage>,
+        Mutex<mpsc::Receiver<ForwardedMessage>>,
+    ),
+    pub state: ConsensusState, // @todo better code structure such
 }
 
 #[derive(Clone)]
-pub struct PinnedServerContext(Arc<Pin<Box<ServerContext>>>);
-
+pub struct PinnedServerContext(pub Arc<Pin<Box<ServerContext>>>);
 
 impl PinnedServerContext {
     pub fn new(cfg: &Config) -> PinnedServerContext {
-        PinnedServerContext(Arc::new(Box::pin(ServerContext{
+        let node_ch = mpsc::channel(cfg.rpc_config.channel_depth as usize);
+        let client_ch = mpsc::channel(cfg.rpc_config.channel_depth as usize);
+        PinnedServerContext(Arc::new(Box::pin(ServerContext {
             config: cfg.clone(),
             last_fast_quorum_request: AtomicU64::new(1),
             last_diverse_quorum_request: AtomicU64::new(1),
             i_am_leader: AtomicBool::new(false),
-            queue: mpsc::channel(cfg.rpc_config.channel_depth as usize),
-            state: ConsensusState::new()
+            node_queue: (node_ch.0, Mutex::new(node_ch.1)),
+            client_queue: (client_ch.0, Mutex::new(client_ch.1)),
+            state: ConsensusState::new(),
         })))
     }
 }
@@ -75,27 +99,32 @@ impl Deref for PinnedServerContext {
     }
 }
 
+// impl DerefMut for PinnedServerContext {
+//     fn deref_mut(&mut self) -> &mut Self::Target {
+//         self.0.as_mut().get_mut()
+//     }
+// }
+
 /// This should be a very short running function.
 /// No blocking and/or locking allowed.
 /// The job is to filter old messages quickly and send them on the channel.
 /// The real consensus handler is a separate green thread that consumes these messages.
 pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -> bool {
-    let ctx = ctx.clone();
     let mut sender = String::from("");
     match m.2 {
         crate::rpc::SenderType::Anon => {
-            return false;       // Anonymous replies shouldn't come here
-        },
+            return false; // Anonymous replies shouldn't come here
+        }
         crate::rpc::SenderType::Auth(name) => {
             sender = name.to_string();
         }
     }
-    let body = match ProtoPayload::decode(m.as_slice()){
+    let body = match ProtoPayload::decode(m.as_slice()) {
         Ok(b) => b,
         Err(e) => {
             warn!("Parsing problem: {}... Dropping connection", e.to_string());
             return false;
-        },
+        }
     };
 
     let msg = match &body.message {
@@ -109,76 +138,120 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
     if !ctx.i_am_leader.load(Ordering::SeqCst) {
         match &msg {
             rpc::proto_payload::Message::ViewChange(_msg) => {
-                if _msg.view < ctx.state.view {
-                    return true;    // Old view message
+                if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
+                    return true; // Old view message
                 }
-            },
+            }
             rpc::proto_payload::Message::AppendEntries(_msg) => {
-                if _msg.view < ctx.state.view {
-                    return true;    // Old view message
+                if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
+                    return true; // Old view message
                 }
 
-                if sender != ctx.config.consensus_config.node_list[
-                    get_current_leader(ctx.config.consensus_config.node_list.len() as u64,
-                    _msg.view)]{
-                    return true;    // This leader is not supposed to send message with this view.
+                match body.rpc_type() {
+                    rpc::RpcType::FastQuorumRequest => {
+                        ctx.last_fast_quorum_request.store(body.rpc_seq_num, Ordering::SeqCst);
+                    },
+                    rpc::RpcType::DiverseQuorumRequest => {
+                        ctx.last_diverse_quorum_request.store(body.rpc_seq_num, Ordering::SeqCst);
+                    }
+                    _ => {}
+                } 
+
+                if sender
+                    != ctx.config.consensus_config.node_list[get_current_leader(
+                        ctx.config.consensus_config.node_list.len() as u64,
+                        _msg.view,
+                    )]
+                {
+                    return true; // This leader is not supposed to send message with this view.
                 }
-            },
+            }
             rpc::proto_payload::Message::NewLeader(_msg) => {
-                if _msg.view < ctx.state.view {
-                    return true;    // Old view message
+                if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
+                    return true; // Old view message
                 }
-            },
+            }
             rpc::proto_payload::Message::NewLeaderOk(_) => {
                 // I am not leader, these messages shouldn't appear to me now.
                 return true;
-            },
+            }
             rpc::proto_payload::Message::Vote(_) => {
                 // I am not leader, these messages shouldn't appear to me now.
                 return true;
             }
-            rpc::proto_payload::Message::ClientRequest(_) => { /* Always allow client messages */ },
+            rpc::proto_payload::Message::ClientRequest(_) => {
+                let msg = (body.message.unwrap(), sender);
+                loop {
+                    match ctx.client_queue.0.try_send(msg.clone()) {
+                        // Does this make a double copy?
+                        Ok(_) => {
+                            break;
+                        }
+                        Err(e) => {
+                            warn!("Sending on channel failed: {:?}", e);
+                        }
+                    };
+                }
+
+                return true;
+            }
         }
-    }else{
+    } else {
         // I am the leader
         if body.rpc_type() == rpc::RpcType::DiverseQuorumReply
-            && body.rpc_seq_num < ctx.last_diverse_quorum_request.load(Ordering::Relaxed)
-                                  - ctx.config.consensus_config.quorum_diversity_k {
-            
-            return true;            // Old message
+            && body.rpc_seq_num
+                < ctx.last_diverse_quorum_request.load(Ordering::Relaxed)
+                    - ctx.config.consensus_config.quorum_diversity_k
+        {
+            return true; // Old message
         }
 
         if body.rpc_type() == rpc::RpcType::FastQuorumReply
-            && body.rpc_seq_num < ctx.last_fast_quorum_request.load(Ordering::Relaxed){
-            
-            return true;            // Old message
+            && body.rpc_seq_num < ctx.last_fast_quorum_request.load(Ordering::Relaxed)
+        {
+            return true; // Old message
         }
 
         match &msg {
             rpc::proto_payload::Message::ViewChange(_msg) => {
-                if _msg.view < ctx.state.view {
-                    return true;    // Old view message
+                if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
+                    return true; // Old view message
                 }
-            },
+            }
             rpc::proto_payload::Message::AppendEntries(_) => {
-                return true;        // I will not respond to other's AppendEntries while I am leader.
-            },
+                return true; // I will not respond to other's AppendEntries while I am leader.
+            }
             rpc::proto_payload::Message::NewLeader(_msg) => {
-                if _msg.view < ctx.state.view {
-                    return true;    // Old view message
+                if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
+                    return true; // Old view message
                 }
-            },
+            }
             rpc::proto_payload::Message::NewLeaderOk(_msg) => {
-                if _msg.view < ctx.state.view {
-                    return true;    // Old view message
+                if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
+                    return true; // Old view message
                 }
-            },
+            }
             rpc::proto_payload::Message::Vote(_msg) => {
-                if _msg.view < ctx.state.view {
-                    return true;    // Old view message
+                if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
+                    return true; // Old view message
                 }
-            },
-            rpc::proto_payload::Message::ClientRequest(_) => { /* Always allow client messages */ },
+            }
+            rpc::proto_payload::Message::ClientRequest(_) => {
+                let msg = (body.message.unwrap(), sender);
+                loop {
+                    match ctx.client_queue.0.try_send(msg.clone()) {
+                        // Does this make a double copy?
+                        Ok(_) => {
+                            break;
+                        }
+                        Err(e) => {
+                            warn!("Sending on channel failed: {:?}", e);
+                        }
+                    };
+                }
+
+                return true;
+            }
         }
     }
 
@@ -186,23 +259,16 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
     // Can be used for load shedding here.
     let msg = (body.message.unwrap(), sender);
     loop {
-        match ctx.queue.0.try_send(msg.clone()){        // Does this make a double copy?
-            Ok(_) => { break; },
+        match ctx.node_queue.0.try_send(msg.clone()) {
+            // Does this make a double copy?
+            Ok(_) => {
+                break;
+            }
             Err(e) => {
                 warn!("Sending on channel failed: {:?}", e);
-            },
+            }
         };
     }
 
     true
-
 }
-
-
-
-
-
-
-
-
-

@@ -19,9 +19,15 @@ tokio = {version = "1.38.0", features = ["full"]}
 tokio-rustls = "0.26.0"
 prost = "0.12"
 prost-types = "0.12"
+sha2 = "0.10.8"
 
 [build-dependencies]
 prost-build = { version = "0.12" }
 
 [features]
 round_robin_leader = []
+dummy_2pc = []
+raft = ["round_robin_leader"]
+jolteon = ["round_robin_leader"]
+pirateship = ["round_robin_leader"]
+default = ["dummy_2pc"]

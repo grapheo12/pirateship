@@ -7,3 +7,8 @@ message ProtoClientRequest {
     bytes tx = 1;
     bytes sig = 2;
 }
+
+message ProtoClientReply {
+    bytes req_digest = 1;
+    bytes n = 2;
+}

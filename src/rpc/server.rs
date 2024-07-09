@@ -21,7 +21,7 @@ pub struct Server<ServerContext>
 }
 
 impl<S> Server<S>
-    where S: Send + Sync + Clone + 'static
+    where S: Send + Clone + Sync + 'static
 {
     // Following two functions ported from: https://github.com/rustls/tokio-rustls/blob/main/examples/server.rs
     fn load_certs(path: &String) -> Vec<CertificateDer<'static>> {
