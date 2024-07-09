@@ -1,6 +1,6 @@
 use std::{collections::HashSet, io::Error, sync::atomic::Ordering};
 
-use log::{info, warn};
+use log::{debug, info, warn};
 use prost::Message;
 use hex::ToHex;
 
@@ -52,6 +52,8 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
         &ctx.config.consensus_config.node_list,
     );
 
+    debug!("Leader: {}, Send List: {:?}", ctx.i_am_leader.load(Ordering::SeqCst), &send_list);
+
 
     let mut accepting_client_requests = true;
     let mut curr_node_req = None;
@@ -75,11 +77,7 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                             continue;
                         }
                         // Only take action on this if I am follower
-                        if ae.commit_index > ctx.state.commit_index.load(Ordering::SeqCst) {
-                            ctx.state
-                                .commit_index
-                                .store(ae.commit_index, Ordering::SeqCst);
-                        }
+                        
 
                         if let Some(f) = &ae.fork {
                             let mut fork = ctx.state.fork.lock().await;
@@ -99,6 +97,7 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                                     sig_array: Vec::new(),
                                     fork_digest: fork.last_hash(),
                                     view: 1,
+                                    n: fork.last()
                                 };
 
                                 let rpc_msg_body = ProtoPayload {
@@ -116,20 +115,41 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                                 }
                             }
                         }
+
+                        let fork = ctx.state.fork.lock().await;
+                        if ae.commit_index > ctx.state.commit_index.load(Ordering::SeqCst) {
+                            ctx.state
+                                .commit_index
+                                .store(ae.commit_index, Ordering::SeqCst);
+
+                            info!("New Commit Index: {}, Fork Digest: {} Tx: {}",
+                                ctx.state.commit_index.load(Ordering::SeqCst),
+                                fork.last_hash().encode_hex::<String>(),
+                                String::from_utf8(fork.get(ae.commit_index).unwrap().block.tx[0].clone()).unwrap()
+                            );
+                        }
                     }
                 }
                 crate::consensus::proto::rpc::proto_payload::Message::Vote(v) => {
                     let mut fork = ctx.state.fork.lock().await;
                     if cmp_hash(&fork.last_hash(), &v.fork_digest){
-                        let _l = fork.last();
+                        let _l = v.n;
                         let total_votes = fork.inc_replication_vote(_sender, _l)
                             .unwrap();
                         if total_votes >= majority {
-                            ctx.state.commit_index.store(fork.last(), Ordering::SeqCst);
-                            info!("New Commit Index: {}, Tx Hash: {}",
-                                ctx.state.commit_index.load(Ordering::SeqCst),
-                                 v.fork_digest.encode_hex::<String>()
-                            );
+                            let ci = ctx.state.commit_index.load(Ordering::SeqCst);
+                            if ci < v.n
+                                && v.n <= fork.last() // This is just a sanity check
+                            {
+                                ctx.state.commit_index.store(fork.last(), Ordering::SeqCst);
+                                info!("New Commit Index: {}, Fork Digest: {} Tx: {}",
+                                    ctx.state.commit_index.load(Ordering::SeqCst),
+                                     v.fork_digest.encode_hex::<String>(),
+                                     String::from_utf8(fork.get(v.n).unwrap().block.tx[0].clone()).unwrap()
+                                );
+    
+                                accepting_client_requests = true;
+                            } 
                         }
                     }
                 },
@@ -194,7 +214,7 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                     if let Ok(_) = rpc_msg_body.encode(&mut buf) {
                         let sz = buf.len();
                         let bcast_msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
-                        let _ = PinnedClient::broadcast(&client, &send_list, &bcast_msg, majority as i32);
+                        let _ = PinnedClient::broadcast(&client, &send_list, &bcast_msg, majority as i32).await;
                     }
                 }
                 _ => {}

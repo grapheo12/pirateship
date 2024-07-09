@@ -34,8 +34,8 @@ async fn main() -> io::Result<()> {
     keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
     let client = Client::new(&config.fill_missing(), &keys).into();
 
-    for i in 0..10 {
-        sleep(Duration::from_millis(100)).await;
+    for i in 0..10000 {
+        sleep(Duration::from_millis(1)).await;
 
         let client_req = ProtoClientRequest { 
             tx: format!("Tx:{}", i).into_bytes(),
@@ -51,7 +51,7 @@ async fn main() -> io::Result<()> {
         let mut buf = Vec::new();
         rpc_msg_body.encode(&mut buf)?;
 
-        debug!("Sending message: {:?}", buf);
+        debug!("Sending message: {}", format!("Tx:{}", i));
 
         PinnedClient::reliable_send(
             &client, 
