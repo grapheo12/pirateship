@@ -14,5 +14,9 @@
         "signing_priv_key_path": "tests/configs/",
         "recv_buffer_size": 32768,
         "channel_depth": 32
+    },
+    "consensus_config": {
+        "node_list": [],
+        "quorum_diversity_k": 3
     }
 }

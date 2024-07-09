@@ -80,13 +80,16 @@ echo "client $(openssl pkey -in client_signing_priv_key.pem -pubout | grep -v 'P
 PORT_PREFIX='300'
 
 addrs="{"
+node_list="["
 
 for i in $(seq 1 $(( $NUMNODES - 1 )));
 do
     addrs="${addrs} \"node$i\": {\"addr\": \"node$i.$COMMON_DNS:$PORT_PREFIX$i\", \"domain\": \"node$i.$COMMON_DNS\"},"
+    node_list="${node_list} \"node$i\","
 done
 
 addrs="${addrs} \"node$NUMNODES\": {\"addr\": \"node$NUMNODES.$COMMON_DNS:$PORT_PREFIX$NUMNODES\", \"domain\": \"node$i.$COMMON_DNS\"} }"
+node_list="${node_list} \"node$NUMNODES\"]"
 
 BIND_ADDR_PREFIX="0.0.0.0:${PORT_PREFIX}"
 
@@ -101,7 +104,8 @@ do
     .net_config.name = \"node$i\" |\
     .net_config.addr = \"$BIND_ADDR_PREFIX$i\" |\
     .rpc_config.allowed_keylist_path = \"$(pwd)/signing_pub_keys.keylist\" |\
-    .rpc_config.signing_priv_key_path = \"$privkey_fname\"" node$i.json > tmp.json
+    .rpc_config.signing_priv_key_path = \"$privkey_fname\" |\
+    .consensus_config.node_list = $node_list" node$i.json > tmp.json
     cp tmp.json node$i.json
 done
 rm tmp.json

@@ -31,14 +31,21 @@ pub struct RpcConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+pub struct ConsensusConfig {
+    pub node_list: Vec<String>,            // This better be in the same order in all nodes.
+    pub quorum_diversity_k: u64
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     pub net_config: NetConfig,
-    pub rpc_config: RpcConfig
+    pub rpc_config: RpcConfig,
+    pub consensus_config: ConsensusConfig
 }
 
 impl Config {
     pub fn serialize(self: &Self) -> String  {
-        serde_json::to_string_pretty(self).expect("Invalid NetConfig")
+        serde_json::to_string_pretty(self).expect("Invalid Config")
     }
 
     pub fn deserialize(s: &String) -> Config {

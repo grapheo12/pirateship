@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package proto.client;
+
+message ProtoClientRequest {
+    // This structure is temporary. It MUST change.
+    bytes tx = 1;
+    bytes sig = 2;
+}

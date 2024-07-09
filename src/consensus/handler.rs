@@ -79,7 +79,7 @@ impl Deref for PinnedServerContext {
 /// No blocking and/or locking allowed.
 /// The job is to filter old messages quickly and send them on the channel.
 /// The real consensus handler is a separate green thread that consumes these messages.
-pub async fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -> bool {
+pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -> bool {
     let ctx = ctx.clone();
     let mut sender = String::from("");
     match m.2 {
@@ -98,7 +98,7 @@ pub async fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<
         },
     };
 
-    let msg = match body.message {
+    let msg = match &body.message {
         Some(m) => m,
         None => {
             warn!("Nil message");
@@ -107,7 +107,7 @@ pub async fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<
     };
 
     if !ctx.i_am_leader.load(Ordering::SeqCst) {
-        match msg {
+        match &msg {
             rpc::proto_payload::Message::ViewChange(_msg) => {
                 if _msg.view < ctx.state.view {
                     return true;    // Old view message
@@ -118,7 +118,9 @@ pub async fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<
                     return true;    // Old view message
                 }
 
-                if sender != ctx.node_list[get_current_leader(ctx.node_list.len(), _msg.view)]{
+                if sender != ctx.config.consensus_config.node_list[
+                    get_current_leader(ctx.config.consensus_config.node_list.len() as u64,
+                    _msg.view)]{
                     return true;    // This leader is not supposed to send message with this view.
                 }
             },
@@ -135,10 +137,24 @@ pub async fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<
                 // I am not leader, these messages shouldn't appear to me now.
                 return true;
             }
+            rpc::proto_payload::Message::ClientRequest(_) => { /* Always allow client messages */ },
         }
     }else{
         // I am the leader
-        match msg {
+        if body.rpc_type() == rpc::RpcType::DiverseQuorumReply
+            && body.rpc_seq_num < ctx.last_diverse_quorum_request.load(Ordering::Relaxed)
+                                  - ctx.config.consensus_config.quorum_diversity_k {
+            
+            return true;            // Old message
+        }
+
+        if body.rpc_type() == rpc::RpcType::FastQuorumReply
+            && body.rpc_seq_num < ctx.last_fast_quorum_request.load(Ordering::Relaxed){
+            
+            return true;            // Old message
+        }
+
+        match &msg {
             rpc::proto_payload::Message::ViewChange(_msg) => {
                 if _msg.view < ctx.state.view {
                     return true;    // Old view message
@@ -161,25 +177,25 @@ pub async fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<
                 if _msg.view < ctx.state.view {
                     return true;    // Old view message
                 }
-
-                // @todo: Handle what happens if the view is larger.
-                // Should that code be here? Or on the other side of channel?
             },
+            rpc::proto_payload::Message::ClientRequest(_) => { /* Always allow client messages */ },
         }
     }
 
     // If code reaches here, it should be processed by the consensus algorithm.
     // Can be used for load shedding here.
-    match ctx.queue.0.send((msg, sender)).await {
-        Ok(_) => true,
-        Err(e) => {
-            warn!("Sending on channel failed: {:?}", e);
-            true
-        },
+    let msg = (body.message.unwrap(), sender);
+    loop {
+        match ctx.queue.0.try_send(msg.clone()){        // Does this make a double copy?
+            Ok(_) => { break; },
+            Err(e) => {
+                warn!("Sending on channel failed: {:?}", e);
+            },
+        };
     }
 
-    // @todo: Server's message handler should be made async.
-    // @todo: Include Client transaction entry as a separate message type. 
+    true
+
 }
 
 

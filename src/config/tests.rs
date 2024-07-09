@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::config::{Config, NetConfig, NodeNetInfo, RpcConfig};
+use crate::config::{Config, ConsensusConfig, NetConfig, NodeNetInfo, RpcConfig};
 
 
 #[test]
@@ -31,7 +31,12 @@ fn test_nodeconfig_serialize() {
         channel_depth: 32
     };
 
-    let config = Config{net_config, rpc_config};
+    let consensus_config = ConsensusConfig {
+        node_list: vec![String::from("node1"), String::from("node2"), String::from("node3")],
+        quorum_diversity_k: 3
+    };
+
+    let config = Config{net_config, rpc_config, consensus_config};
 
     let s = config.serialize();
     println!("{}", s);
