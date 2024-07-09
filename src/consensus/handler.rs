@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use log::warn;
+use log::{debug, warn};
 use prost::Message;
 use tokio::sync::{mpsc, Mutex};
 
@@ -119,10 +119,11 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
             sender = name.to_string();
         }
     }
-    let body = match ProtoPayload::decode(m.as_slice()) {
+    let body = match ProtoPayload::decode(&m.0.as_slice()[0..m.1]) {
         Ok(b) => b,
         Err(e) => {
-            warn!("Parsing problem: {}... Dropping connection", e.to_string());
+            warn!("Parsing problem: {} ... Dropping connection", e.to_string());
+            debug!("Original message: {:?}", &m.0.as_slice()[0..m.1]);
             return false;
         }
     };

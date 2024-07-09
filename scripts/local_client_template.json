@@ -1,0 +1,12 @@
+{
+    "net_config": {
+        "name": "client",
+        "tls_root_ca_cert_path": "test/configs/",
+        "client_max_retry": 10,
+        "nodes": {
+        }
+    },
+    "rpc_config": {
+        "signing_priv_key_path": "tests/configs/"    
+    }
+}

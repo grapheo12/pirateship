@@ -43,6 +43,25 @@ pub struct Config {
     pub consensus_config: ConsensusConfig
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ClientNetConfig {
+    pub name: String,
+    pub tls_root_ca_cert_path: String,
+    pub nodes: HashMap<String, NodeNetInfo>,
+    pub client_max_retry: i32
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ClientRpcConfig {
+    pub signing_priv_key_path: String
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ClientConfig {
+    pub net_config: ClientNetConfig,
+    pub rpc_config: ClientRpcConfig
+}
+
 impl Config {
     pub fn serialize(self: &Self) -> String  {
         serde_json::to_string_pretty(self).expect("Invalid Config")
@@ -53,3 +72,39 @@ impl Config {
         res.expect("Invalid JSON config")
     }
 }
+
+impl ClientConfig {
+    pub fn serialize(self: &Self) -> String  {
+        serde_json::to_string_pretty(self).expect("Invalid Config")
+    }
+
+    pub fn deserialize(s: &String) -> ClientConfig {
+        let res: Result<ClientConfig> = serde_json::from_str(s.as_str());
+        res.expect("Invalid JSON config")
+    }
+
+    pub fn fill_missing(&self) -> Config {
+        Config {
+            net_config: NetConfig{
+                name: self.net_config.name.clone(),
+                addr: String::from(""),
+                tls_cert_path: String::from(""),
+                tls_key_path: String::from(""),
+                tls_root_ca_cert_path: self.net_config.tls_root_ca_cert_path.clone(),
+                nodes: self.net_config.nodes.clone(),
+                client_max_retry: self.net_config.client_max_retry,
+            },
+            rpc_config: RpcConfig{
+                allowed_keylist_path: String::from(""),
+                signing_priv_key_path: self.rpc_config.signing_priv_key_path.clone(),
+                recv_buffer_size: 0,
+                channel_depth: 0,
+            },
+            consensus_config: ConsensusConfig{
+                node_list: Vec::new(),
+                quorum_diversity_k: 0,
+            },
+        }
+    }
+}
+

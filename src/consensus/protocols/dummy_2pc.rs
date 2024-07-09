@@ -2,6 +2,7 @@ use std::{collections::HashSet, io::Error, sync::atomic::Ordering};
 
 use log::{info, warn};
 use prost::Message;
+use hex::ToHex;
 
 use crate::{
     consensus::{
@@ -39,6 +40,7 @@ fn get_everyone_except_me(my_name: &String, node_list: &Vec<String>) -> Vec<Stri
 }
 
 pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result<(), Error> {
+    ctx.state.view.store(1, Ordering::SeqCst);    // Never changes for this algorithm
     if ctx.config.net_config.name == get_leader_str(&ctx) {
         ctx.i_am_leader.store(true, Ordering::SeqCst);
     }
@@ -49,6 +51,7 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
         &ctx.config.net_config.name,
         &ctx.config.consensus_config.node_list,
     );
+
 
     let mut accepting_client_requests = true;
     let mut curr_node_req = None;
@@ -123,6 +126,10 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                             .unwrap();
                         if total_votes >= majority {
                             ctx.state.commit_index.store(fork.last(), Ordering::SeqCst);
+                            info!("New Commit Index: {}, Tx Hash: {}",
+                                ctx.state.commit_index.load(Ordering::SeqCst),
+                                 v.fork_digest.encode_hex::<String>()
+                            );
                         }
                     }
                 },
@@ -193,6 +200,15 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                 _ => {}
             }
         }
+
+        if curr_node_req.is_none() && curr_client_req.is_none() {
+            warn!("Consensus node dying!");
+            break;          // Select failed because both channels were closed!
+        }
+
+        // Reset for the next iteration
+        curr_node_req = None;
+        curr_client_req = None;
     }
 
     Ok(())

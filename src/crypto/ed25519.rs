@@ -7,12 +7,12 @@ use ed25519_dalek::{pkcs8::{DecodePrivateKey, DecodePublicKey}, Signature, Signe
 /// This makes it easy to share among threads.
 #[derive(Clone)]
 pub struct KeyStore {
-    pub_keys: HashMap<String, VerifyingKey>,
-    priv_key: SigningKey
+    pub pub_keys: HashMap<String, VerifyingKey>,
+    pub priv_key: SigningKey
 }
 
 impl KeyStore {
-    fn get_pubkeys(pubkey_path: &String) -> HashMap<String, VerifyingKey> {
+    pub fn get_pubkeys(pubkey_path: &String) -> HashMap<String, VerifyingKey> {
         let mut keys = HashMap::new();
         let key_path = path::Path::new(pubkey_path.as_str());
         if !key_path.exists() {
@@ -45,7 +45,7 @@ impl KeyStore {
 
         keys
     }
-    fn get_privkeys(privkey_path: &String) -> SigningKey {
+    pub fn get_privkeys(privkey_path: &String) -> SigningKey {
         let key_path = path::Path::new(privkey_path.as_str());
         if !key_path.exists() {
             panic!("Invalid Private Key Path: {}", privkey_path);

@@ -5,7 +5,7 @@
 # Generates a CA certificates and a certificate used by all nodes.
 # Node domain names: node$i.localhost which points to 127.0.0.1
 # Also generates all the configs.
-# Sample usage: sh scripts/gen_local_config.sh configs 7 scripts/local_template.json
+# Sample usage: sh scripts/gen_local_config.sh configs 7 scripts/local_template.json scripts/local_client_template.json
 # Do not commit the generated configs.
 
 # Ported from: https://arminreiter.com/2022/01/create-your-own-certificate-authority-ca-using-openssl/
@@ -15,11 +15,13 @@ CANAME=Pft-Dev-RootCA
 ROOTDIR=$1
 NUMNODES=$2
 TEMPLATE=$3
+CLIENT_TEMPLATE=$4
 
 mkdir -p $ROOTDIR
 
 # Copy the JSON template to rootdir, because we are going to cd into it and lose the path validity.
 cp $TEMPLATE $ROOTDIR/template.json
+cp $CLIENT_TEMPLATE $ROOTDIR/client_template.json
 
 cd $ROOTDIR
 
@@ -110,5 +112,15 @@ do
 done
 rm tmp.json
 rm template.json
+
+
+# Generate client config
+privkey_fname=$(pwd)/client_signing_priv_key.pem
+
+jq ".net_config.nodes = $addrs |\
+.net_config.tls_root_ca_cert_path = \"$(pwd)/$CANAME.crt\" |\
+.rpc_config.signing_priv_key_path = \"$privkey_fname\"" client_template.json > client.json
+
+rm client_template.json
 
 
