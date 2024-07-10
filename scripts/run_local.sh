@@ -28,6 +28,9 @@ sleep 1
 echo "Spawning client"
 RUST_LOG=info ./target/release/client $CONFIG_DIR/client.json > $LOG_DIR/client.log 2> $LOG_DIR/client.log & 
 
+echo "Attaching perf to client"
+sudo $FLAMEGRAPH_PATH -o $LOG_DIR/client_flame.svg -p $! &
+
 echo "Running experiments"
 sleep $NUM_SECONDS
 

@@ -1,5 +1,5 @@
 use std::{env, fs, io, path, time::Duration};
-use tokio::{sync::mpsc::{self, Receiver}, task::JoinSet};
+use tokio::{sync::mpsc::{self, Receiver}, task::JoinSet, time::Instant};
 use ed25519_dalek::SIGNATURE_LENGTH;
 use log::{debug, info};
 use pft::{config::ClientConfig, consensus::proto::{client::ProtoClientRequest, rpc::{self, ProtoPayload}}, crypto::KeyStore, rpc::{client::{Client, PinnedClient}, MessageRef}};
@@ -26,38 +26,64 @@ fn process_args() -> ClientConfig {
     ClientConfig::deserialize(&cfg_contents)
 }
 
+const NUM_REQUESTS: u64 = 10000000;
+
 async fn client_runner(idx: usize, client: &PinnedClient ) -> io::Result<()> {
-    for i in 0..10000000 {
-        sleep(Duration::from_micros(10)).await; // 10 us gap => Load: 10^5 rps
+    let (tx, mut rx) = mpsc::channel(NUM_REQUESTS as usize);
 
-        let client_req = ProtoClientRequest { 
-            tx: format!("Tx:{}:{}", idx, i).into_bytes(),
-            sig: vec![0u8; SIGNATURE_LENGTH]
-        };
+    let gen_handle = tokio::spawn(async move {
+        for i in 0..NUM_REQUESTS {
+    
+            let client_req = ProtoClientRequest { 
+                tx: format!("Tx:{}:{}", idx, i).into_bytes(),
+                sig: vec![0u8; SIGNATURE_LENGTH]
+            };
+    
+            let rpc_msg_body = ProtoPayload { 
+                rpc_type: rpc::RpcType::OneWay.into(), 
+                rpc_seq_num: i, 
+                message: Some(pft::consensus::proto::rpc::proto_payload::Message::ClientRequest(client_req))
+            };
+    
+            if i % 1000 == 0 {
+                info!("Sending message: {}", format!("Tx:{}:{}", idx, i));
+            }else{
+                debug!("Sending message: {}", format!("Tx:{}:{}", idx, i));
+            }
+    
+            // let start = Instant::now();
+            let mut buf = Vec::new();
+            rpc_msg_body.encode(&mut buf).expect("Protobuf error");
+            // info!("Serialize time: {} us", start.elapsed().as_micros());
 
-        let rpc_msg_body = ProtoPayload { 
-            rpc_type: rpc::RpcType::OneWay.into(), 
-            rpc_seq_num: i, 
-            message: Some(pft::consensus::proto::rpc::proto_payload::Message::ClientRequest(client_req))
-        };
+            tx.send(buf).await.expect("Should be able to send");
+        }
+    });
 
-        if i % 1000 == 0 {
-            info!("Sending message: {}", format!("Tx:{}:{}", idx, i));
-        }else{
-            debug!("Sending message: {}", format!("Tx:{}:{}", idx, i));
+    sleep(Duration::from_secs(20)).await;
+    
+    
+    for _ in 1..NUM_REQUESTS {
+        let buf = rx.recv().await.expect("Should've received something");
+        let start = Instant::now();
+        while start.elapsed().as_micros() < 100 {
+
         }
 
-        let mut buf = Vec::new();
-        rpc_msg_body.encode(&mut buf)?;
-
+        // let start = Instant::now();
         PinnedClient::reliable_send(
             &client, 
             &String::from("node1"), 
             MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon)
         ).await
             .expect("Should have been able to send!!");
+        // info!("Sending time: {} us", start.elapsed().as_micros());
+
     }
+
+    tokio::join!(gen_handle);
     Ok(())
+
 }
 
 const NUM_CLIENTS: usize = 14;
