@@ -141,12 +141,14 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                             if ci < v.n
                                 && v.n <= fork.last() // This is just a sanity check
                             {
-                                ctx.state.commit_index.store(fork.last(), Ordering::SeqCst);
-                                info!("New Commit Index: {}, Fork Digest: {} Tx: {}",
-                                    ctx.state.commit_index.load(Ordering::SeqCst),
-                                     v.fork_digest.encode_hex::<String>(),
-                                     String::from_utf8(fork.get(v.n).unwrap().block.tx[0].clone()).unwrap()
-                                );
+                                ctx.state.commit_index.store(v.n, Ordering::SeqCst);
+                                if v.n % 1000 == 0 {
+                                    info!("New Commit Index: {}, Fork Digest: {} Tx: {}",
+                                        ctx.state.commit_index.load(Ordering::SeqCst),
+                                         v.fork_digest.encode_hex::<String>(),
+                                         String::from_utf8(fork.get(v.n).unwrap().block.tx[0].clone()).unwrap()
+                                    );
+                                }
     
                                 accepting_client_requests = true;
                             } 
@@ -182,7 +184,9 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
 
                     match fork.push(entry) {
                         Ok(n) => {
-                            info!("Client message sequenced at {}", n);
+                            if n % 1000 == 0 {
+                                info!("Client message sequenced at {}", n);
+                            }
                         }
                         Err(e) => {
                             warn!("Error processing client request: {}", e);

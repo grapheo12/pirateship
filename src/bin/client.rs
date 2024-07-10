@@ -1,7 +1,7 @@
 use std::{env, fs, io, path, time::Duration};
-
+use tokio::{sync::mpsc::{self, Receiver}, task::JoinSet};
 use ed25519_dalek::SIGNATURE_LENGTH;
-use log::debug;
+use log::{debug, info};
 use pft::{config::ClientConfig, consensus::proto::{client::ProtoClientRequest, rpc::{self, ProtoPayload}}, crypto::KeyStore, rpc::{client::{Client, PinnedClient}, MessageRef}};
 use tokio::time::sleep;
 use prost::Message;
@@ -26,19 +26,12 @@ fn process_args() -> ClientConfig {
     ClientConfig::deserialize(&cfg_contents)
 }
 
-#[tokio::main]
-async fn main() -> io::Result<()> {
-    colog::init();
-    let config = process_args();
-    let mut keys = KeyStore::empty();
-    keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
-    let client = Client::new(&config.fill_missing(), &keys).into();
-
-    for i in 0..10000 {
-        sleep(Duration::from_millis(1)).await;
+async fn client_runner(idx: usize, client: &PinnedClient ) -> io::Result<()> {
+    for i in 0..10000000 {
+        sleep(Duration::from_micros(10)).await; // 10 us gap => Load: 10^5 rps
 
         let client_req = ProtoClientRequest { 
-            tx: format!("Tx:{}", i).into_bytes(),
+            tx: format!("Tx:{}:{}", idx, i).into_bytes(),
             sig: vec![0u8; SIGNATURE_LENGTH]
         };
 
@@ -48,19 +41,45 @@ async fn main() -> io::Result<()> {
             message: Some(pft::consensus::proto::rpc::proto_payload::Message::ClientRequest(client_req))
         };
 
+        if i % 1000 == 0 {
+            info!("Sending message: {}", format!("Tx:{}:{}", idx, i));
+        }else{
+            debug!("Sending message: {}", format!("Tx:{}:{}", idx, i));
+        }
+
         let mut buf = Vec::new();
         rpc_msg_body.encode(&mut buf)?;
-
-        debug!("Sending message: {}", format!("Tx:{}", i));
 
         PinnedClient::reliable_send(
             &client, 
             &String::from("node1"), 
             MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon)
-        ).await?;
+        ).await
+            .expect("Should have been able to send!!");
+    }
+    Ok(())
+}
 
+const NUM_CLIENTS: usize = 14;
+
+#[tokio::main]
+async fn main() -> io::Result<()> {
+    colog::init();
+    let config = process_args();
+    let mut keys = KeyStore::empty();
+    keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
+
+    let mut client_handles = JoinSet::new();
+    for i in 0..NUM_CLIENTS {
+        let c = Client::new(&config.fill_missing(), &keys).into();
+        client_handles.spawn(async move {
+            client_runner(i, &c).await
+        });
     }
 
+    
+    while let Some(_) = client_handles.join_next().await {
+    }
     // @todo: Receiving client reply on the same socket.
 
     Ok(())

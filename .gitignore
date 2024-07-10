@@ -1,4 +1,6 @@
 /target
 configs/
 *.log
+logs/
+perf.data*
 .vscode

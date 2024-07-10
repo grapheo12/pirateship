@@ -23,7 +23,7 @@ fn process_args() -> Config {
     Config::deserialize(&cfg_contents)
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() -> io::Result<()> {
     colog::init();
     let cfg = process_args();
