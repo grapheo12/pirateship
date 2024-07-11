@@ -1,6 +1,9 @@
 use pft::{config::Config, consensus};
 use std::{env, fs, io, path, sync::Arc};
 
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+
 /// Fetch json config file from command line path.
 /// Panic if not found or parsed properly.
 fn process_args() -> Config {

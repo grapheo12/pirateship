@@ -253,9 +253,9 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                         let sz = buf.len();
                         let bcast_msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
                         
-                        let start_bcast = Instant::now();
-                        let _ = PinnedClient::broadcast(&client, &send_list, &bcast_msg, majority as i32).await;
-                        info!("Broadcast time: {} us", start_bcast.elapsed().as_micros());
+                        // let start_bcast = Instant::now();
+                        let _ = PinnedClient::broadcast(&client, &send_list, &bcast_msg).await;
+                        // info!("Broadcast time: {} us", start_bcast.elapsed().as_micros());
                     }
                 }
             }

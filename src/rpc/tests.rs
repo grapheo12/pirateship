@@ -132,20 +132,20 @@ async fn test_3_node_bcast(){
     let data = data.into_bytes();
     let sz = data.len();
     let data = PinnedMessage::from(data, sz, super::SenderType::Anon);
-    PinnedClient::broadcast(&client, &names, &data, 3).await
+    PinnedClient::broadcast(&client, &names, &data).await
         .expect("Broadcast should complete with 3 nodes!");
     sleep(Duration::from_millis(100)).await;
     server_handle1.abort();
     let _ = tokio::join!(server_handle1);
     sleep(Duration::from_millis(1000)).await;
-    PinnedClient::broadcast(&client, &names, &data, 2).await
+    PinnedClient::broadcast(&client, &names, &data).await
         .expect("Broadcast should complete with 2 nodes!");
     sleep(Duration::from_millis(100)).await;
     server_handle2.abort();
     let _ = tokio::join!(server_handle2);
 
-    PinnedClient::broadcast(&client, &names, &data, 4).await
-        .expect_err("There are not enough nodes!");
+    PinnedClient::broadcast(&client, &names, &data).await
+        .expect("There are not enough nodes!");
 
     sleep(Duration::from_millis(100)).await;
     server_handle3.abort();

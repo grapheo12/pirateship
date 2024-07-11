@@ -21,8 +21,8 @@ do
     fi 
 done
 
-echo "Attaching perf to leader (pid: $leader_pid)"
-sudo $FLAMEGRAPH_PATH -o $LOG_DIR/leader_flame.svg -p $leader_pid &
+# echo "Attaching perf to leader (pid: $leader_pid)"
+# sudo $FLAMEGRAPH_PATH -o $LOG_DIR/leader_flame.svg -p $leader_pid &
 
 sleep 1
 echo "Spawning client"

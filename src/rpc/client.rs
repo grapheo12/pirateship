@@ -1,7 +1,8 @@
-use std::{collections::HashMap, fs::File, io::{BufReader, Error, ErrorKind}, path, pin::Pin, sync::{Arc, RwLock}};
+use std::{collections::{HashMap, HashSet}, fs::File, io::{BufReader, Error, ErrorKind}, path, pin::Pin, sync::{Arc, RwLock}};
+use futures::{future::join_all, stream::FuturesUnordered};
 use log::{debug, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
-use tokio::{io::AsyncWriteExt, net::TcpStream, sync::Mutex, task::JoinSet};
+use tokio::{io::{AsyncWriteExt, Join}, net::TcpStream, sync::{mpsc::{self, Sender}, Mutex}, task::JoinSet};
 use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
 use crate::{config::Config, crypto::KeyStore};
 
@@ -12,6 +13,14 @@ pub struct PinnedHashMap<K, V>(Pin<Box<Arc<RwLock<HashMap<K, V>>>>>);
 impl<K, V> PinnedHashMap<K, V> {
     fn new() -> PinnedHashMap<K, V> {
         PinnedHashMap(Box::pin(Arc::new(RwLock::new(HashMap::new()))))
+    }
+}
+
+#[derive(Clone)]
+pub struct PinnedHashSet<K>(Pin<Box<Arc<RwLock<HashSet<K>>>>>);
+impl<K> PinnedHashSet<K> {
+    fn new() -> PinnedHashSet<K> {
+        PinnedHashSet(Box::pin(Arc::new(RwLock::new(HashSet::new()))))
     }
 }
 
@@ -27,6 +36,8 @@ pub struct Client {
     pub config: Config,
     pub tls_ca_root_cert: RootCertStore,
     pub sock_map: PinnedHashMap<String, PinnedTlsStream>,
+    pub chan_map: PinnedHashMap<String, Sender<PinnedMessage>>,
+    pub worker_ready: PinnedHashSet<String>, 
     pub key_store: KeyStore,
     do_auth: bool
 }
@@ -69,6 +80,8 @@ impl Client {
             tls_ca_root_cert: Client::load_root_ca_cert(&cfg.net_config.tls_root_ca_cert_path),
             sock_map: PinnedHashMap::new(),
             do_auth: true,
+            chan_map: PinnedHashMap::new(),
+            worker_ready: PinnedHashSet::new(),
             key_store: key_store.to_owned()
         }
     }
@@ -78,7 +91,9 @@ impl Client {
             tls_ca_root_cert: Client::load_root_ca_cert(&cfg.net_config.tls_root_ca_cert_path),
             sock_map: PinnedHashMap::new(),
             do_auth: false,
-            key_store: KeyStore::empty().to_owned()
+            key_store: KeyStore::empty().to_owned(),
+            chan_map: PinnedHashMap::new(),
+            worker_ready: PinnedHashSet::new()
         }
     }
 
@@ -206,33 +221,68 @@ impl PinnedClient {
     /// Each send will be retried for `rpc_config.client_max_retry` consecutively without delay.
     /// Any clever retry mechanism for the broadcast should be implemented by the caller of this function.
     /// (Such as AIMD.)
-    pub async fn broadcast(client: &PinnedClient, names: &Vec<String>, data: &PinnedMessage, min_success: i32) -> Result<i32, i32> {
-        // let mut handles = JoinSet::new();
+    pub async fn broadcast(client: &PinnedClient, names: &Vec<String>, data: &PinnedMessage) -> Result<(), Error> {
+        let mut need_to_spawn_workers = Vec::new();
         for name in names {
-            let _c = client.clone();
-            let _n = name.clone();
-            let _d = data.clone();
-            // handles.spawn(async move  {
-                let d = _d.as_ref();
-                PinnedClient::reliable_send(&_c, &_n, d).await;
-            // });
-
+            let lworkers = client.0.worker_ready.0.read().unwrap();
+            if !lworkers.contains(name){
+                need_to_spawn_workers.push(name.clone());
+            }
         }
 
-        let mut successes = min_success;
+        for name in &need_to_spawn_workers {
+            let (tx, mut rx) = mpsc::channel(client.0.config.rpc_config.channel_depth as usize);
+            let mut lchans = client.0.chan_map.0.write().unwrap();
+            lchans.insert(name.clone(), tx);
+            
+            let _name = name.clone();
+            let _client = client.clone();
+            tokio::spawn(async move {
+                // Register as ready.
+                {
+                    let mut lworkers = _client.0.worker_ready.0.write().unwrap();
+                    lworkers.insert(_name.clone());
+                }
 
-        // while let Some(res) = handles.join_next().await {
-        //     match res {
-        //         Ok(_) => { successes += 1; },
-        //         Err(_) => { }
-        //     }
-        // }
+                // Main loop: Fetch data from channel
+                // Do reliable send
+                // If reliable send fails, die.
+                while let Some(msg) = rx.recv().await {
+                    let msg_ref = msg.as_ref();
+                    match PinnedClient::reliable_send(&_client, &_name, msg_ref).await {
+                        Err(e) => {
+                            warn!("Broadcast worker for {} dying: {}", _name, e);
+                        },
+                        _ => {}
+                    }
+                }
 
-        if successes >= min_success {
-            Ok(successes)
-        }else{
-            Err(successes)
+                // Deregister as ready.
+                {
+                    let mut lworkers = _client.0.worker_ready.0.write().unwrap();
+                    lworkers.remove(&_name);
+                }
+            });
         }
+            
+        // At this point, all name in names have a dedicated broadcast worker running.
+        let mut chans = Vec::new();
+        {
+            let lchans = client.0.chan_map.0.read().unwrap();
+            for name in names {
+                let chan = lchans.get(name).unwrap();
+                chans.push(chan.clone());
+            }
+        }
+
+        let bcast_futs = chans.iter()
+            .map(|c| {
+                c.send(data.clone())
+            });
+
+        join_all(bcast_futs).await;
+
+        Ok(())
 
     }
 }
