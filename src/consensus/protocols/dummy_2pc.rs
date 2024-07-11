@@ -4,6 +4,8 @@ use log::{debug, info, warn};
 use prost::Message;
 use hex::ToHex;
 
+use tokio::time::Instant;
+
 use crate::{
     consensus::{
         self,
@@ -57,12 +59,17 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
 
     let mut accepting_client_requests = true;
     let mut curr_node_req = None;
-    let mut curr_client_req = None;
+    let mut curr_client_req = Vec::new();
+    let mut client_req_num = 0;
+
+    let mut num_txs = 0;
+
     loop {
         if ctx.i_am_leader.load(Ordering::SeqCst) && accepting_client_requests {
             tokio::select! {
+                biased;
                 node_req = node_rx.recv() => curr_node_req = node_req,
-                client_req = client_rx.recv() => curr_client_req = client_req
+                client_req_num_ = client_rx.recv_many(&mut curr_client_req, 1000) => client_req_num = client_req_num_
             }
         } else {
             curr_node_req = node_rx.recv().await;
@@ -122,10 +129,13 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                                 .commit_index
                                 .store(ae.commit_index, Ordering::SeqCst);
 
-                            info!("New Commit Index: {}, Fork Digest: {} Tx: {}",
+                            num_txs += fork.get(ae.commit_index).unwrap().block.tx.len();
+
+                            info!("New Commit Index: {}, Fork Digest: {} Tx: {}, num_txs: {}",
                                 ctx.state.commit_index.load(Ordering::SeqCst),
                                 fork.last_hash().encode_hex::<String>(),
-                                String::from_utf8(fork.get(ae.commit_index).unwrap().block.tx[0].clone()).unwrap()
+                                String::from_utf8(fork.get(ae.commit_index).unwrap().block.tx[0].clone()).unwrap(),
+                                num_txs
                             );
                         }
                     }
@@ -142,11 +152,13 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                                 && v.n <= fork.last() // This is just a sanity check
                             {
                                 ctx.state.commit_index.store(v.n, Ordering::SeqCst);
+                                num_txs += fork.get(v.n).unwrap().block.tx.len();
                                 if v.n % 1000 == 0 {
-                                    info!("New Commit Index: {}, Fork Digest: {} Tx: {}",
+                                    info!("New Commit Index: {}, Fork Digest: {} Tx: {}, num_txs: {}",
                                         ctx.state.commit_index.load(Ordering::SeqCst),
                                          v.fork_digest.encode_hex::<String>(),
-                                         String::from_utf8(fork.get(v.n).unwrap().block.tx[0].clone()).unwrap()
+                                         String::from_utf8(fork.get(v.n).unwrap().block.tx[0].clone()).unwrap(),
+                                         num_txs
                                     );
                                 }
     
@@ -159,39 +171,61 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
             }
         }
 
-        if let Some(ms) = &curr_client_req {
-            let (msg, _sender) = ms;
-            match &msg {
-                crate::consensus::proto::rpc::proto_payload::Message::ClientRequest(req) => {
-                    let mut fork = ctx.state.fork.lock().await;
-                    let block = ProtoBlock {
-                        tx: vec![req.tx.clone()],
-                        n: fork.last() + 1,
-                        parent: fork.last_hash(),
-                        view: 1,
-                        qc: Vec::new(),
-                        sig: Some(Sig::NoSig(DefferedSignature {})),
-                    };
+        if client_req_num > 0 {
+            let mut tx = Vec::new();
+            for (ms, _sender) in &curr_client_req {
+                if let crate::consensus::proto::rpc::proto_payload::Message::ClientRequest(req) = ms {
+                    tx.push(req.tx.clone());
+                }
+            }
 
-                    let mut entry = LogEntry {
-                        block,
-                        replication_votes: HashSet::new(),
-                    };
+            if tx.len() > 0 {
+                let mut fork = ctx.state.fork.lock().await;
+                let block = ProtoBlock {
+                    tx,
+                    n: fork.last() + 1,
+                    parent: fork.last_hash(),
+                    view: 1,
+                    qc: Vec::new(),
+                    sig: Some(Sig::NoSig(DefferedSignature {})),
+                };
 
-                    entry
-                        .replication_votes
-                        .insert(ctx.config.net_config.name.clone());
+                let mut entry = LogEntry {
+                    block,
+                    replication_votes: HashSet::new(),
+                };
 
-                    match fork.push(entry) {
-                        Ok(n) => {
-                            if n % 1000 == 0 {
-                                info!("Client message sequenced at {}", n);
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Error processing client request: {}", e);
+                entry
+                    .replication_votes
+                    .insert(ctx.config.net_config.name.clone());
+
+                match fork.push(entry) {
+                    Ok(n) => {
+                        if n % 1000 == 0 {
+                            info!("Client message sequenced at {}", n);
                         }
                     }
+                    Err(e) => {
+                        warn!("Error processing client request: {}", e);
+                    }
+                }
+
+                if majority == 1 {
+                    let ci = ctx.state.commit_index.load(Ordering::SeqCst);
+                    if ci < fork.last() {
+                        ctx.state.commit_index.store(fork.last(), Ordering::SeqCst);
+                        num_txs += fork.get(fork.last()).unwrap().block.tx.len();
+                        if fork.last() % 1000 == 0 {
+                            info!("New Commit Index: {}, Fork Digest: {} Tx: {} num_txs: {}",
+                                ctx.state.commit_index.load(Ordering::SeqCst),
+                                fork.last_hash().encode_hex::<String>(),
+                                String::from_utf8(fork.get(fork.last()).unwrap().block.tx[0].clone()).unwrap(),
+                                num_txs
+                            );
+                        }
+
+                    }
+                }else{
 
                     accepting_client_requests = false; // Finish replicating this request before processing the next.
 
@@ -218,21 +252,24 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                     if let Ok(_) = rpc_msg_body.encode(&mut buf) {
                         let sz = buf.len();
                         let bcast_msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
+                        
+                        let start_bcast = Instant::now();
                         let _ = PinnedClient::broadcast(&client, &send_list, &bcast_msg, majority as i32).await;
+                        info!("Broadcast time: {} us", start_bcast.elapsed().as_micros());
                     }
                 }
-                _ => {}
             }
         }
 
-        if curr_node_req.is_none() && curr_client_req.is_none() {
+        if curr_node_req.is_none() && client_req_num == 0 {
             warn!("Consensus node dying!");
             break;          // Select failed because both channels were closed!
         }
 
         // Reset for the next iteration
         curr_node_req = None;
-        curr_client_req = None;
+        curr_client_req.clear();
+        client_req_num = 0;
     }
 
     Ok(())

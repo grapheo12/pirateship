@@ -29,46 +29,32 @@ fn process_args() -> ClientConfig {
 const NUM_REQUESTS: u64 = 10000000;
 
 async fn client_runner(idx: usize, client: &PinnedClient ) -> io::Result<()> {
-    let (tx, mut rx) = mpsc::channel(NUM_REQUESTS as usize);
-
-    let gen_handle = tokio::spawn(async move {
-        for i in 0..NUM_REQUESTS {
-    
-            let client_req = ProtoClientRequest { 
-                tx: format!("Tx:{}:{}", idx, i).into_bytes(),
-                sig: vec![0u8; SIGNATURE_LENGTH]
-            };
-    
-            let rpc_msg_body = ProtoPayload { 
-                rpc_type: rpc::RpcType::OneWay.into(), 
-                rpc_seq_num: i, 
-                message: Some(pft::consensus::proto::rpc::proto_payload::Message::ClientRequest(client_req))
-            };
-    
-            if i % 1000 == 0 {
-                info!("Sending message: {}", format!("Tx:{}:{}", idx, i));
-            }else{
-                debug!("Sending message: {}", format!("Tx:{}:{}", idx, i));
-            }
-    
-            // let start = Instant::now();
-            let mut buf = Vec::new();
-            rpc_msg_body.encode(&mut buf).expect("Protobuf error");
-            // info!("Serialize time: {} us", start.elapsed().as_micros());
-
-            tx.send(buf).await.expect("Should be able to send");
-        }
-    });
-
-    sleep(Duration::from_secs(20)).await;
-    
-    
-    for _ in 1..NUM_REQUESTS {
-        let buf = rx.recv().await.expect("Should've received something");
+    for i in 1..NUM_REQUESTS {
         let start = Instant::now();
-        while start.elapsed().as_micros() < 100 {
-
+        while start.elapsed().as_micros() < 10 {
         }
+
+        let client_req = ProtoClientRequest { 
+            tx: format!("Tx:{}:{}", idx, i).into_bytes(),
+            sig: vec![0u8; SIGNATURE_LENGTH]
+        };
+
+        let rpc_msg_body = ProtoPayload { 
+            rpc_type: rpc::RpcType::OneWay.into(), 
+            rpc_seq_num: i, 
+            message: Some(pft::consensus::proto::rpc::proto_payload::Message::ClientRequest(client_req))
+        };
+
+        if i % 1000 == 0 {
+            info!("Sending message: {}", format!("Tx:{}:{}", idx, i));
+        }else{
+            debug!("Sending message: {}", format!("Tx:{}:{}", idx, i));
+        }
+
+        // let start = Instant::now();
+        let mut buf = Vec::new();
+        rpc_msg_body.encode(&mut buf).expect("Protobuf error");
+        // info!("Serialize time: {} us", start.elapsed().as_micros());
 
         // let start = Instant::now();
         PinnedClient::reliable_send(
@@ -81,7 +67,6 @@ async fn client_runner(idx: usize, client: &PinnedClient ) -> io::Result<()> {
 
     }
 
-    tokio::join!(gen_handle);
     Ok(())
 
 }

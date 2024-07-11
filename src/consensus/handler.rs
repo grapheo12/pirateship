@@ -62,14 +62,16 @@ pub struct ServerContext {
     pub last_diverse_quorum_request: AtomicU64,
     pub i_am_leader: AtomicBool,
     pub node_queue: (
-        mpsc::Sender<ForwardedMessage>,
-        Mutex<mpsc::Receiver<ForwardedMessage>>,
+        mpsc::UnboundedSender<ForwardedMessage>,
+        Mutex<mpsc::UnboundedReceiver<ForwardedMessage>>,
     ),
     pub client_queue: (
-        mpsc::Sender<ForwardedMessage>,
-        Mutex<mpsc::Receiver<ForwardedMessage>>,
+        mpsc::UnboundedSender<ForwardedMessage>,
+        Mutex<mpsc::UnboundedReceiver<ForwardedMessage>>,
     ),
     pub state: ConsensusState, // @todo better code structure such
+
+
 }
 
 #[derive(Clone)]
@@ -77,8 +79,8 @@ pub struct PinnedServerContext(pub Arc<Pin<Box<ServerContext>>>);
 
 impl PinnedServerContext {
     pub fn new(cfg: &Config) -> PinnedServerContext {
-        let node_ch = mpsc::channel(cfg.rpc_config.channel_depth as usize);
-        let client_ch = mpsc::channel(cfg.rpc_config.channel_depth as usize);
+        let node_ch = mpsc::unbounded_channel();
+        let client_ch = mpsc::unbounded_channel();
         PinnedServerContext(Arc::new(Box::pin(ServerContext {
             config: cfg.clone(),
             last_fast_quorum_request: AtomicU64::new(1),
@@ -182,18 +184,20 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
             }
             rpc::proto_payload::Message::ClientRequest(_) => {
                 let msg = (body.message.unwrap(), sender);
-                loop {
-                    match ctx.client_queue.0.try_send(msg.clone()) {
-                        // Does this make a double copy?
-                        Ok(_) => {
-                            break;
-                        }
-                        Err(e) => {
-                            warn!("Sending on channel failed: {:?}", e);
-                        }
-                    };
-                }
 
+                match ctx.client_queue.0.send(msg.clone()) {
+                    // Does this make a double copy?
+                    Ok(_) => {}
+                    Err(e) => {
+                        match e {
+                            _ => {
+                                return false;
+                            }
+                        }
+                    }
+                };
+            
+            
                 return true;
             }
         }
@@ -239,18 +243,18 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
             }
             rpc::proto_payload::Message::ClientRequest(_) => {
                 let msg = (body.message.unwrap(), sender);
-                loop {
-                    match ctx.client_queue.0.try_send(msg.clone()) {
-                        // Does this make a double copy?
-                        Ok(_) => {
-                            break;
+                
+                match ctx.client_queue.0.send(msg.clone()) {
+                    // Does this make a double copy?
+                    Ok(_) => {}
+                    Err(e) => {
+                        match e {
+                            _ => {
+                                return false;
+                            }
                         }
-                        Err(e) => {
-                            warn!("Sending on channel failed: {:?}", e);
-                        }
-                    };
-                }
-
+                    }
+                };
                 return true;
             }
         }
@@ -259,17 +263,19 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
     // If code reaches here, it should be processed by the consensus algorithm.
     // Can be used for load shedding here.
     let msg = (body.message.unwrap(), sender);
-    loop {
-        match ctx.node_queue.0.try_send(msg.clone()) {
-            // Does this make a double copy?
-            Ok(_) => {
-                break;
+    
+    match ctx.node_queue.0.send(msg.clone()) {
+        // Does this make a double copy?
+        Ok(_) => {}
+        Err(e) => {
+            match e {
+                _ => {
+                    return false;
+                }
             }
-            Err(e) => {
-                warn!("Sending on channel failed: {:?}", e);
-            }
-        };
-    }
+        }
+    };
+
 
     true
 }

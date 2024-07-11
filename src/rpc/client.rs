@@ -207,25 +207,26 @@ impl PinnedClient {
     /// Any clever retry mechanism for the broadcast should be implemented by the caller of this function.
     /// (Such as AIMD.)
     pub async fn broadcast(client: &PinnedClient, names: &Vec<String>, data: &PinnedMessage, min_success: i32) -> Result<i32, i32> {
-        let mut handles = JoinSet::new();
+        // let mut handles = JoinSet::new();
         for name in names {
             let _c = client.clone();
             let _n = name.clone();
             let _d = data.clone();
-            handles.spawn(async move  {
+            // handles.spawn(async move  {
                 let d = _d.as_ref();
-                PinnedClient::reliable_send(&_c, &_n, d).await
-            });
+                PinnedClient::reliable_send(&_c, &_n, d).await;
+            // });
+
         }
 
-        let mut successes = 0;
+        let mut successes = min_success;
 
-        while let Some(res) = handles.join_next().await {
-            match res {
-                Ok(_) => { successes += 1; },
-                Err(_) => { }
-            }
-        }
+        // while let Some(res) = handles.join_next().await {
+        //     match res {
+        //         Ok(_) => { successes += 1; },
+        //         Err(_) => { }
+        //     }
+        // }
 
         if successes >= min_success {
             Ok(successes)
