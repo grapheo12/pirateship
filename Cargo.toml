@@ -23,6 +23,7 @@ sha2 = "0.10.8"
 hex = "0.4.3"
 futures = "0.3.30"
 snmalloc-rs = {version = "0.3.6", features = ["native-cpu"]}
+core_affinity = "0.8.1"
 
 [build-dependencies]
 prost-build = { version = "0.12" }

@@ -1,5 +1,7 @@
 use pft::{config::Config, consensus};
-use std::{env, fs, io, path, sync::Arc};
+use tokio::runtime;
+use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
+use std::io::Write;
 
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
@@ -29,13 +31,55 @@ fn process_args() -> Config {
     Config::deserialize(&cfg_contents)
 }
 
-#[tokio::main]
-async fn main() -> io::Result<()> {
-    colog::init();
-    let cfg = process_args();
+async fn run_main(cfg: Config) -> io::Result<()> {
     let node = Arc::new(consensus::ConsensusNode::new(&cfg));
     let (server_handle, consensus_handle) = consensus::ConsensusNode::run(node);
 
     let _ = tokio::join!(server_handle, consensus_handle);
     Ok(())
+}
+
+const NUM_THREADS: usize = 32;
+
+fn main() {
+    colog::init();
+    let cfg = process_args();
+
+    let core_ids = 
+        Arc::new(Mutex::new(Box::pin(core_affinity::get_core_ids().unwrap())));
+
+    let start_idx = cfg.consensus_config.node_list.iter().position(|r| r.eq(&cfg.net_config.name)).unwrap();
+    let mut num_threads = NUM_THREADS;
+    {
+        let _num_cores = core_ids.lock().unwrap().len();
+        if _num_cores < num_threads {
+            num_threads = _num_cores;
+        }
+    }
+
+    let start_idx = start_idx * num_threads;
+    
+    let i = Box::pin(AtomicUsize::new(0));
+    let runtime = runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(NUM_THREADS)
+        .on_thread_start(move || {
+            let _cids = core_ids.clone();
+            let lcores = _cids.lock().unwrap();
+            let id = (start_idx + i.fetch_add(1, std::sync::atomic::Ordering::SeqCst)) % lcores.len();
+            // let res = core_affinity::set_for_current(lcores[id]);
+            
+            // if res {
+            //     println!("Thread pinned to core {:?}", id);
+            // }else{
+            //     println!("Thread pinning to core {:?} failed", id);
+            // }
+
+            std::io::stdout().flush()
+                .unwrap();
+        })
+        .build()
+        .unwrap();
+
+    let _ = runtime.block_on(run_main(cfg));
 }
