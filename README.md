@@ -1,6 +1,7 @@
 # Local setup
 
-Install Rust and jq.
+Install Rust, jq, clang, llvm, cmake and protoc.
+On an Ubuntu machine you can just run `sudo make install-deps-ubuntu` to install all dependencies.
 
 Run:
 ```bash
@@ -16,7 +17,7 @@ If it doesn't work, append the following line in `/etc/hosts` for `$i` in 1..7 i
 127.0.0.1   node$i.localhost
 ```
 
-Build the project using `cargo build` and run as follows:
+Build the project using `make` and run as follows:
 
 ```bash
 sh scripts/run_local.sh <NUM_NODES> <NUM_SECONDS> <CONFIG_DIR> <LOG_DIR>
@@ -32,5 +33,5 @@ will run the 3 node setup for which the configs are in `configs` for 20 seconds 
 # TODO
 
 (To do once a basic code structure is ready)
-- [ ] Test if a dedicated async task per connected server (with channels to pass data) is better than locked sockets.
+- [x] Test if a dedicated async task per connected server (with channels to pass data) is better than locked sockets.
 - [ ] Create a good proto representation for transactions.
