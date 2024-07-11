@@ -3,12 +3,19 @@ use std::sync::Arc;
 use handler::{consensus_rpc_handler, PinnedServerContext};
 use tokio::task::JoinHandle;
 
-use crate::{config::Config, crypto::KeyStore, rpc::{client::{Client, PinnedClient}, server::Server}};
+use crate::{
+    config::Config,
+    crypto::KeyStore,
+    rpc::{
+        client::{Client, PinnedClient},
+        server::Server,
+    },
+};
 
 pub mod handler;
 pub mod leader_rotation;
-pub mod protocols;
 pub mod log;
+pub mod protocols;
 
 pub mod proto {
     pub mod consensus {
@@ -22,33 +29,38 @@ pub mod proto {
     }
 }
 
-
 /// Wrapper around rpc::{Server, Client} with this PinnedServerContext and consensus_rpc_handler
 /// One should use this to spawn a new node, instead of creating rpc::{Server, Client} separately.
 pub struct ConsensusNode {
     pub server: Arc<Server<PinnedServerContext>>,
     pub client: PinnedClient,
-    pub ctx: PinnedServerContext
+    pub ctx: PinnedServerContext,
 }
 
 impl ConsensusNode {
     pub fn new(config: &Config) -> ConsensusNode {
-        let key_store = KeyStore::new(&config.rpc_config.allowed_keylist_path, &config.rpc_config.signing_priv_key_path); 
+        let key_store = KeyStore::new(
+            &config.rpc_config.allowed_keylist_path,
+            &config.rpc_config.signing_priv_key_path,
+        );
         ConsensusNode {
             server: Arc::new(Server::new(config, consensus_rpc_handler, &key_store)),
             client: Client::new(config, &key_store).into(),
-            ctx: PinnedServerContext::new(config)
+            ctx: PinnedServerContext::new(config),
         }
     }
 
     pub fn run(node: Arc<Self>) -> (JoinHandle<()>, JoinHandle<()>) {
         let node1 = node.clone();
         let node2 = node.clone();
-        (tokio::spawn(async move {
-            let _ = Server::<PinnedServerContext>::run(node1.server.clone(), node1.ctx.clone()).await;
-        }),
-        tokio::spawn(async move {
-            let _ = protocols::algorithm(node2.ctx.clone(), node2.client.clone()).await;
-        }))
+        (
+            tokio::spawn(async move {
+                let _ = Server::<PinnedServerContext>::run(node1.server.clone(), node1.ctx.clone())
+                    .await;
+            }),
+            tokio::spawn(async move {
+                let _ = protocols::algorithm(node2.ctx.clone(), node2.client.clone()).await;
+            }),
+        )
     }
 }

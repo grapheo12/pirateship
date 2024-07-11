@@ -1,19 +1,18 @@
-
-#[cfg(feature="dummy_2pc")]
+#[cfg(feature = "dummy_2pc")]
 mod dummy_2pc;
 pub use dummy_2pc::algorithm;
 
-#[cfg(feature="raft")]
+#[cfg(feature = "raft")]
 mod raft;
-#[cfg(feature="raft")]
+#[cfg(feature = "raft")]
 use raft::*;
 
-#[cfg(feature="jolteon")]
+#[cfg(feature = "jolteon")]
 mod jolteon;
-#[cfg(feature="jolteon")]
+#[cfg(feature = "jolteon")]
 use jolteon::*;
 
-#[cfg(feature="pirateship")]
+#[cfg(feature = "pirateship")]
 mod pirateship;
-#[cfg(feature="pirateship")]
+#[cfg(feature = "pirateship")]
 use pirateship::*;

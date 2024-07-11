@@ -1,10 +1,24 @@
-use std::{collections::{HashMap, HashSet}, fs::File, io::{BufReader, Error, ErrorKind}, path, pin::Pin, sync::{Arc, RwLock}};
-use futures::{future::join_all, stream::FuturesUnordered};
+use crate::{config::Config, crypto::KeyStore};
+use futures::future::join_all;
 use log::{debug, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
-use tokio::{io::{AsyncWriteExt, Join}, net::TcpStream, sync::{mpsc::{self, Sender}, Mutex}, task::JoinSet};
+use std::{
+    collections::{HashMap, HashSet},
+    fs::File,
+    io::{BufReader, Error, ErrorKind},
+    path,
+    pin::Pin,
+    sync::{Arc, RwLock},
+};
+use tokio::{
+    io::AsyncWriteExt,
+    net::TcpStream,
+    sync::{
+        mpsc::{self, Sender},
+        Mutex,
+    }
+};
 use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
-use crate::{config::Config, crypto::KeyStore};
 
 use super::{auth, MessageRef, PinnedMessage};
 
@@ -30,25 +44,23 @@ impl PinnedTlsStream {
     fn new(stream: TlsStream<TcpStream>) -> PinnedTlsStream {
         PinnedTlsStream(Box::pin(Arc::new(Mutex::new(stream))))
     }
-
 }
 pub struct Client {
     pub config: Config,
     pub tls_ca_root_cert: RootCertStore,
     pub sock_map: PinnedHashMap<String, PinnedTlsStream>,
     pub chan_map: PinnedHashMap<String, Sender<PinnedMessage>>,
-    pub worker_ready: PinnedHashSet<String>, 
+    pub worker_ready: PinnedHashSet<String>,
     pub key_store: KeyStore,
-    do_auth: bool
+    do_auth: bool,
 }
 
 #[derive(Clone)]
 pub struct PinnedClient(Pin<Box<Arc<Client>>>);
 
-
 enum SendDataType<'a> {
     ByteType(MessageRef<'a>),
-    SizeType(u32)
+    SizeType(u32),
 }
 
 impl Client {
@@ -66,11 +78,15 @@ impl Client {
 
         let mut root_cert_store = rustls::RootCertStore::empty();
         let mut pem = BufReader::new(f);
-        for cert in rustls_pemfile::certs(&mut pem){
-            root_cert_store.add(match cert {
-                Ok(_c) => _c,
-                Err(e) => { panic!("Error reading cert: {}", e); }
-            }).unwrap();
+        for cert in rustls_pemfile::certs(&mut pem) {
+            root_cert_store
+                .add(match cert {
+                    Ok(_c) => _c,
+                    Err(e) => {
+                        panic!("Error reading cert: {}", e);
+                    }
+                })
+                .unwrap();
         }
         root_cert_store
     }
@@ -82,7 +98,7 @@ impl Client {
             do_auth: true,
             chan_map: PinnedHashMap::new(),
             worker_ready: PinnedHashSet::new(),
-            key_store: key_store.to_owned()
+            key_store: key_store.to_owned(),
         }
     }
     pub fn new_unauthenticated(cfg: &Config) -> Client {
@@ -93,30 +109,36 @@ impl Client {
             do_auth: false,
             key_store: KeyStore::empty().to_owned(),
             chan_map: PinnedHashMap::new(),
-            worker_ready: PinnedHashSet::new()
+            worker_ready: PinnedHashSet::new(),
         }
     }
 
-    
     pub fn into(self) -> PinnedClient {
         PinnedClient(Box::pin(Arc::new(self)))
     }
 }
 
 impl PinnedClient {
-    async fn connect(client: &PinnedClient, name: &String) -> Result<PinnedTlsStream, Error>
-    {
-        let peer = client.0.config.net_config.nodes.get(name).ok_or(ErrorKind::AddrNotAvailable)?;
+    async fn connect(client: &PinnedClient, name: &String) -> Result<PinnedTlsStream, Error> {
+        let peer = client
+            .0
+            .config
+            .net_config
+            .nodes
+            .get(name)
+            .ok_or(ErrorKind::AddrNotAvailable)?;
         // Clones the root cert store. Connect() will be only be called once per node.
         // Or if the connection is dropped and needs to be re-established.
         // So, this should be acceptable.
-        let tls_cfg = rustls::ClientConfig::builder_with_provider(aws_lc_rs::default_provider().into())
-            .with_safe_default_protocol_versions().unwrap()
-            .with_root_certificates(client.0.tls_ca_root_cert.clone())
-            .with_no_client_auth();
+        let tls_cfg =
+            rustls::ClientConfig::builder_with_provider(aws_lc_rs::default_provider().into())
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_root_certificates(client.0.tls_ca_root_cert.clone())
+                .with_no_client_auth();
 
         let connector = TlsConnector::from(Arc::new(tls_cfg));
-        
+
         let stream = TcpStream::connect(&peer.addr).await?;
 
         let domain = pki_types::ServerName::try_from(peer.domain.as_str())
@@ -129,18 +151,22 @@ impl PinnedClient {
             auth::handshake_client(&client.0, &mut stream).await?;
         }
         let stream_safe = PinnedTlsStream::new(stream.into());
-        client.0.sock_map.0.write().unwrap()
+        client
+            .0
+            .sock_map
+            .0
+            .write()
+            .unwrap()
             .insert(name.to_string(), stream_safe.clone());
         Ok(stream_safe)
     }
 
-    async fn get_sock(client: &PinnedClient, name: &String) -> Result<PinnedTlsStream, Error>
-    {
+    async fn get_sock(client: &PinnedClient, name: &String) -> Result<PinnedTlsStream, Error> {
         // Is there an open connection?
         let mut sock: Option<PinnedTlsStream> = None;
         {
             let sock_map_reader = client.0.sock_map.0.read().unwrap();
-        
+
             let sock_ = sock_map_reader.get(name);
             if sock_.is_some() {
                 sock = Some(sock_.unwrap().clone());
@@ -152,41 +178,51 @@ impl PinnedClient {
         }
 
         Ok(sock.unwrap())
-
     }
 
-    
-    async fn send_raw<'a>(client: &PinnedClient, name: &String, sock: &PinnedTlsStream, data: SendDataType<'a>) -> Result<(), Error>
-    {
+    async fn send_raw<'a>(
+        client: &PinnedClient,
+        name: &String,
+        sock: &PinnedTlsStream,
+        data: SendDataType<'a>,
+    ) -> Result<(), Error> {
         let e = match data {
             SendDataType::ByteType(d) => {
                 let mut lsock = sock.0.lock().await;
                 lsock.write_all(&d).await
-            },
+            }
             SendDataType::SizeType(d) => {
                 let mut lsock = sock.0.lock().await;
-                lsock.write_u32(d).await   // Does this take care of endianness?
+                lsock.write_u32(d).await // Does this take care of endianness?
             }
         };
 
         if let Err(e) = e {
             // There is some problem.
             // Reset connection.
-            warn!("Problem sending message to {}: {} ... Resetting connection.", name, e);
+            warn!(
+                "Problem sending message to {}: {} ... Resetting connection.",
+                name, e
+            );
             let mut lsock = sock.0.lock().await;
-            if let Err(e2) = lsock.shutdown().await
-            {
-                warn!("Problem shutting down socket of {}: {} ... Proceeding anyway", name, e2);
+            if let Err(e2) = lsock.shutdown().await {
+                warn!(
+                    "Problem shutting down socket of {}: {} ... Proceeding anyway",
+                    name, e2
+                );
             }
-    
-            client.0.sock_map.0.write().unwrap()
-                .remove(name);
+
+            client.0.sock_map.0.write().unwrap().remove(name);
             debug!("Socket removed from sock_map");
             return Err(e);
         }
         Ok(())
     }
-    pub async fn send<'b>(client: &PinnedClient, name: &String, data: MessageRef<'b>) -> Result<(), Error> {
+    pub async fn send<'b>(
+        client: &PinnedClient,
+        name: &String,
+        data: MessageRef<'b>,
+    ) -> Result<(), Error> {
         let sock = Self::get_sock(client, name).await?;
         let len = data.len() as u32;
 
@@ -195,7 +231,11 @@ impl PinnedClient {
         Ok(())
     }
 
-    pub async fn reliable_send<'b>(client: &PinnedClient, name: &String, data: MessageRef<'b>) -> Result<(), Error> {
+    pub async fn reliable_send<'b>(
+        client: &PinnedClient,
+        name: &String,
+        data: MessageRef<'b>,
+    ) -> Result<(), Error> {
         let mut i = client.0.config.net_config.client_max_retry;
         while i > 0 {
             let done = match Self::send(client, name, data.clone()).await {
@@ -211,8 +251,10 @@ impl PinnedClient {
             }
         }
 
-        Err(
-            Error::new(ErrorKind::NotConnected, "Could not send within max_retries"))
+        Err(Error::new(
+            ErrorKind::NotConnected,
+            "Could not send within max_retries",
+        ))
     }
 
     /// Sends messages to all peers in `names.`
@@ -221,11 +263,15 @@ impl PinnedClient {
     /// Each send will be retried for `rpc_config.client_max_retry` consecutively without delay.
     /// Any clever retry mechanism for the broadcast should be implemented by the caller of this function.
     /// (Such as AIMD.)
-    pub async fn broadcast(client: &PinnedClient, names: &Vec<String>, data: &PinnedMessage) -> Result<(), Error> {
+    pub async fn broadcast(
+        client: &PinnedClient,
+        names: &Vec<String>,
+        data: &PinnedMessage,
+    ) -> Result<(), Error> {
         let mut need_to_spawn_workers = Vec::new();
         for name in names {
             let lworkers = client.0.worker_ready.0.read().unwrap();
-            if !lworkers.contains(name){
+            if !lworkers.contains(name) {
                 need_to_spawn_workers.push(name.clone());
             }
         }
@@ -234,7 +280,7 @@ impl PinnedClient {
             let (tx, mut rx) = mpsc::channel(client.0.config.rpc_config.channel_depth as usize);
             let mut lchans = client.0.chan_map.0.write().unwrap();
             lchans.insert(name.clone(), tx);
-            
+
             let _name = name.clone();
             let _client = client.clone();
             tokio::spawn(async move {
@@ -252,7 +298,7 @@ impl PinnedClient {
                     match PinnedClient::reliable_send(&_client, &_name, msg_ref).await {
                         Err(e) => {
                             warn!("Broadcast worker for {} dying: {}", _name, e);
-                        },
+                        }
                         _ => {}
                     }
                 }
@@ -264,7 +310,7 @@ impl PinnedClient {
                 }
             });
         }
-            
+
         // At this point, all name in names have a dedicated broadcast worker running.
         let mut chans = Vec::new();
         {
@@ -275,14 +321,10 @@ impl PinnedClient {
             }
         }
 
-        let bcast_futs = chans.iter()
-            .map(|c| {
-                c.send(data.clone())
-            });
+        let bcast_futs = chans.iter().map(|c| c.send(data.clone()));
 
         join_all(bcast_futs).await;
 
         Ok(())
-
     }
 }

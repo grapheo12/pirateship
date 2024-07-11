@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Result;
+use std::collections::HashMap;
 
 #[cfg(test)]
 mod tests;
@@ -8,7 +8,7 @@ mod tests;
 #[derive(Serialize, Deserialize, Clone)]
 pub struct NodeNetInfo {
     pub addr: String,
-    pub domain: String
+    pub domain: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -19,7 +19,7 @@ pub struct NetConfig {
     pub tls_key_path: String,
     pub tls_root_ca_cert_path: String,
     pub nodes: HashMap<String, NodeNetInfo>,
-    pub client_max_retry: i32
+    pub client_max_retry: i32,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -27,20 +27,20 @@ pub struct RpcConfig {
     pub allowed_keylist_path: String,
     pub signing_priv_key_path: String,
     pub recv_buffer_size: u32,
-    pub channel_depth: u32
+    pub channel_depth: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ConsensusConfig {
-    pub node_list: Vec<String>,            // This better be in the same order in all nodes.
-    pub quorum_diversity_k: u64
+    pub node_list: Vec<String>, // This better be in the same order in all nodes.
+    pub quorum_diversity_k: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     pub net_config: NetConfig,
     pub rpc_config: RpcConfig,
-    pub consensus_config: ConsensusConfig
+    pub consensus_config: ConsensusConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -48,22 +48,22 @@ pub struct ClientNetConfig {
     pub name: String,
     pub tls_root_ca_cert_path: String,
     pub nodes: HashMap<String, NodeNetInfo>,
-    pub client_max_retry: i32
+    pub client_max_retry: i32,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ClientRpcConfig {
-    pub signing_priv_key_path: String
+    pub signing_priv_key_path: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ClientConfig {
     pub net_config: ClientNetConfig,
-    pub rpc_config: ClientRpcConfig
+    pub rpc_config: ClientRpcConfig,
 }
 
 impl Config {
-    pub fn serialize(self: &Self) -> String  {
+    pub fn serialize(self: &Self) -> String {
         serde_json::to_string_pretty(self).expect("Invalid Config")
     }
 
@@ -74,7 +74,7 @@ impl Config {
 }
 
 impl ClientConfig {
-    pub fn serialize(self: &Self) -> String  {
+    pub fn serialize(self: &Self) -> String {
         serde_json::to_string_pretty(self).expect("Invalid Config")
     }
 
@@ -85,7 +85,7 @@ impl ClientConfig {
 
     pub fn fill_missing(&self) -> Config {
         Config {
-            net_config: NetConfig{
+            net_config: NetConfig {
                 name: self.net_config.name.clone(),
                 addr: String::from(""),
                 tls_cert_path: String::from(""),
@@ -94,17 +94,16 @@ impl ClientConfig {
                 nodes: self.net_config.nodes.clone(),
                 client_max_retry: self.net_config.client_max_retry,
             },
-            rpc_config: RpcConfig{
+            rpc_config: RpcConfig {
                 allowed_keylist_path: String::from(""),
                 signing_priv_key_path: self.rpc_config.signing_priv_key_path.clone(),
                 recv_buffer_size: 0,
                 channel_depth: 0,
             },
-            consensus_config: ConsensusConfig{
+            consensus_config: ConsensusConfig {
                 node_list: Vec::new(),
                 quorum_diversity_k: 0,
             },
         }
     }
 }
-

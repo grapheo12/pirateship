@@ -4,8 +4,6 @@ use hex::ToHex;
 use log::{debug, info, warn};
 use prost::Message;
 
-use tokio::time::Instant;
-
 use crate::{
     consensus::{
         self,
@@ -33,8 +31,8 @@ fn get_leader_str(ctx: &PinnedServerContext) -> String {
 fn get_node_num(ctx: &PinnedServerContext) -> u64 {
     let mut i = 0;
     for name in &ctx.config.consensus_config.node_list {
-        if name.eq(&ctx.config.net_config.name){
-            return i; 
+        if name.eq(&ctx.config.net_config.name) {
+            return i;
         }
         i += 1;
     }
@@ -63,7 +61,7 @@ async fn process_node_request(
     majority: u64,
     accepting_client_requests: &mut bool,
     ms: &(proto_payload::Message, String),
-    ms_batch_size: usize
+    ms_batch_size: usize,
 ) -> Result<(), Error> {
     let (msg, _sender) = ms;
     match &msg {
@@ -120,13 +118,14 @@ async fn process_node_request(
                     *num_txs += fork.get(ae.commit_index).unwrap().block.tx.len();
 
                     if ae.commit_index % 1000 == node_num {
-
                         info!(
                             "New Commit Index: {}, Fork Digest: {} Tx: {}, num_txs: {}",
                             ctx.state.commit_index.load(Ordering::SeqCst),
                             fork.last_hash().encode_hex::<String>(),
-                            String::from_utf8(fork.get(ae.commit_index).unwrap().block.tx[0].clone())
-                                .unwrap(),
+                            String::from_utf8(
+                                fork.get(ae.commit_index).unwrap().block.tx[0].clone()
+                            )
+                            .unwrap(),
                             *num_txs
                         );
                     }
@@ -216,7 +215,8 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                     &mut num_txs,
                     majority.clone(),
                     &mut accepting_client_requests,
-                    req, node_req_num
+                    req,
+                    node_req_num,
                 )
                 .await?;
             }

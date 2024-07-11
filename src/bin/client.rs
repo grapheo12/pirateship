@@ -1,13 +1,27 @@
-use std::{env, fs, io, path, time::Duration};
-use tokio::{sync::mpsc::{self, Receiver}, task::JoinSet, time::Instant};
 use ed25519_dalek::SIGNATURE_LENGTH;
 use log::{debug, info};
-use pft::{config::ClientConfig, consensus::proto::{client::ProtoClientRequest, rpc::{self, ProtoPayload}}, crypto::KeyStore, rpc::{client::{Client, PinnedClient}, MessageRef}};
-use tokio::time::sleep;
+use pft::{
+    config::ClientConfig,
+    consensus::proto::{
+        client::ProtoClientRequest,
+        rpc::{self, ProtoPayload},
+    },
+    crypto::KeyStore,
+    rpc::{
+        client::{Client, PinnedClient},
+        MessageRef,
+    },
+};
 use prost::Message;
+use std::{env, fs, io, path};
+use tokio::{task::JoinSet, time::Instant};
 
 fn process_args() -> ClientConfig {
-    macro_rules! usage_str {() => ("\x1b[31;1mUsage: {} path/to/config.json\x1b[0m");}
+    macro_rules! usage_str {
+        () => {
+            "\x1b[31;1mUsage: {} path/to/config.json\x1b[0m"
+        };
+    }
 
     let args: Vec<_> = env::args().collect();
 
@@ -20,34 +34,34 @@ fn process_args() -> ClientConfig {
         panic!(usage_str!(), args[0]);
     }
 
-    let cfg_contents = fs::read_to_string(cfg_path)
-        .expect("Invalid file path");
+    let cfg_contents = fs::read_to_string(cfg_path).expect("Invalid file path");
 
     ClientConfig::deserialize(&cfg_contents)
 }
 
 const NUM_REQUESTS: u64 = 10000000;
 
-async fn client_runner(idx: usize, client: &PinnedClient ) -> io::Result<()> {
+async fn client_runner(idx: usize, client: &PinnedClient) -> io::Result<()> {
     for i in 1..NUM_REQUESTS {
         let start = Instant::now();
-        while start.elapsed().as_micros() < 8 {
-        }
+        while start.elapsed().as_micros() < 8 {}
 
-        let client_req = ProtoClientRequest { 
+        let client_req = ProtoClientRequest {
             tx: format!("Tx:{}:{}", idx, i).into_bytes(),
-            sig: vec![0u8; SIGNATURE_LENGTH]
+            sig: vec![0u8; SIGNATURE_LENGTH],
         };
 
-        let rpc_msg_body = ProtoPayload { 
-            rpc_type: rpc::RpcType::OneWay.into(), 
-            rpc_seq_num: i, 
-            message: Some(pft::consensus::proto::rpc::proto_payload::Message::ClientRequest(client_req))
+        let rpc_msg_body = ProtoPayload {
+            rpc_type: rpc::RpcType::OneWay.into(),
+            rpc_seq_num: i,
+            message: Some(
+                pft::consensus::proto::rpc::proto_payload::Message::ClientRequest(client_req),
+            ),
         };
 
         if i % 1000 == 0 {
             info!("Sending message: {}", format!("Tx:{}:{}", idx, i));
-        }else{
+        } else {
             debug!("Sending message: {}", format!("Tx:{}:{}", idx, i));
         }
 
@@ -58,17 +72,16 @@ async fn client_runner(idx: usize, client: &PinnedClient ) -> io::Result<()> {
 
         // let start = Instant::now();
         PinnedClient::reliable_send(
-            &client, 
-            &String::from("node1"), 
-            MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon)
-        ).await
-            .expect("Should have been able to send!!");
+            &client,
+            &String::from("node1"),
+            MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon),
+        )
+        .await
+        .expect("Should have been able to send!!");
         // info!("Sending time: {} us", start.elapsed().as_micros());
-
     }
 
     Ok(())
-
 }
 
 const NUM_CLIENTS: usize = 14;
@@ -83,14 +96,10 @@ async fn main() -> io::Result<()> {
     let mut client_handles = JoinSet::new();
     for i in 0..NUM_CLIENTS {
         let c = Client::new(&config.fill_missing(), &keys).into();
-        client_handles.spawn(async move {
-            client_runner(i, &c).await
-        });
+        client_handles.spawn(async move { client_runner(i, &c).await });
     }
 
-    
-    while let Some(_) = client_handles.join_next().await {
-    }
+    while let Some(_) = client_handles.join_next().await {}
     // @todo: Receiving client reply on the same socket.
 
     Ok(())

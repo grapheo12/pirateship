@@ -1,27 +1,35 @@
 use std::{fs::File, io, path, sync::Arc};
 
 use crate::{config::Config, crypto::KeyStore, rpc::auth};
-use rustls::{crypto::aws_lc_rs, pki_types::{CertificateDer, PrivateKeyDer}};
-use rustls_pemfile::{certs, rsa_private_keys};
-use tokio::{io::{split, AsyncReadExt}, net::{TcpListener, TcpStream}};
 use log::{info, warn};
-use tokio_rustls::{rustls, TlsAcceptor, server::TlsStream};
+use rustls::{
+    crypto::aws_lc_rs,
+    pki_types::{CertificateDer, PrivateKeyDer},
+};
+use rustls_pemfile::{certs, rsa_private_keys};
+use tokio::{
+    io::{split, AsyncReadExt},
+    net::{TcpListener, TcpStream},
+};
+use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
 
 use super::{MessageRef, SenderType};
 
 pub struct Server<ServerContext>
-    where ServerContext: Send + Sync + 'static
+where
+    ServerContext: Send + Sync + 'static,
 {
     pub config: Config,
     pub tls_certs: Vec<CertificateDer<'static>>,
     pub tls_keys: PrivateKeyDer<'static>,
     pub key_store: KeyStore,
-    pub msg_handler: fn(&ServerContext, MessageRef) -> bool,  // Can't be a closure as msg_handler is called from another thread.
-    do_auth: bool
+    pub msg_handler: fn(&ServerContext, MessageRef) -> bool, // Can't be a closure as msg_handler is called from another thread.
+    do_auth: bool,
 }
 
 impl<S> Server<S>
-    where S: Send + Clone + Sync + 'static
+where
+    S: Send + Clone + Sync + 'static,
 {
     // Following two functions ported from: https://github.com/rustls/tokio-rustls/blob/main/examples/server.rs
     fn load_certs(path: &String) -> Vec<CertificateDer<'static>> {
@@ -70,17 +78,20 @@ impl<S> Server<S>
                 panic!("Problem parsing key: {}", e);
             }
         }
-        
     }
 
-    pub fn new(cfg: &Config, handler:  fn(&S, MessageRef) -> bool , key_store: &KeyStore) -> Server<S> {
+    pub fn new(
+        cfg: &Config,
+        handler: fn(&S, MessageRef) -> bool,
+        key_store: &KeyStore,
+    ) -> Server<S> {
         Server {
             config: cfg.clone(),
             tls_certs: Server::<S>::load_certs(&cfg.net_config.tls_cert_path),
             tls_keys: Server::<S>::load_keys(&cfg.net_config.tls_key_path),
             msg_handler: handler,
             do_auth: true,
-            key_store: key_store.to_owned()
+            key_store: key_store.to_owned(),
         }
     }
 
@@ -91,11 +102,16 @@ impl<S> Server<S>
             tls_keys: Server::<S>::load_keys(&cfg.net_config.tls_key_path),
             msg_handler: handler,
             do_auth: false,
-            key_store: KeyStore::empty().to_owned()
+            key_store: KeyStore::empty().to_owned(),
         }
     }
 
-    pub async fn handle_stream(_server: Arc<Self>, ctx: &S, stream: &mut TlsStream<TcpStream>, addr: core::net::SocketAddr) -> io::Result<()> {
+    pub async fn handle_stream(
+        _server: Arc<Self>,
+        ctx: &S,
+        stream: &mut TlsStream<TcpStream>,
+        addr: core::net::SocketAddr,
+    ) -> io::Result<()> {
         let mut sender = SenderType::Anon;
         if _server.do_auth {
             let res = auth::handshake_server(&_server, stream).await;
@@ -103,11 +119,11 @@ impl<S> Server<S>
                 Ok(nam) => {
                     info!("Authenticated {} at Addr {}", nam, addr);
                     nam
-                },
+                }
                 Err(e) => {
                     warn!("Problem authenticating: {}", e);
                     return Err(e);
-                },
+                }
             };
             sender = SenderType::Auth(name);
         }
@@ -118,7 +134,7 @@ impl<S> Server<S>
             // Message size capped at 4GiB.
             // As message is multipart, TCP won't have atomic delivery.
             // It is better to just close connection if that happens.
-            // That is why `await?` with all read calls. 
+            // That is why `await?` with all read calls.
             let sz = rx.read_u32().await? as usize;
             if sz == 0 {
                 // End of socket, probably?
@@ -128,9 +144,12 @@ impl<S> Server<S>
             if sz > read_buf.len() {
                 let _n = read_buf.len();
                 read_buf.reserve(sz - _n);
-                info!("Receive buffer increased capacity to {}", read_buf.capacity());
+                info!(
+                    "Receive buffer increased capacity to {}",
+                    read_buf.capacity()
+                );
             }
-            let (buf, _) = read_buf.split_at_mut(sz); 
+            let (buf, _) = read_buf.split_at_mut(sz);
             rx.read_exact(buf).await?;
 
             if !(_server.msg_handler)(ctx, MessageRef::from(&read_buf, sz, &sender)) {
@@ -140,23 +159,25 @@ impl<S> Server<S>
 
         warn!("Dropping connection from {:?}", addr);
         Ok(())
-    } 
+    }
     pub async fn run(server: Arc<Self>, ctx: S) -> io::Result<()> {
         let server_addr = &server.config.net_config.addr;
         info!("Listening on {}", server_addr);
 
         // aws_lc_rs::default_provider() uses AES-GCM. This automatically includes a MAC.
         // MAC checking is embedded in the TLS messaging, so upper layers don't need to worry.
-        let tls_cfg = rustls::ServerConfig::builder_with_provider(aws_lc_rs::default_provider().into())
-            .with_safe_default_protocol_versions().unwrap()
-            .with_no_client_auth() // Client and Node auth happen separately after TLS handshake.
-            .with_single_cert(server.tls_certs.clone(), server.tls_keys.clone_key())
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+        let tls_cfg =
+            rustls::ServerConfig::builder_with_provider(aws_lc_rs::default_provider().into())
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth() // Client and Node auth happen separately after TLS handshake.
+                .with_single_cert(server.tls_certs.clone(), server.tls_keys.clone_key())
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
 
         let tls_acceptor = TlsAcceptor::from(Arc::new(tls_cfg));
 
         let listener = TcpListener::bind(server_addr).await?;
-    
+
         loop {
             let (socket, addr) = listener.accept().await?;
             let acceptor = tls_acceptor.clone();

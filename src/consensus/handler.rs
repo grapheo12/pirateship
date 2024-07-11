@@ -70,8 +70,6 @@ pub struct ServerContext {
         Mutex<mpsc::UnboundedReceiver<ForwardedMessage>>,
     ),
     pub state: ConsensusState, // @todo better code structure such
-
-
 }
 
 #[derive(Clone)]
@@ -152,13 +150,15 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
 
                 match body.rpc_type() {
                     rpc::RpcType::FastQuorumRequest => {
-                        ctx.last_fast_quorum_request.store(body.rpc_seq_num, Ordering::SeqCst);
-                    },
+                        ctx.last_fast_quorum_request
+                            .store(body.rpc_seq_num, Ordering::SeqCst);
+                    }
                     rpc::RpcType::DiverseQuorumRequest => {
-                        ctx.last_diverse_quorum_request.store(body.rpc_seq_num, Ordering::SeqCst);
+                        ctx.last_diverse_quorum_request
+                            .store(body.rpc_seq_num, Ordering::SeqCst);
                     }
                     _ => {}
-                } 
+                }
 
                 if sender
                     != ctx.config.consensus_config.node_list[get_current_leader(
@@ -188,16 +188,13 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
                 match ctx.client_queue.0.send(msg.clone()) {
                     // Does this make a double copy?
                     Ok(_) => {}
-                    Err(e) => {
-                        match e {
-                            _ => {
-                                return false;
-                            }
+                    Err(e) => match e {
+                        _ => {
+                            return false;
                         }
-                    }
+                    },
                 };
-            
-            
+
                 return true;
             }
         }
@@ -243,17 +240,15 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
             }
             rpc::proto_payload::Message::ClientRequest(_) => {
                 let msg = (body.message.unwrap(), sender);
-                
+
                 match ctx.client_queue.0.send(msg.clone()) {
                     // Does this make a double copy?
                     Ok(_) => {}
-                    Err(e) => {
-                        match e {
-                            _ => {
-                                return false;
-                            }
+                    Err(e) => match e {
+                        _ => {
+                            return false;
                         }
-                    }
+                    },
                 };
                 return true;
             }
@@ -263,19 +258,16 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
     // If code reaches here, it should be processed by the consensus algorithm.
     // Can be used for load shedding here.
     let msg = (body.message.unwrap(), sender);
-    
+
     match ctx.node_queue.0.send(msg.clone()) {
         // Does this make a double copy?
         Ok(_) => {}
-        Err(e) => {
-            match e {
-                _ => {
-                    return false;
-                }
+        Err(e) => match e {
+            _ => {
+                return false;
             }
-        }
+        },
     };
-
 
     true
 }

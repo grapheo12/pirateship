@@ -1,29 +1,31 @@
-use std::{collections::HashSet, io::{Error, ErrorKind}};
+use std::{
+    collections::HashSet,
+    io::{Error, ErrorKind},
+};
 
 use prost::Message;
 
-use crate::crypto::{hash, cmp_hash, DIGEST_LENGTH};
+use crate::crypto::{cmp_hash, hash, DIGEST_LENGTH};
 
 use super::proto::consensus::ProtoBlock;
-
 
 #[derive(Clone, Debug)]
 pub struct LogEntry {
     pub block: ProtoBlock,
-    pub replication_votes: HashSet<String>
+    pub replication_votes: HashSet<String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Log {
     entries: Vec<LogEntry>,
-    last_qc: u64
+    last_qc: u64,
 }
 
 impl Log {
     pub fn new() -> Log {
         Log {
             entries: Vec::new(),
-            last_qc: 0
+            last_qc: 0,
         }
     }
 
@@ -45,7 +47,10 @@ impl Log {
             }
         }
         if entry.block.n != self.last() + 1 {
-            return Err(Error::new(ErrorKind::InvalidInput, "Missing intermediate blocks!"));
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Missing intermediate blocks!",
+            ));
         }
         if !cmp_hash(&entry.block.parent, &self.last_hash()) {
             return Err(Error::new(ErrorKind::InvalidInput, "Hash link violation"));
@@ -64,10 +69,13 @@ impl Log {
     /// Returns current vote size
     pub fn inc_replication_vote(&mut self, name: &String, n: u64) -> Result<u64, Error> {
         if n > self.last() {
-            return Err(Error::new(ErrorKind::InvalidInput, "Vote for missing block!"));
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Vote for missing block!",
+            ));
         }
 
-        let idx = n - 1;        // Index is 1-based
+        let idx = n - 1; // Index is 1-based
         let entry = self.entries.get_mut(idx as usize).unwrap();
         entry.replication_votes.insert(name.clone());
 
@@ -80,9 +88,11 @@ impl Log {
         }
 
         let mut buf = Vec::new();
-        self.entries[(self.last() - 1) as usize].block.encode(&mut buf).unwrap();
+        self.entries[(self.last() - 1) as usize]
+            .block
+            .encode(&mut buf)
+            .unwrap();
 
         hash(&buf)
     }
-
 }

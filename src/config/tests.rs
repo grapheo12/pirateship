@@ -2,17 +2,16 @@ use std::collections::HashMap;
 
 use crate::config::{Config, ConsensusConfig, NetConfig, NodeNetInfo, RpcConfig};
 
-
 #[test]
 fn test_nodeconfig_serialize() {
-    let mut net_config = NetConfig{
+    let mut net_config = NetConfig {
         name: "node1".to_string(),
         addr: "0.0.0.0:3001".to_string(),
         tls_cert_path: String::from("blah"),
         tls_key_path: String::from("blah"),
         tls_root_ca_cert_path: String::from("blah"),
         nodes: HashMap::new(),
-        client_max_retry: 10
+        client_max_retry: 10,
     };
 
     for n in 0..5 {
@@ -20,23 +19,36 @@ fn test_nodeconfig_serialize() {
         name.push_str(n.to_string().as_str());
         let mut addr = "127.0.0.1:300".to_string();
         addr.push_str(n.to_string().as_str());
-        net_config.nodes.insert(name, NodeNetInfo{addr: addr.to_owned(), domain: String::from("blah.com")});
-
+        net_config.nodes.insert(
+            name,
+            NodeNetInfo {
+                addr: addr.to_owned(),
+                domain: String::from("blah.com"),
+            },
+        );
     }
 
     let rpc_config = RpcConfig {
         allowed_keylist_path: String::from("blah/blah"),
         signing_priv_key_path: String::from("blah/blah"),
         recv_buffer_size: (1 << 15),
-        channel_depth: 32
+        channel_depth: 32,
     };
 
     let consensus_config = ConsensusConfig {
-        node_list: vec![String::from("node1"), String::from("node2"), String::from("node3")],
-        quorum_diversity_k: 3
+        node_list: vec![
+            String::from("node1"),
+            String::from("node2"),
+            String::from("node3"),
+        ],
+        quorum_diversity_k: 3,
     };
 
-    let config = Config{net_config, rpc_config, consensus_config};
+    let config = Config {
+        net_config,
+        rpc_config,
+        consensus_config,
+    };
 
     let s = config.serialize();
     println!("{}", s);
@@ -51,5 +63,4 @@ fn test_nodeconfig_serialize() {
         let val = opt.unwrap();
         assert!(val.addr.eq(&node_config.addr));
     }
-
 }

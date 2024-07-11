@@ -1,25 +1,31 @@
-use std::{io::{Error, ErrorKind}, sync::Arc};
 use bytes::Bytes;
 use ed25519_dalek::SIGNATURE_LENGTH;
 use log::debug;
 use prost::Message;
 use rand::prelude::*;
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream};
-use tokio_rustls::{server, client};
+use std::{
+    io::{Error, ErrorKind},
+    sync::Arc,
+};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
+use tokio_rustls::{client, server};
 
 use super::{client::Client, proto::auth::ProtoHandshakeResponse, server::Server};
 
 #[derive(Clone, Debug)]
 pub(crate) struct HandshakeResponse {
     pub name: String,
-    pub signature: Bytes
+    pub signature: Bytes,
 }
 
 impl HandshakeResponse {
     pub(crate) fn serialize(&self) -> Vec<u8> {
         let proto = ProtoHandshakeResponse {
             name: self.name.clone(),
-            signature: self.signature.to_vec() 
+            signature: self.signature.to_vec(),
         };
         proto.encode_to_vec()
     }
@@ -27,15 +33,20 @@ impl HandshakeResponse {
     pub(crate) fn deserialize(arr: &Vec<u8>) -> Result<HandshakeResponse, Error> {
         let proto = ProtoHandshakeResponse::decode(arr.as_slice());
         let deser = match proto {
-            Ok(d) => HandshakeResponse{name: d.name, signature: Bytes::from(d.signature)},
-            Err(e) => {
-                return Err(Error::new(ErrorKind::InvalidData, format!("Protobuf error: {}", e)));
+            Ok(d) => HandshakeResponse {
+                name: d.name,
+                signature: Bytes::from(d.signature),
             },
+            Err(e) => {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!("Protobuf error: {}", e),
+                ));
+            }
         };
 
         Ok(deser)
     }
-
 }
 
 fn construct_payload(nonce: u32, name: &String) -> Vec<u8> {
@@ -53,8 +64,12 @@ fn construct_payload(nonce: u32, name: &String) -> Vec<u8> {
 /// if name in keylist && signature verifies against registered pubkey
 /// accept connection, or drop.
 /// Returns name of peer or error.
-pub async fn handshake_server<S>(server: &Arc<Server<S>>, stream: &mut server::TlsStream<TcpStream>) -> Result<String, Error>
-    where S: Send + Sync + 'static
+pub async fn handshake_server<S>(
+    server: &Arc<Server<S>>,
+    stream: &mut server::TlsStream<TcpStream>,
+) -> Result<String, Error>
+where
+    S: Send + Sync + 'static,
 {
     let mut rng = rand::rngs::OsRng;
     let nonce: u32 = rng.gen();
@@ -71,24 +86,30 @@ pub async fn handshake_server<S>(server: &Arc<Server<S>>, stream: &mut server::T
     let resp = HandshakeResponse::deserialize(&buf)?;
 
     let name = resp.name;
-        // String::from(std::str::from_utf8(resp.name).unwrap_or(""));
+    // String::from(std::str::from_utf8(resp.name).unwrap_or(""));
     if server.key_store.get_pubkey(&name).is_none() {
-        return Err(Error::new(ErrorKind::InvalidData, "unknown peer"))
+        return Err(Error::new(ErrorKind::InvalidData, "unknown peer"));
     }
 
     let payload = construct_payload(nonce, &name);
-    let sig: &[u8; SIGNATURE_LENGTH] = resp.signature.as_ref().try_into()
+    let sig: &[u8; SIGNATURE_LENGTH] = resp
+        .signature
+        .as_ref()
+        .try_into()
         .unwrap_or(&[0u8; SIGNATURE_LENGTH]);
     // Let's hope a blank signature is never a valid signature.
 
-    if !server.key_store.verify(&name, sig, payload.as_slice()){
-        return Err(Error::new(ErrorKind::InvalidData, "invalid signature"))
+    if !server.key_store.verify(&name, sig, payload.as_slice()) {
+        return Err(Error::new(ErrorKind::InvalidData, "invalid signature"));
     }
 
     Ok(name)
 }
 
-pub async fn handshake_client(client: &Arc<Client>, stream: &mut client::TlsStream<TcpStream>) -> Result<(), Error> {
+pub async fn handshake_client(
+    client: &Arc<Client>,
+    stream: &mut client::TlsStream<TcpStream>,
+) -> Result<(), Error> {
     let nonce = stream.read_u32().await?;
     debug!("Received nonce: {}", nonce);
     let payload = construct_payload(nonce, &client.config.net_config.name);
@@ -100,7 +121,6 @@ pub async fn handshake_client(client: &Arc<Client>, stream: &mut client::TlsStre
 
     stream.write_u32(resp_buf.len() as u32).await?;
     stream.write_all(resp_buf.as_slice()).await?;
-
 
     Ok(())
 }

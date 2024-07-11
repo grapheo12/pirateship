@@ -1,6 +1,14 @@
-use std::{collections::HashMap, fs::File, io::{BufRead, BufReader, Read}, path};
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{BufRead, BufReader, Read},
+    path,
+};
 
-use ed25519_dalek::{pkcs8::{DecodePrivateKey, DecodePublicKey}, Signature, Signer, SigningKey, Verifier, VerifyingKey, SECRET_KEY_LENGTH, SIGNATURE_LENGTH};
+use ed25519_dalek::{
+    pkcs8::{DecodePrivateKey, DecodePublicKey},
+    Signature, Signer, SigningKey, Verifier, VerifyingKey, SECRET_KEY_LENGTH, SIGNATURE_LENGTH,
+};
 
 /// KeyStore is an immutable struct.
 /// It is initiated when called new.
@@ -8,7 +16,7 @@ use ed25519_dalek::{pkcs8::{DecodePrivateKey, DecodePublicKey}, Signature, Signe
 #[derive(Clone)]
 pub struct KeyStore {
     pub pub_keys: HashMap<String, VerifyingKey>,
-    pub priv_key: SigningKey
+    pub priv_key: SigningKey,
 }
 
 impl KeyStore {
@@ -32,14 +40,17 @@ impl KeyStore {
                     let parts: Vec<_> = s.split(" ").collect();
                     let name = parts[0];
                     let key_pem = String::from("-----BEGIN PUBLIC KEY-----\n")
-                        + parts[1] + "\n-----END PUBLIC KEY-----\n";
-                    
-                    let key = VerifyingKey::from_public_key_pem(&key_pem)
-                        .expect("Invalid PEM format");
+                        + parts[1]
+                        + "\n-----END PUBLIC KEY-----\n";
+
+                    let key =
+                        VerifyingKey::from_public_key_pem(&key_pem).expect("Invalid PEM format");
 
                     keys.insert(String::from(name), key.to_owned());
-                },
-                Err(_) => { break; }
+                }
+                Err(_) => {
+                    break;
+                }
             }
         }
 
@@ -60,21 +71,21 @@ impl KeyStore {
         let mut key_str = String::new();
         pem.read_to_string(&mut key_str)
             .expect("Problem reading file");
-        
+
         SigningKey::from_pkcs8_pem(key_str.as_str()).unwrap()
     }
-    
+
     pub fn new(pubkey_path: &String, privkey_path: &String) -> KeyStore {
         KeyStore {
             pub_keys: KeyStore::get_pubkeys(pubkey_path),
-            priv_key: KeyStore::get_privkeys(privkey_path)
+            priv_key: KeyStore::get_privkeys(privkey_path),
         }
     }
 
     pub fn empty() -> KeyStore {
         KeyStore {
             pub_keys: HashMap::new(),
-            priv_key: SigningKey::from_bytes(&[0u8; SECRET_KEY_LENGTH])
+            priv_key: SigningKey::from_bytes(&[0u8; SECRET_KEY_LENGTH]),
         }
     }
 
@@ -88,7 +99,7 @@ impl KeyStore {
 
     pub fn sign(&self, data: &[u8]) -> [u8; SIGNATURE_LENGTH] {
         // Import the ed25519_dalek::Signer to avoid the .sign method to take a mutable ref
-        let sig: Signature =  self.priv_key.sign(data);
+        let sig: Signature = self.priv_key.sign(data);
         sig.to_bytes()
     }
 
@@ -102,5 +113,4 @@ impl KeyStore {
 
         key.verify(data, &Signature::from_bytes(sig)).is_ok()
     }
-
 }

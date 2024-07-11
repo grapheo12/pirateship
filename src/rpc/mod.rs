@@ -1,8 +1,8 @@
 use std::{ops::Deref, pin::Pin, sync::Arc};
 
-pub mod server;
-pub mod client;
 pub mod auth;
+pub mod client;
+pub mod server;
 
 /// Do not run these tests all together.
 /// The tests needs a config directory.
@@ -13,7 +13,7 @@ mod tests;
 #[derive(Clone, Debug)]
 pub enum SenderType {
     Anon,
-    Auth(String)
+    Auth(String),
 }
 
 #[derive(Clone)]
@@ -26,7 +26,6 @@ pub struct MessageRef<'a>(pub &'a Vec<u8>, pub usize, pub &'a SenderType);
 pub struct PinnedMessage(Arc<Pin<Box<(Vec<u8>, usize, SenderType)>>>);
 
 impl Message {
-    
     pub fn from(arr: Vec<u8>, sz: usize, sender: SenderType) -> Message {
         Message(Arc::new(arr), sz, sender)
     }
@@ -42,14 +41,12 @@ impl<'a> MessageRef<'a> {
     }
 }
 
-
 impl Deref for Message {
     type Target = Vec<u8>;
-    
+
     fn deref(&self) -> &Self::Target {
         &self.0
     }
-    
 }
 
 impl<'a> MessageRef<'a> {
@@ -64,11 +61,10 @@ impl<'a> MessageRef<'a> {
 
 impl<'a> Deref for MessageRef<'a> {
     type Target = Vec<u8>;
-    
+
     fn deref(&self) -> &Self::Target {
         &self.0
     }
-    
 }
 
 impl PinnedMessage {
@@ -77,7 +73,7 @@ impl PinnedMessage {
     }
 
     pub fn as_ref(&self) -> MessageRef {
-        MessageRef(self.0.0.as_ref(), self.0.1, &self.0.2)
+        MessageRef(self.0 .0.as_ref(), self.0 .1, &self.0 .2)
     }
 }
 
