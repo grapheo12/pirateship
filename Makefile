@@ -4,7 +4,8 @@ all:
 
 .PHONY: clean
 clean:
-	cargo clean
+	rm -f perf.data perf.data.old
+	rm -rf *.log logs/
 
 .PHONY: install-deps-ubuntu
 install-deps-ubuntu:
