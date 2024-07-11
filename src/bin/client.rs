@@ -31,7 +31,7 @@ const NUM_REQUESTS: u64 = 10000000;
 async fn client_runner(idx: usize, client: &PinnedClient ) -> io::Result<()> {
     for i in 1..NUM_REQUESTS {
         let start = Instant::now();
-        while start.elapsed().as_micros() < 10 {
+        while start.elapsed().as_micros() < 8 {
         }
 
         let client_req = ProtoClientRequest { 
