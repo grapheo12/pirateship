@@ -166,6 +166,7 @@ async fn process_node_request(
 
     Ok(())
 }
+
 pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result<(), Error> {
     ctx.state.view.store(1, Ordering::SeqCst); // Never changes for this algorithm
     if ctx.config.net_config.name == get_leader_str(&ctx) {
