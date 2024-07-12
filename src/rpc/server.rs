@@ -1,7 +1,8 @@
 use std::{fs::File, io::{self, Error}, path, sync::Arc};
 
 use crate::{config::Config, crypto::KeyStore, rpc::auth};
-use log::{info, warn};
+use hex::ToHex;
+use log::{debug, info, warn};
 use rustls::{
     crypto::aws_lc_rs,
     pki_types::{CertificateDer, PrivateKeyDer},
@@ -9,7 +10,7 @@ use rustls::{
 use rustls_pemfile::{certs, rsa_private_keys};
 use tokio::{
     io::{split, AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpStream}, time::Instant,
 };
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
 
@@ -127,6 +128,7 @@ where
             };
             sender = SenderType::Auth(name);
         }
+        // Can't do full duplex with RustTLS: https://github.com/tokio-rs/tls/issues/40
         let (mut rx, mut _tx) = split(stream);
         let mut read_buf = vec![0u8; _server.config.rpc_config.recv_buffer_size as usize];
         loop {
@@ -135,7 +137,9 @@ where
             // As message is multipart, TCP won't have atomic delivery.
             // It is better to just close connection if that happens.
             // That is why `await?` with all read calls.
+            let recv_time = Instant::now();
             let sz = rx.read_u32().await? as usize;
+            let recv_sz_time = recv_time.elapsed().as_micros();
             if sz == 0 {
                 // End of socket, probably?
                 // Or can be used as a quit signal.
@@ -149,17 +153,39 @@ where
                     read_buf.capacity()
                 );
             }
+            let split_time = Instant::now();
             let (buf, _) = read_buf.split_at_mut(sz);
+            let split_time = split_time.elapsed().as_micros();
+            let recv_buf_time = Instant::now();
             rx.read_exact(buf).await?;
+            let recv_buf_time = recv_buf_time.elapsed().as_micros();
+            let recv_time = recv_time.elapsed().as_micros();
 
+            let chan_time = Instant::now();
             let resp = (_server.msg_handler)(ctx, MessageRef::from(&read_buf, sz, &sender));
+            let chan_time = chan_time.elapsed().as_micros();
             if let Err(_) = resp {
                 break;
             }
 
             if let Ok(Some(msg)) = resp {
-                _tx.write_u32(msg.0.1 as u32).await;
-                _tx.write_all(msg.0.0.split_at(msg.0.1).0).await;
+                let mref = msg.as_ref();
+                // stream.flush().await?;
+                let send_time = Instant::now();
+                _tx.write_u32(mref.1 as u32).await?;
+                _tx.write_all(&mref.0.split_at(mref.1).0).await?;
+                debug!("Sending msg: Size {}, Split {} us, Recv Sz {} us Recv Buf {} Recv total {} us, Chan {} us, Send {} us", 
+                    // mref.0.encode_hex::<String>(),
+                    mref.1 as u32,
+                    split_time,
+                    recv_sz_time,
+                    recv_buf_time,
+                    recv_time,
+                    chan_time,
+                    send_time.elapsed().as_micros()
+                ); 
+                // stream.flush().await?;
+
             }
         }
 
@@ -186,6 +212,7 @@ where
 
         loop {
             let (socket, addr) = listener.accept().await?;
+            socket.set_nodelay(true)?;
             let acceptor = tls_acceptor.clone();
             let server_ = server.clone();
             let ctx_ = ctx.clone();

@@ -16,7 +16,7 @@ leader_pid=0
 for i in $(seq 1 $NUM_NODES);
 do
     echo "Spawning node$i"
-    RUST_LOG=debug ./target/release/server $CONFIG_DIR/node$i.json > $LOG_DIR/node$i.log 2> $LOG_DIR/node$i.log &
+    RUST_LOG=info ./target/release/server $CONFIG_DIR/node$i.json > $LOG_DIR/node$i.log 2> $LOG_DIR/node$i.log &
     if [ $i -eq 1 ]; then
         leader_pid=$!
     fi 
@@ -30,12 +30,15 @@ scp -r $CONFIG_DIR $CLIENT_SSH_ID:~/pft
 scp -r target $CLIENT_SSH_ID:~/pft
 
 sleep 1
-echo "Spawning client"
-ssh $CLIENT_SSH_ID "RUST_LOG=info ~/pft/target/release/client ~/pft/$CONFIG_DIR/client.json > ~/pft/$LOG_DIR/client.log 2> ~/pft/$LOG_DIR/client.log" & 
+echo "Spawning clients"
+ssh $CLIENT_SSH_ID "RUST_LOG=info ~/pft/target/release/client ~/pft/$CONFIG_DIR/client.json > ~/pft/$LOG_DIR/client1.log 2> ~/pft/$LOG_DIR/client1.log" & 
+ssh $CLIENT_SSH_ID "RUST_LOG=info ~/pft/target/release/client ~/pft/$CONFIG_DIR/client.json > ~/pft/$LOG_DIR/client2.log 2> ~/pft/$LOG_DIR/client2.log" & 
+ssh $CLIENT_SSH_ID "RUST_LOG=info ~/pft/target/release/client ~/pft/$CONFIG_DIR/client.json > ~/pft/$LOG_DIR/client3.log 2> ~/pft/$LOG_DIR/client3.log" & 
+ssh $CLIENT_SSH_ID "RUST_LOG=info ~/pft/target/release/client ~/pft/$CONFIG_DIR/client.json > ~/pft/$LOG_DIR/client4.log 2> ~/pft/$LOG_DIR/client4.log" & 
 sleep 1
-client_pid=$(ssh $CLIENT_SSH_ID "pgrep client")
-ssh $CLIENT_SSH_ID "sudo $FLAMEGRAPH_PATH -o /tmp/client_flame.svg -p $client_pid > /tmp/flame.log 2>/tmp/flame.log" &
-echo "Remote client pid: $client_pid"
+# client_pid=$(ssh $CLIENT_SSH_ID "pgrep client")
+# ssh $CLIENT_SSH_ID "sudo $FLAMEGRAPH_PATH -o /tmp/client_flame.svg -p $client_pid > /tmp/flame.log 2>/tmp/flame.log" &
+# echo "Remote client pid: $client_pid"
 
 echo "Running experiments"
 sleep $NUM_SECONDS
@@ -43,7 +46,7 @@ sleep $NUM_SECONDS
 
 echo "Killing client"
 kill %%
-ssh $CLIENT_SSH_ID "kill $client_pid"
+ssh $CLIENT_SSH_ID "pkill -c client"
 sleep 1
 
 for i in $(seq 1 $NUM_NODES);
@@ -54,8 +57,13 @@ done
 
 
 echo "Retrieving client log"
-scp $CLIENT_SSH_ID:~/pft/$LOG_DIR/client.log $LOG_DIR
-scp $CLIENT_SSH_ID:/tmp/client_flame.svg $LOG_DIR
+scp $CLIENT_SSH_ID:~/pft/$LOG_DIR/client1.log $LOG_DIR
+scp $CLIENT_SSH_ID:~/pft/$LOG_DIR/client2.log $LOG_DIR
+scp $CLIENT_SSH_ID:~/pft/$LOG_DIR/client3.log $LOG_DIR
+scp $CLIENT_SSH_ID:~/pft/$LOG_DIR/client4.log $LOG_DIR
+
+cat $LOG_DIR/client*.log > $LOG_DIR/client.log
+# scp $CLIENT_SSH_ID:/tmp/client_flame.svg $LOG_DIR
 ssh $CLIENT_SSH_ID "rm -rf ~/pft"
 
 

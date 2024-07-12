@@ -11,12 +11,12 @@ use std::{
     sync::{Arc, RwLock},
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{split, AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     sync::{
         mpsc::{self, Sender},
         Mutex,
-    }
+    }, time::Instant
 };
 use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
 
@@ -140,6 +140,7 @@ impl PinnedClient {
         let connector = TlsConnector::from(Arc::new(tls_cfg));
 
         let stream = TcpStream::connect(&peer.addr).await?;
+        stream.set_nodelay(true)?;
 
         let domain = pki_types::ServerName::try_from(peer.domain.as_str())
             .map_err(|_| Error::new(ErrorKind::InvalidInput, "invalid dnsname"))?
@@ -194,8 +195,10 @@ impl PinnedClient {
             SendDataType::SizeType(d) => {
                 let mut lsock = sock.0.lock().await;
                 lsock.write_u32(d).await // Does this take care of endianness?
+
             }
         };
+
 
         if let Err(e) = e {
             // There is some problem.
@@ -216,6 +219,8 @@ impl PinnedClient {
             debug!("Socket removed from sock_map");
             return Err(e);
         }
+
+
         Ok(())
     }
     pub async fn send<'b>(
@@ -228,6 +233,10 @@ impl PinnedClient {
 
         Self::send_raw(client, name, &sock, SendDataType::SizeType(len)).await?;
         Self::send_raw(client, name, &sock, SendDataType::ByteType(data)).await?;
+        // {
+        //     let mut lsock = sock.0.lock().await;
+        //     lsock.flush().await?;
+        // }
         Ok(())
     }
 
@@ -239,22 +248,34 @@ impl PinnedClient {
         let sock = Self::get_sock(client, name).await?;
         let len = data.len() as u32;
 
+        let send_time = Instant::now();
         Self::send_raw(client, name, &sock, SendDataType::SizeType(len)).await?;
+        let send_sz_time = send_time.elapsed().as_micros();
         Self::send_raw(client, name, &sock, SendDataType::ByteType(data)).await?;
+        let send_time = send_time.elapsed().as_micros();
+
+        debug!("Send time: sz:{}, data: {}, total: {} us", send_sz_time, send_time - send_sz_time, send_time);
         
-        let mut resp_buf = Vec::new();
+        // let mut resp_buf = Vec::new();
         let mut sz = 0;
         {
             let mut lsock = sock.0.lock().await;
-            sz = lsock.read_u32().await?;
+            // lsock.flush().await?;
+
+            sz = lsock.read_u32().await? as usize;
             if sz == 0 {
                 return Err(Error::new(ErrorKind::InvalidData, "socket probably closed!"));
             }
-            resp_buf.reserve_exact(sz as usize);
+            // if (sz as usize) > resp_buf.len() {
+            //     resp_buf.reserve((sz as usize) - resp_buf.len());
+            // }
+            let mut resp_buf = vec![0u8; sz];
             lsock.read_exact(&mut resp_buf).await?;
+            // lsock.flush().await?;
+            Ok(PinnedMessage::from(resp_buf, sz as usize, super::SenderType::Auth(name.clone())))
+
         }
 
-        Ok(PinnedMessage::from(resp_buf, sz as usize, super::SenderType::Auth(name.clone())))
     }
 
     pub async fn reliable_send<'b>(
@@ -309,12 +330,12 @@ impl PinnedClient {
 
             let _name = name.clone();
             let _client = client.clone();
+            // Register as ready.
+            {
+                let mut lworkers = _client.0.worker_ready.0.write().unwrap();
+                lworkers.insert(_name.clone());
+            }
             tokio::spawn(async move {
-                // Register as ready.
-                {
-                    let mut lworkers = _client.0.worker_ready.0.write().unwrap();
-                    lworkers.insert(_name.clone());
-                }
 
                 // Main loop: Fetch data from channel
                 // Do reliable send

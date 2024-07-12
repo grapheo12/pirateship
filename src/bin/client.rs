@@ -1,4 +1,5 @@
 use ed25519_dalek::SIGNATURE_LENGTH;
+use hex::ToHex;
 use log::{debug, info};
 use pft::{
     config::ClientConfig,
@@ -39,10 +40,10 @@ fn process_args() -> ClientConfig {
     ClientConfig::deserialize(&cfg_contents)
 }
 
-const NUM_REQUESTS: u64 = 500000;
+const NUM_REQUESTS: u64 = 1000000;
 
-async fn client_runner(idx: usize, client: &PinnedClient, barrier: &tokio::sync::Barrier) -> io::Result<()> {
-    let mut all_msgs = Vec::new();
+async fn client_runner(idx: usize, client: &PinnedClient, _barrier: &tokio::sync::Barrier) -> io::Result<()> {
+    // let mut all_msgs = Vec::new();
     
     for i in 0..NUM_REQUESTS {
         let client_req = ProtoClientRequest {
@@ -67,35 +68,35 @@ async fn client_runner(idx: usize, client: &PinnedClient, barrier: &tokio::sync:
         // let start = Instant::now();
         let mut buf = Vec::new();
         rpc_msg_body.encode(&mut buf).expect("Protobuf error");
-        all_msgs.push(buf);
-    }
+        // all_msgs.push(buf);
+    // }
 
-    info!("Workload generation complete!");
-    barrier.wait().await;
+    // info!("Workload generation complete!");
+    // barrier.wait().await;
 
-    for i in 0..NUM_REQUESTS {
+    // for i in 0..NUM_REQUESTS {
         
-        let buf = &all_msgs[i as usize];
+        // let buf = &all_msgs[i as usize];
         
         let start = Instant::now();
         let msg = PinnedClient::send_and_await_reply(
             &client,
             &String::from("node1"),
-            MessageRef(buf, buf.len(), &pft::rpc::SenderType::Anon),
+            MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon),
         )
         .await
         .unwrap();
 
         if i % 1000 == 0 {
-            info!("Sending message: {} Reply: {} Time: {} us",
+            info!("Sending message: {}\nReply: {} {} Time: {} us",
                 format!("Tx:{}:{}", idx, i),
-                hex::encode(msg.as_ref().0),
+                msg.as_ref().0.encode_hex::<String>(), msg.as_ref().1,
                 start.elapsed().as_micros()
             );
         } else {
-            debug!("Sending message: {} Reply: {} Time: {} us",
+            debug!("Sending message: {} Reply: {} {} Time: {} us",
                 format!("Tx:{}:{}", idx, i),
-                hex::encode(msg.as_ref().0),
+                msg.as_ref().0.encode_hex::<String>(), msg.as_ref().1,
                 start.elapsed().as_micros()
             );
         }
@@ -104,7 +105,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, barrier: &tokio::sync:
     Ok(())
 }
 
-const NUM_CLIENTS: usize = 100;
+const NUM_CLIENTS: usize = 800;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {

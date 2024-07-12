@@ -5,7 +5,8 @@ use std::{
     }
 };
 
-use log::{debug, warn};
+use hex::ToHex;
+use log::{debug, info, warn};
 use prost::Message;
 use tokio::sync::{mpsc, Mutex};
 
@@ -196,11 +197,12 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
                 let mut buf = Vec::new();
                 msg.0.encode(&mut buf);
                 let sig = crate::crypto::hash(&buf);  // @todo: This could be a signature. Bring the keystore here
+                info!("Replying: {}", sig.encode_hex::<String>());
                 return Ok(Some(PinnedMessage::from(
                     sig,
                     DIGEST_LENGTH,
-                    crate::rpc::SenderType::Auth(ctx.config.net_config.name.clone()
-                ))));
+                    crate::rpc::SenderType::Auth(ctx.config.net_config.name.clone())
+                )));
             }
         }
     } else {
