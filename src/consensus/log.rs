@@ -82,17 +82,25 @@ impl Log {
         Ok(entry.replication_votes.len() as u64)
     }
 
-    pub fn last_hash(&self) -> Vec<u8> {
-        if self.last() == 0 {
-            return vec![0u8; DIGEST_LENGTH];
+    pub fn hash_at_n(&self, n: u64) -> Option<Vec<u8>> {
+        if n > self.last() {
+            return None;
+        }
+        
+        let mut buf = vec![0u8; DIGEST_LENGTH];
+        
+        if n > 0 {
+            self.entries[(n - 1) as usize]
+                .block
+                .encode(&mut buf)
+                .unwrap();
         }
 
-        let mut buf = Vec::new();
-        self.entries[(self.last() - 1) as usize]
-            .block
-            .encode(&mut buf)
-            .unwrap();
+        Some(hash(&buf))
 
-        hash(&buf)
+    }
+
+    pub fn last_hash(&self) -> Vec<u8> {
+        self.hash_at_n(self.last()).unwrap()
     }
 }

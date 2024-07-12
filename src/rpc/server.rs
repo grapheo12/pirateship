@@ -9,12 +9,19 @@ use rustls::{
 };
 use rustls_pemfile::{certs, rsa_private_keys};
 use tokio::{
-    io::{split, AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream}, time::Instant,
+    io::{split, AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, runtime::Handle, sync::{mpsc, oneshot}, time::Instant
 };
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
 
 use super::{MessageRef, PinnedMessage, SenderType};
+
+pub type MsgAckChan = mpsc::Sender<PinnedMessage>;
+pub type HandlerType<ServerContext> = fn(
+    &ServerContext,             // State kept by upper layers
+    MessageRef,                 // New message
+    MsgAckChan) -> Result<      // Channel to receive response to message
+        bool,                   // Should the caller wait for a response from the channel?
+        Error>;                 // Should this connection be dropped?
 
 pub struct Server<ServerContext>
 where
@@ -24,7 +31,7 @@ where
     pub tls_certs: Vec<CertificateDer<'static>>,
     pub tls_keys: PrivateKeyDer<'static>,
     pub key_store: KeyStore,
-    pub msg_handler: fn(&ServerContext, MessageRef) -> Result<Option<PinnedMessage>, Error>, // Can't be a closure as msg_handler is called from another thread.
+    pub msg_handler: HandlerType<ServerContext>, // Can't be a closure as msg_handler is called from another thread.
     do_auth: bool,
 }
 
@@ -83,7 +90,7 @@ where
 
     pub fn new(
         cfg: &Config,
-        handler: fn(&S, MessageRef) -> Result<Option<PinnedMessage>, Error>,
+        handler: HandlerType<S>,
         key_store: &KeyStore,
     ) -> Server<S> {
         Server {
@@ -96,7 +103,7 @@ where
         }
     }
 
-    pub fn new_unauthenticated(cfg: &Config, handler: fn(&S, MessageRef) -> Result<Option<PinnedMessage>, Error>) -> Server<S> {
+    pub fn new_unauthenticated(cfg: &Config, handler: HandlerType<S>) -> Server<S> {
         Server {
             config: cfg.clone(),
             tls_certs: Server::<S>::load_certs(&cfg.net_config.tls_cert_path),
@@ -128,9 +135,9 @@ where
             };
             sender = SenderType::Auth(name);
         }
-        // Can't do full duplex with RustTLS: https://github.com/tokio-rs/tls/issues/40
         let (mut rx, mut _tx) = split(stream);
         let mut read_buf = vec![0u8; _server.config.rpc_config.recv_buffer_size as usize];
+        let (ack_tx, mut ack_rx) = mpsc::channel(1);
         loop {
             // Message format: Size(u32) | Message
             // Message size capped at 4GiB.
@@ -162,20 +169,26 @@ where
             let recv_time = recv_time.elapsed().as_micros();
 
             let chan_time = Instant::now();
-            let resp = (_server.msg_handler)(ctx, MessageRef::from(&read_buf, sz, &sender));
+
+            // This handler is called from within an async function, although it is not async itself.
+            // This is because:
+            // 1. I am not nearly good enough in Rust to store an async function pointer in the underlying Server struct
+            // 2. This function shouldn't have any blocking code at all. This should be a short running function to send messages to proper channel.
+            let resp = (_server.msg_handler)(ctx, MessageRef::from(&read_buf, sz, &sender), ack_tx.clone());
             let chan_time = chan_time.elapsed().as_micros();
-            if let Err(_) = resp {
+            if let Err(e) = resp {
+                warn!("Dropping connection: {}", e);
                 break;
             }
 
-            if let Ok(Some(msg)) = resp {
-                let mref = msg.as_ref();
-                // stream.flush().await?;
+            if let Ok(true) = resp {
+                debug!("Waiting for response!");
+                let mref = ack_rx.recv().await.unwrap();
+                let mref = mref.as_ref();
                 let send_time = Instant::now();
                 _tx.write_u32(mref.1 as u32).await?;
                 _tx.write_all(&mref.0.split_at(mref.1).0).await?;
                 debug!("Sending msg: Size {}, Split {} us, Recv Sz {} us Recv Buf {} Recv total {} us, Chan {} us, Send {} us", 
-                    // mref.0.encode_hex::<String>(),
                     mref.1 as u32,
                     split_time,
                     recv_sz_time,
@@ -184,7 +197,7 @@ where
                     chan_time,
                     send_time.elapsed().as_micros()
                 ); 
-                // stream.flush().await?;
+
 
             }
         }

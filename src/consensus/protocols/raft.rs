@@ -18,7 +18,7 @@ use crate::{
             rpc::{self, proto_payload, ProtoPayload},
         },
     },
-    crypto::cmp_hash,
+    crypto::{cmp_hash, hash, DIGEST_LENGTH},
     rpc::{client::PinnedClient, MessageRef, PinnedMessage},
 };
 
@@ -111,12 +111,30 @@ async fn process_node_request(
                 }
 
                 let fork = ctx.state.fork.lock().await;
-                if ae.commit_index > ctx.state.commit_index.load(Ordering::SeqCst) {
+                let ci = ctx.state.commit_index.load(Ordering::SeqCst);
+                if ae.commit_index > ci {
                     ctx.state
                         .commit_index
                         .store(ae.commit_index, Ordering::SeqCst);
 
                     *num_txs += fork.get(ae.commit_index).unwrap().block.tx.len();
+                    {
+                        let mut lack_pend = ctx.client_ack_pending.lock().await;
+                        let mut del_list = Vec::new();
+                        for ((bn, txn), chan) in lack_pend.iter() {
+                            if *bn <= ae.commit_index {
+                                let h = hash(&fork.get(*bn).unwrap().block.tx[*txn]);
+                                let msg = PinnedMessage::from(h, DIGEST_LENGTH, 
+                                    crate::rpc::SenderType::Anon);
+                                let _ = chan.send(msg).await;
+                                del_list.push((*bn, *txn));
+                            }
+                        }
+                        for d in del_list {
+                            lack_pend.remove(&d);
+                        }
+
+                    }
 
                     if ae.commit_index % 1000 == node_num {
                         info!(
@@ -135,13 +153,14 @@ async fn process_node_request(
         }
         crate::consensus::proto::rpc::proto_payload::Message::Vote(v) => {
             let mut fork = ctx.state.fork.lock().await;
-            if cmp_hash(&fork.last_hash(), &v.fork_digest) {
+            let chk_hsh = fork.hash_at_n(v.n);
+            if chk_hsh.is_some() && cmp_hash(&chk_hsh.unwrap(), &v.fork_digest) {
                 let _l = v.n;
                 let _f = ctx.state.commit_index.load(Ordering::SeqCst) + 1;
                 for i in _f..(_l + 1){
                     let total_votes = fork.inc_replication_vote(_sender, i).unwrap();
                     if total_votes >= majority {
-                        // let ci = ctx.state.commit_index.load(Ordering::SeqCst);
+                        let ci = ctx.state.commit_index.load(Ordering::SeqCst);
                         // if ci < v.n && v.n <= fork.last()
                         // This is just a sanity check
                         {
@@ -161,10 +180,30 @@ async fn process_node_request(
     
                             // *accepting_client_requests = true;
                             ctx.last_fast_quorum_request.fetch_add(1, Ordering::SeqCst);
+
+                            {
+                                let mut lack_pend = ctx.client_ack_pending.lock().await;
+                                let mut del_list = Vec::new();
+                                for ((bn, txn), chan) in lack_pend.iter() {
+                                    if *bn <= i {
+                                        let h = hash(&fork.get(*bn).unwrap().block.tx[*txn]);
+                                        let msg = PinnedMessage::from(h, DIGEST_LENGTH, 
+                                            crate::rpc::SenderType::Anon);
+                                        let _ = chan.send(msg).await;
+                                        del_list.push((*bn, *txn));
+                                    }
+                                }
+                                for d in del_list {
+                                    lack_pend.remove(&d);
+                                }
+
+                            }
     
                         }
                     }
                 }
+            }else{
+                info!("Bad vote received!");
             }
         }
         _ => {}
@@ -181,6 +220,7 @@ async fn handle_timeout(_ctx: &PinnedServerContext) -> Result<(), Error> {
     // }
 
     // ctx.state.view.fetch_add(1, Ordering::SeqCst);
+    info!("Current pending acks: {}", _ctx.client_ack_pending.lock().await.len());
     Ok(())
 }
 
@@ -264,10 +304,16 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
 
         if client_req_num > 0 {
             let mut tx = Vec::new();
-            for (ms, _sender) in &curr_client_req {
+            let block_n = {
+                let fork = ctx.state.fork.lock().await;
+                fork.last() + 1
+            };
+            for (ms, _sender, chan) in &curr_client_req {
                 if let crate::consensus::proto::rpc::proto_payload::Message::ClientRequest(req) = ms
                 {
                     tx.push(req.tx.clone());
+                    let mut lack_pend = ctx.client_ack_pending.lock().await;
+                    lack_pend.insert((block_n, tx.len() - 1), chan.clone());
                 }
             }
 
@@ -275,7 +321,7 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                 let mut fork = ctx.state.fork.lock().await;
                 let block = ProtoBlock {
                     tx,
-                    n: fork.last() + 1,
+                    n: block_n,
                     parent: fork.last_hash(),
                     view: 1,
                     qc: Vec::new(),
@@ -306,6 +352,23 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                     let ci = ctx.state.commit_index.load(Ordering::SeqCst);
                     if ci < fork.last() {
                         ctx.state.commit_index.store(fork.last(), Ordering::SeqCst);
+                        {
+                            let mut lack_pend = ctx.client_ack_pending.lock().await;
+                            let mut del_list = Vec::new();
+                            for ((bn, txn), chan) in lack_pend.iter() {
+                                if *bn <= fork.last() {
+                                    let h = hash(&fork.get(*bn).unwrap().block.tx[*txn]);
+                                    let msg = PinnedMessage::from(h, DIGEST_LENGTH, 
+                                        crate::rpc::SenderType::Anon);
+                                    let _ = chan.send(msg).await;
+                                    del_list.push((*bn, *txn));
+                                }
+                            }
+                            for d in del_list {
+                                lack_pend.remove(&d);
+                            }
+
+                        }
                         num_txs += fork.get(fork.last()).unwrap().block.tx.len();
                         if fork.last() % 1000 == 0 {
                             info!(

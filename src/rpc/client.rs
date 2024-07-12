@@ -233,10 +233,7 @@ impl PinnedClient {
 
         Self::send_raw(client, name, &sock, SendDataType::SizeType(len)).await?;
         Self::send_raw(client, name, &sock, SendDataType::ByteType(data)).await?;
-        // {
-        //     let mut lsock = sock.0.lock().await;
-        //     lsock.flush().await?;
-        // }
+    
         Ok(())
     }
 
@@ -266,12 +263,8 @@ impl PinnedClient {
             if sz == 0 {
                 return Err(Error::new(ErrorKind::InvalidData, "socket probably closed!"));
             }
-            // if (sz as usize) > resp_buf.len() {
-            //     resp_buf.reserve((sz as usize) - resp_buf.len());
-            // }
             let mut resp_buf = vec![0u8; sz];
             lsock.read_exact(&mut resp_buf).await?;
-            // lsock.flush().await?;
             Ok(PinnedMessage::from(resp_buf, sz as usize, super::SenderType::Auth(name.clone())))
 
         }

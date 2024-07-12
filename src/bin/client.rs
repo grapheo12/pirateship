@@ -78,6 +78,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, _barrier: &tokio::sync
         
         // let buf = &all_msgs[i as usize];
         
+        info!("msg num {}", i);
         let start = Instant::now();
         let msg = PinnedClient::send_and_await_reply(
             &client,
@@ -105,7 +106,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, _barrier: &tokio::sync
     Ok(())
 }
 
-const NUM_CLIENTS: usize = 800;
+const NUM_CLIENTS: usize = 20;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {

@@ -17,7 +17,7 @@ use crate::{
     rpc::{client::Client, server::Server, PinnedMessage},
 };
 
-use super::{auth::HandshakeResponse, client::PinnedClient, MessageRef};
+use super::{auth::HandshakeResponse, client::PinnedClient, server::MsgAckChan, MessageRef};
 
 fn process_args(i: i32) -> Config {
     let _p = format!("configs/node{i}.json");
@@ -31,12 +31,12 @@ fn process_args(i: i32) -> Config {
     Config::deserialize(&cfg_contents)
 }
 
-fn mock_msg_handler(_ctx: &(), buf: MessageRef) -> Result<Option<PinnedMessage>, Error> {
+fn mock_msg_handler(_ctx: &(), buf: MessageRef, _tx: MsgAckChan) -> Result<bool, Error> {
     info!(
         "Received message: {}",
         std::str::from_utf8(&buf).unwrap_or("Parsing error")
     );
-    Ok(None)
+    Ok(false)
 }
 
 async fn run_body(
@@ -128,7 +128,7 @@ async fn test_unauthenticated_client_server() {
 
 struct ServerCtx(i32);
 
-fn drop_after_n(ctx: &Arc<Mutex<Pin<Box<ServerCtx>>>>, m: MessageRef) -> Result<Option<PinnedMessage>, Error> {
+fn drop_after_n(ctx: &Arc<Mutex<Pin<Box<ServerCtx>>>>, m: MessageRef, _tx: MsgAckChan) -> Result<bool, Error> {
     let mut _ctx = ctx.lock().unwrap();
     _ctx.0 -= 1;
     info!(
@@ -140,7 +140,7 @@ fn drop_after_n(ctx: &Arc<Mutex<Pin<Box<ServerCtx>>>>, m: MessageRef) -> Result<
     if _ctx.0 <= 0 {
         return Err(Error::new(ErrorKind::BrokenPipe, "breaking connection"));
     }
-    Ok(None)
+    Ok(false)
 }
 
 #[tokio::test]
