@@ -1,4 +1,4 @@
-use std::{fs::File, io, path, sync::Arc};
+use std::{fs::File, io::{self, Error}, path, sync::Arc};
 
 use crate::{config::Config, crypto::KeyStore, rpc::auth};
 use log::{info, warn};
@@ -8,12 +8,12 @@ use rustls::{
 };
 use rustls_pemfile::{certs, rsa_private_keys};
 use tokio::{
-    io::{split, AsyncReadExt},
+    io::{split, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
 
-use super::{MessageRef, SenderType};
+use super::{MessageRef, PinnedMessage, SenderType};
 
 pub struct Server<ServerContext>
 where
@@ -23,7 +23,7 @@ where
     pub tls_certs: Vec<CertificateDer<'static>>,
     pub tls_keys: PrivateKeyDer<'static>,
     pub key_store: KeyStore,
-    pub msg_handler: fn(&ServerContext, MessageRef) -> bool, // Can't be a closure as msg_handler is called from another thread.
+    pub msg_handler: fn(&ServerContext, MessageRef) -> Result<Option<PinnedMessage>, Error>, // Can't be a closure as msg_handler is called from another thread.
     do_auth: bool,
 }
 
@@ -82,7 +82,7 @@ where
 
     pub fn new(
         cfg: &Config,
-        handler: fn(&S, MessageRef) -> bool,
+        handler: fn(&S, MessageRef) -> Result<Option<PinnedMessage>, Error>,
         key_store: &KeyStore,
     ) -> Server<S> {
         Server {
@@ -95,7 +95,7 @@ where
         }
     }
 
-    pub fn new_unauthenticated(cfg: &Config, handler: fn(&S, MessageRef) -> bool) -> Server<S> {
+    pub fn new_unauthenticated(cfg: &Config, handler: fn(&S, MessageRef) -> Result<Option<PinnedMessage>, Error>) -> Server<S> {
         Server {
             config: cfg.clone(),
             tls_certs: Server::<S>::load_certs(&cfg.net_config.tls_cert_path),
@@ -152,8 +152,14 @@ where
             let (buf, _) = read_buf.split_at_mut(sz);
             rx.read_exact(buf).await?;
 
-            if !(_server.msg_handler)(ctx, MessageRef::from(&read_buf, sz, &sender)) {
+            let resp = (_server.msg_handler)(ctx, MessageRef::from(&read_buf, sz, &sender));
+            if let Err(_) = resp {
                 break;
+            }
+
+            if let Ok(Some(msg)) = resp {
+                _tx.write_u32(msg.0.1 as u32).await;
+                _tx.write_all(msg.0.0.split_at(msg.0.1).0).await;
             }
         }
 

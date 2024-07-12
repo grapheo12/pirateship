@@ -13,7 +13,7 @@ use pft::{
     },
 };
 use prost::Message;
-use std::{env, fs, io, path};
+use std::{env, fs, io, path, sync::Arc};
 use tokio::{task::JoinSet, time::Instant};
 
 fn process_args() -> ClientConfig {
@@ -39,13 +39,12 @@ fn process_args() -> ClientConfig {
     ClientConfig::deserialize(&cfg_contents)
 }
 
-const NUM_REQUESTS: u64 = 10000000;
+const NUM_REQUESTS: u64 = 500000;
 
-async fn client_runner(idx: usize, client: &PinnedClient) -> io::Result<()> {
-    for i in 1..NUM_REQUESTS {
-        let start = Instant::now();
-        while start.elapsed().as_micros() < 8 {}
-
+async fn client_runner(idx: usize, client: &PinnedClient, barrier: &tokio::sync::Barrier) -> io::Result<()> {
+    let mut all_msgs = Vec::new();
+    
+    for i in 0..NUM_REQUESTS {
         let client_req = ProtoClientRequest {
             tx: format!("Tx:{}:{}", idx, i).into_bytes(),
             sig: vec![0u8; SIGNATURE_LENGTH],
@@ -60,25 +59,46 @@ async fn client_runner(idx: usize, client: &PinnedClient) -> io::Result<()> {
         };
 
         if i % 1000 == 0 {
-            info!("Sending message: {}", format!("Tx:{}:{}", idx, i));
+            info!("Generating message: {}", format!("Tx:{}:{}", idx, i));
         } else {
-            debug!("Sending message: {}", format!("Tx:{}:{}", idx, i));
+            debug!("Generating message: {}", format!("Tx:{}:{}", idx, i));
         }
 
         // let start = Instant::now();
         let mut buf = Vec::new();
         rpc_msg_body.encode(&mut buf).expect("Protobuf error");
-        // info!("Serialize time: {} us", start.elapsed().as_micros());
+        all_msgs.push(buf);
+    }
 
-        // let start = Instant::now();
-        PinnedClient::reliable_send(
+    info!("Workload generation complete!");
+    barrier.wait().await;
+
+    for i in 0..NUM_REQUESTS {
+        
+        let buf = &all_msgs[i as usize];
+        
+        let start = Instant::now();
+        let msg = PinnedClient::send_and_await_reply(
             &client,
             &String::from("node1"),
-            MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon),
+            MessageRef(buf, buf.len(), &pft::rpc::SenderType::Anon),
         )
         .await
-        .expect("Should have been able to send!!");
-        // info!("Sending time: {} us", start.elapsed().as_micros());
+        .unwrap();
+
+        if i % 1000 == 0 {
+            info!("Sending message: {} Reply: {} Time: {} us",
+                format!("Tx:{}:{}", idx, i),
+                hex::encode(msg.as_ref().0),
+                start.elapsed().as_micros()
+            );
+        } else {
+            debug!("Sending message: {} Reply: {} Time: {} us",
+                format!("Tx:{}:{}", idx, i),
+                hex::encode(msg.as_ref().0),
+                start.elapsed().as_micros()
+            );
+        }
     }
 
     Ok(())
@@ -94,9 +114,11 @@ async fn main() -> io::Result<()> {
     keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
 
     let mut client_handles = JoinSet::new();
+    let gen_barrier = Arc::new(tokio::sync::Barrier::new(NUM_CLIENTS));
     for i in 0..NUM_CLIENTS {
         let c = Client::new(&config.fill_missing(), &keys).into();
-        client_handles.spawn(async move { client_runner(i, &c).await });
+        let b = gen_barrier.clone();
+        client_handles.spawn(async move { client_runner(i, &c, &b).await });
     }
 
     while let Some(_) = client_handles.join_next().await {}

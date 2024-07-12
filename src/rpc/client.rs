@@ -1,5 +1,5 @@
 use crate::{config::Config, crypto::KeyStore};
-use futures::future::join_all;
+use futures::{future::join_all, FutureExt};
 use log::{debug, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use std::{
@@ -11,7 +11,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     sync::{
         mpsc::{self, Sender},
@@ -229,6 +229,32 @@ impl PinnedClient {
         Self::send_raw(client, name, &sock, SendDataType::SizeType(len)).await?;
         Self::send_raw(client, name, &sock, SendDataType::ByteType(data)).await?;
         Ok(())
+    }
+
+    pub async fn send_and_await_reply<'b>(
+        client: &PinnedClient,
+        name: &String,
+        data: MessageRef<'b>,
+    ) -> Result<PinnedMessage, Error> {
+        let sock = Self::get_sock(client, name).await?;
+        let len = data.len() as u32;
+
+        Self::send_raw(client, name, &sock, SendDataType::SizeType(len)).await?;
+        Self::send_raw(client, name, &sock, SendDataType::ByteType(data)).await?;
+        
+        let mut resp_buf = Vec::new();
+        let mut sz = 0;
+        {
+            let mut lsock = sock.0.lock().await;
+            sz = lsock.read_u32().await?;
+            if sz == 0 {
+                return Err(Error::new(ErrorKind::InvalidData, "socket probably closed!"));
+            }
+            resp_buf.reserve_exact(sz as usize);
+            lsock.read_exact(&mut resp_buf).await?;
+        }
+
+        Ok(PinnedMessage::from(resp_buf, sz as usize, super::SenderType::Auth(name.clone())))
     }
 
     pub async fn reliable_send<'b>(

@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::Error,
+    io::{Error, ErrorKind},
     path,
     pin::Pin,
     sync::{Arc, Mutex},
@@ -31,12 +31,12 @@ fn process_args(i: i32) -> Config {
     Config::deserialize(&cfg_contents)
 }
 
-fn mock_msg_handler(_ctx: &(), buf: MessageRef) -> bool {
+fn mock_msg_handler(_ctx: &(), buf: MessageRef) -> Result<Option<PinnedMessage>, Error> {
     info!(
         "Received message: {}",
         std::str::from_utf8(&buf).unwrap_or("Parsing error")
     );
-    false
+    Ok(None)
 }
 
 async fn run_body(
@@ -128,7 +128,7 @@ async fn test_unauthenticated_client_server() {
 
 struct ServerCtx(i32);
 
-fn drop_after_n(ctx: &Arc<Mutex<Pin<Box<ServerCtx>>>>, m: MessageRef) -> bool {
+fn drop_after_n(ctx: &Arc<Mutex<Pin<Box<ServerCtx>>>>, m: MessageRef) -> Result<Option<PinnedMessage>, Error> {
     let mut _ctx = ctx.lock().unwrap();
     _ctx.0 -= 1;
     info!(
@@ -138,9 +138,9 @@ fn drop_after_n(ctx: &Arc<Mutex<Pin<Box<ServerCtx>>>>, m: MessageRef) -> bool {
     );
 
     if _ctx.0 <= 0 {
-        return false;
+        return Err(Error::new(ErrorKind::BrokenPipe, "breaking connection"));
     }
-    true
+    Ok(None)
 }
 
 #[tokio::test]

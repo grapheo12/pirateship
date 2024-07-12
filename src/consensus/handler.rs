@@ -1,18 +1,15 @@
 use std::{
-    collections::{HashMap, HashSet},
-    ops::Deref,
-    pin::Pin,
-    sync::{
+    collections::{HashMap, HashSet}, io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
-    },
+    }
 };
 
 use log::{debug, warn};
 use prost::Message;
 use tokio::sync::{mpsc, Mutex};
 
-use crate::{config::Config, rpc::MessageRef};
+use crate::{config::Config, crypto::DIGEST_LENGTH, rpc::{MessageRef, PinnedMessage}};
 
 use super::{
     leader_rotation::get_current_leader,
@@ -109,11 +106,11 @@ impl Deref for PinnedServerContext {
 /// No blocking and/or locking allowed.
 /// The job is to filter old messages quickly and send them on the channel.
 /// The real consensus handler is a separate green thread that consumes these messages.
-pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -> bool {
+pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -> Result<Option<PinnedMessage>, Error> {
     let mut sender = String::from("");
     match m.2 {
         crate::rpc::SenderType::Anon => {
-            return false; // Anonymous replies shouldn't come here
+            return Err(Error::new(ErrorKind::InvalidData, "unauthenticated message")); // Anonymous replies shouldn't come here
         }
         crate::rpc::SenderType::Auth(name) => {
             sender = name.to_string();
@@ -124,7 +121,7 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
         Err(e) => {
             warn!("Parsing problem: {} ... Dropping connection", e.to_string());
             debug!("Original message: {:?}", &m.0.as_slice()[0..m.1]);
-            return false;
+            return Err(Error::new(ErrorKind::InvalidData, e));
         }
     };
 
@@ -132,7 +129,7 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
         Some(m) => m,
         None => {
             warn!("Nil message");
-            return true;
+            return Ok(None);
         }
     };
 
@@ -140,12 +137,12 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
         match &msg {
             rpc::proto_payload::Message::ViewChange(_msg) => {
                 if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return true; // Old view message
+                    return Ok(None); // Old view message
                 }
             }
             rpc::proto_payload::Message::AppendEntries(_msg) => {
                 if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return true; // Old view message
+                    return Ok(None); // Old view message
                 }
 
                 match body.rpc_type() {
@@ -166,21 +163,21 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
                         _msg.view,
                     )]
                 {
-                    return true; // This leader is not supposed to send message with this view.
+                    return Ok(None); // This leader is not supposed to send message with this view.
                 }
             }
             rpc::proto_payload::Message::NewLeader(_msg) => {
                 if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return true; // Old view message
+                    return Ok(None); // Old view message
                 }
             }
             rpc::proto_payload::Message::NewLeaderOk(_) => {
                 // I am not leader, these messages shouldn't appear to me now.
-                return true;
+                return Ok(None);
             }
             rpc::proto_payload::Message::Vote(_) => {
                 // I am not leader, these messages shouldn't appear to me now.
-                return true;
+                return Ok(None);
             }
             rpc::proto_payload::Message::ClientRequest(_) => {
                 let msg = (body.message.unwrap(), sender);
@@ -190,12 +187,20 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
                     Ok(_) => {}
                     Err(e) => match e {
                         _ => {
-                            return false;
+                            return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
                         }
                     },
                 };
 
-                return true;
+                // Send ack for mempool inclusion.
+                let mut buf = Vec::new();
+                msg.0.encode(&mut buf);
+                let sig = crate::crypto::hash(&buf);  // @todo: This could be a signature. Bring the keystore here
+                return Ok(Some(PinnedMessage::from(
+                    sig,
+                    DIGEST_LENGTH,
+                    crate::rpc::SenderType::Auth(ctx.config.net_config.name.clone()
+                ))));
             }
         }
     } else {
@@ -205,37 +210,37 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
                 < ctx.last_diverse_quorum_request.load(Ordering::Relaxed)
                     - ctx.config.consensus_config.quorum_diversity_k
         {
-            return true; // Old message
+            return Ok(None); // Old message
         }
 
         if body.rpc_type() == rpc::RpcType::FastQuorumReply
             && body.rpc_seq_num < ctx.last_fast_quorum_request.load(Ordering::Relaxed)
         {
-            return true; // Old message
+            return Ok(None); // Old message
         }
 
         match &msg {
             rpc::proto_payload::Message::ViewChange(_msg) => {
                 if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return true; // Old view message
+                    return Ok(None); // Old view message
                 }
             }
             rpc::proto_payload::Message::AppendEntries(_) => {
-                return true; // I will not respond to other's AppendEntries while I am leader.
+                return Ok(None); // I will not respond to other's AppendEntries while I am leader.
             }
             rpc::proto_payload::Message::NewLeader(_msg) => {
                 if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return true; // Old view message
+                    return Ok(None); // Old view message
                 }
             }
             rpc::proto_payload::Message::NewLeaderOk(_msg) => {
                 if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return true; // Old view message
+                    return Ok(None); // Old view message
                 }
             }
             rpc::proto_payload::Message::Vote(_msg) => {
                 if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return true; // Old view message
+                    return Ok(None); // Old view message
                 }
             }
             rpc::proto_payload::Message::ClientRequest(_) => {
@@ -246,11 +251,20 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
                     Ok(_) => {}
                     Err(e) => match e {
                         _ => {
-                            return false;
+                            return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
                         }
                     },
                 };
-                return true;
+
+                // Send ack for mempool inclusion.
+                let mut buf = Vec::new();
+                msg.0.encode(&mut buf);
+                let sig = crate::crypto::hash(&buf);  // @todo: This could be a signature. Bring the keystore here
+                return Ok(Some(PinnedMessage::from(
+                    sig,
+                    DIGEST_LENGTH,
+                    crate::rpc::SenderType::Auth(ctx.config.net_config.name.clone()
+                ))));
             }
         }
     }
@@ -264,10 +278,10 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>) -
         Ok(_) => {}
         Err(e) => match e {
             _ => {
-                return false;
+                return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }
         },
     };
 
-    true
+    Ok(None)
 }
