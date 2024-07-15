@@ -4,3 +4,5 @@ configs/
 logs/
 perf.data*
 .vscode
+
+venv
