@@ -5,6 +5,11 @@ use std::collections::HashMap;
 #[cfg(test)]
 mod tests;
 
+
+/// Default config for log4rs;
+mod log4rs;
+pub use log4rs::*;
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct NodeNetInfo {
     pub addr: String,

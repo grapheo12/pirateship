@@ -1,4 +1,4 @@
-use pft::{config::Config, consensus};
+use pft::{config::{self, Config}, consensus};
 use tokio::runtime;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
 use std::io::Write;
@@ -44,7 +44,8 @@ async fn run_main(cfg: Config) -> io::Result<()> {
 const NUM_THREADS: usize = 32;
 
 fn main() {
-    colog::init();
+    log4rs::init_config(config::default_log4rs_config()).unwrap();
+    
     let cfg = process_args();
 
     let core_ids = 
