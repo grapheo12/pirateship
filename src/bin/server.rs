@@ -1,3 +1,4 @@
+use log::debug;
 use pft::{config::{self, Config}, consensus};
 use tokio::runtime;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
@@ -45,7 +46,7 @@ const NUM_THREADS: usize = 32;
 
 fn main() {
     log4rs::init_config(config::default_log4rs_config()).unwrap();
-    
+
     let cfg = process_args();
 
     let core_ids = 
@@ -70,13 +71,13 @@ fn main() {
             let _cids = core_ids.clone();
             let lcores = _cids.lock().unwrap();
             let id = (start_idx + i.fetch_add(1, std::sync::atomic::Ordering::SeqCst)) % lcores.len();
-            // let res = core_affinity::set_for_current(lcores[id]);
+            let res = core_affinity::set_for_current(lcores[id]);
             
-            // if res {
-            //     println!("Thread pinned to core {:?}", id);
-            // }else{
-            //     println!("Thread pinning to core {:?} failed", id);
-            // }
+            if res {
+                debug!("Thread pinned to core {:?}", id);
+            }else{
+                debug!("Thread pinning to core {:?} failed", id);
+            }
 
             std::io::stdout().flush()
                 .unwrap();

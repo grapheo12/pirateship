@@ -8,5 +8,9 @@
     },
     "rpc_config": {
         "signing_priv_key_path": "tests/configs/"    
+    },
+    "workload_config": {
+        "num_clients": 10,
+        "num_requests": 10000000
     }
 }

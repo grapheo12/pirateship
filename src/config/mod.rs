@@ -60,12 +60,20 @@ pub struct ClientNetConfig {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ClientRpcConfig {
     pub signing_priv_key_path: String,
+
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct WorkloadConfig {
+    pub num_clients: usize,
+    pub num_requests: usize
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ClientConfig {
     pub net_config: ClientNetConfig,
     pub rpc_config: ClientRpcConfig,
+    pub workload_config: WorkloadConfig
 }
 
 impl Config {
