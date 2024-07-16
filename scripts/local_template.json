@@ -17,6 +17,7 @@
     },
     "consensus_config": {
         "node_list": [],
-        "quorum_diversity_k": 3
+        "quorum_diversity_k": 3,
+        "stats_report_secs": 1
     }
 }

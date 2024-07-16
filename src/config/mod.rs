@@ -34,6 +34,7 @@ pub struct RpcConfig {
 pub struct ConsensusConfig {
     pub node_list: Vec<String>, // This better be in the same order in all nodes.
     pub quorum_diversity_k: u64,
+    pub stats_report_secs: u64
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -103,6 +104,7 @@ impl ClientConfig {
             consensus_config: ConsensusConfig {
                 node_list: Vec::new(),
                 quorum_diversity_k: 0,
+                stats_report_secs: 1
             },
         }
     }

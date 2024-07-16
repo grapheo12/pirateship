@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use futures::future::Join;
 use handler::{consensus_rpc_handler, PinnedServerContext};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 use crate::{
     config::Config,
@@ -50,17 +51,24 @@ impl ConsensusNode {
         }
     }
 
-    pub fn run(node: Arc<Self>) -> (JoinHandle<()>, JoinHandle<()>) {
+    pub fn run(node: Arc<Self>) -> JoinSet<()> {
+        // These are just increasing ref counts.
+        // It is pointing to the same server instance.
         let node1 = node.clone();
         let node2 = node.clone();
-        (
-            tokio::spawn(async move {
-                let _ = Server::<PinnedServerContext>::run(node1.server.clone(), node1.ctx.clone())
-                    .await;
-            }),
-            tokio::spawn(async move {
-                let _ = protocols::algorithm(node2.ctx.clone(), node2.client.clone()).await;
-            }),
-        )
+        let node3 = node.clone();
+        let mut js = JoinSet::new();
+        js.spawn(async move {
+            let _ = Server::<PinnedServerContext>::run(node1.server.clone(), node1.ctx.clone())
+                .await;
+        });
+        js.spawn(async move {
+            let _ = protocols::report_stats(&node2.ctx).await;
+        });
+        js.spawn(async move {
+            let _ = protocols::algorithm(node3.ctx.clone(), node3.client.clone()).await;
+        });
+
+        js
     }
 }

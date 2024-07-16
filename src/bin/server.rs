@@ -33,9 +33,11 @@ fn process_args() -> Config {
 
 async fn run_main(cfg: Config) -> io::Result<()> {
     let node = Arc::new(consensus::ConsensusNode::new(&cfg));
-    let (server_handle, consensus_handle) = consensus::ConsensusNode::run(node);
+    let mut handles = consensus::ConsensusNode::run(node);
 
-    let _ = tokio::join!(server_handle, consensus_handle);
+    while let Some(_) = handles.join_next().await {
+
+    }
     Ok(())
 }
 

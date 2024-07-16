@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet}, io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
     }
 };
@@ -28,6 +28,7 @@ pub struct ConsensusState {
     pub fork: Mutex<Log>,
     pub view: AtomicU64,
     pub commit_index: AtomicU64,
+    pub num_committed_txs: AtomicUsize,
     pub byz_commit_index: AtomicU64,
     pub byz_qc_pending: Mutex<HashMap<ProtoBlock, HashSet<(String, ProtoVote)>>>,
     pub byz_commit_pending: Mutex<HashMap<ProtoQuorumCertificate, HashSet<(String, ProtoVote)>>>,
@@ -40,6 +41,7 @@ impl ConsensusState {
             fork: Mutex::new(Log::new()),
             view: AtomicU64::new(0),
             commit_index: AtomicU64::new(0),
+            num_committed_txs: AtomicUsize::new(0),
             byz_commit_index: AtomicU64::new(0),
             byz_qc_pending: Mutex::new(HashMap::new()),
             byz_commit_pending: Mutex::new(HashMap::new()),

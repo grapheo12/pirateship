@@ -57,7 +57,7 @@ async fn process_node_request(
     ctx: &PinnedServerContext,
     client: &PinnedClient,
     node_num: u64,
-    num_txs: &mut usize,
+    // num_txs: &mut usize,
     majority: u64,
     // accepting_client_requests: &mut bool,
     ms: &(proto_payload::Message, String),
@@ -117,7 +117,9 @@ async fn process_node_request(
                         .commit_index
                         .store(ae.commit_index, Ordering::SeqCst);
 
-                    *num_txs += fork.get(ae.commit_index).unwrap().block.tx.len();
+                    ctx.state.num_committed_txs.fetch_add(
+                        fork.get(ae.commit_index).unwrap().block.tx.len(),
+                        Ordering::SeqCst);
                     {
                         let mut lack_pend = ctx.client_ack_pending.lock().await;
                         let mut del_list = Vec::new();
@@ -135,19 +137,16 @@ async fn process_node_request(
                         }
 
                     }
-
-                    if ae.commit_index % 1000 == node_num {
-                        info!(
-                            "New Commit Index: {}, Fork Digest: {} Tx: {}, num_txs: {}",
-                            ctx.state.commit_index.load(Ordering::SeqCst),
-                            fork.last_hash().encode_hex::<String>(),
-                            String::from_utf8(
-                                fork.get(ae.commit_index).unwrap().block.tx[0].clone()
-                            )
-                            .unwrap(),
-                            *num_txs
-                        );
-                    }
+                    debug!(
+                        "New Commit Index: {}, Fork Digest: {} Tx: {}, num_txs: {}",
+                        ctx.state.commit_index.load(Ordering::SeqCst),
+                        fork.last_hash().encode_hex::<String>(),
+                        String::from_utf8(
+                            fork.get(ae.commit_index).unwrap().block.tx[0].clone()
+                        )
+                        .unwrap(),
+                        ctx.state.num_committed_txs.load(Ordering::SeqCst)
+                    );
                 }
             }
         }
@@ -165,18 +164,16 @@ async fn process_node_request(
                         // This is just a sanity check
                         {
                             ctx.state.commit_index.store(i, Ordering::SeqCst);
-                            *num_txs += fork.get(i).unwrap().block.tx.len();
-                            if i % 1000 == 0 {
-                                info!(
-                                    "New Commit Index: {}, Fork Digest: {} Tx: {}, num_txs: {}, vote_batch_size: {}",
-                                    ctx.state.commit_index.load(Ordering::SeqCst),
-                                    v.fork_digest.encode_hex::<String>(),
-                                    String::from_utf8(fork.get(i).unwrap().block.tx[0].clone())
-                                        .unwrap(),
-                                    num_txs,
-                                    ms_batch_size
-                                );
-                            }
+                            ctx.state.num_committed_txs.fetch_add(fork.get(i).unwrap().block.tx.len(), Ordering::SeqCst);
+                            debug!(
+                                "New Commit Index: {}, Fork Digest: {} Tx: {}, num_txs: {}, vote_batch_size: {}",
+                                ctx.state.commit_index.load(Ordering::SeqCst),
+                                v.fork_digest.encode_hex::<String>(),
+                                String::from_utf8(fork.get(i).unwrap().block.tx[0].clone())
+                                    .unwrap(),
+                                ctx.state.num_committed_txs.load(Ordering::SeqCst),
+                                ms_batch_size
+                            );
     
                             // *accepting_client_requests = true;
                             ctx.last_fast_quorum_request.fetch_add(1, Ordering::SeqCst);
@@ -220,8 +217,27 @@ async fn handle_timeout(_ctx: &PinnedServerContext) -> Result<(), Error> {
     // }
 
     // ctx.state.view.fetch_add(1, Ordering::SeqCst);
-    info!("Current pending acks: {}", _ctx.client_ack_pending.lock().await.len());
+    // info!("Current pending acks: {}", _ctx.client_ack_pending.lock().await.len());
     Ok(())
+}
+
+pub async fn report_stats(ctx: &PinnedServerContext) -> Result<(), Error> {
+    loop {
+        sleep(Duration::from_secs(ctx.config.consensus_config.stats_report_secs)).await;
+        {
+            let fork = ctx.state.fork.lock().await;
+            let lack_pend = ctx.client_ack_pending.lock().await;
+
+            info!("fork.last = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, num_txs = {}, fork.last_hash = {}",
+                  fork.last(),
+                  ctx.state.commit_index.load(Ordering::SeqCst),
+                  ctx.state.byz_commit_index.load(Ordering::SeqCst),
+                  lack_pend.len(),
+                  ctx.state.num_committed_txs.load(Ordering::SeqCst),
+                  fork.last_hash().encode_hex::<String>()
+            );
+        }
+    }
 }
 
 async fn view_timer(tx: Sender<bool>, timeout: Duration) -> Result<(), Error> {
@@ -262,7 +278,7 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
     let mut client_req_num = 0;
     let mut node_req_num = 0;
 
-    let mut num_txs = 0;
+    // let mut num_txs = 0;
 
     loop {
         if ctx.i_am_leader.load(Ordering::SeqCst)
@@ -292,7 +308,7 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                     &ctx,
                     &client,
                     get_node_num(&ctx),
-                    &mut num_txs,
+                    // &mut num_txs,
                     majority.clone(),
                     // &mut accepting_client_requests,
                     req,
@@ -339,9 +355,7 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
 
                 match fork.push(entry) {
                     Ok(n) => {
-                        if n % 1000 == 0 {
-                            info!("Client message sequenced at {}", n);
-                        }
+                        debug!("Client message sequenced at {}", n);
                     }
                     Err(e) => {
                         warn!("Error processing client request: {}", e);
@@ -369,19 +383,19 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                             }
 
                         }
-                        num_txs += fork.get(fork.last()).unwrap().block.tx.len();
-                        if fork.last() % 1000 == 0 {
-                            info!(
-                                "New Commit Index: {}, Fork Digest: {} Tx: {} num_txs: {}",
-                                ctx.state.commit_index.load(Ordering::SeqCst),
-                                fork.last_hash().encode_hex::<String>(),
-                                String::from_utf8(
-                                    fork.get(fork.last()).unwrap().block.tx[0].clone()
-                                )
-                                .unwrap(),
-                                num_txs
-                            );
-                        }
+                        ctx.state.num_committed_txs.fetch_add(
+                            fork.get(fork.last()).unwrap().block.tx.len(),
+                            Ordering::SeqCst);
+                        debug!(
+                            "New Commit Index: {}, Fork Digest: {} Tx: {} num_txs: {}",
+                            ctx.state.commit_index.load(Ordering::SeqCst),
+                            fork.last_hash().encode_hex::<String>(),
+                            String::from_utf8(
+                                fork.get(fork.last()).unwrap().block.tx[0].clone()
+                            )
+                            .unwrap(),
+                            ctx.state.num_committed_txs.load(Ordering::SeqCst)
+                        );
                     }
                 } else {
                     // accepting_client_requests = false; // Finish replicating this request before processing the next.
