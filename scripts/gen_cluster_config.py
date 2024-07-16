@@ -213,7 +213,7 @@ def gen_cluster_nodelist(ip_list, domain_suffix) -> Tuple[OrderedDict[str, Tuple
     if ip_list == "/dev/null":
         raise Exception("Ip list must be provided when using cluster mode")
     
-    nodelist: Dict[str, Tuple[str, str]] = collections.OrderedDict()
+    nodelist = collections.OrderedDict()
     node_cnt = 0
     client_cnt = 0
     with open(ip_list) as f:
@@ -224,7 +224,7 @@ def gen_cluster_nodelist(ip_list, domain_suffix) -> Tuple[OrderedDict[str, Tuple
             if line.startswith("node"):
                 node_cnt += 1
                 ip = line.split()[1]
-                nodelist["node" + str(node_cnt)] = (ip, "node" + str(node_cnt) + domain_suffix)
+                nodelist["node" + str(node_cnt)] = (ip.strip(), "node" + str(node_cnt) + domain_suffix)
             
             if line.startswith("client"):
                 client_cnt += 1
@@ -281,6 +281,41 @@ def gen_client_configs(num_clients: int, nodelist: OrderedDict[str, Tuple[str, s
         gen_client_config(i, root_path, deepcopy(tmpl))
 
 
+def gen_config(outdir, mode, node_template, client_template, ip_list, num_nodes):
+    print("Reading templates")
+    node_template = json.load(open(node_template))
+    client_template = json.load(open(client_template))
+
+    nodelist = OrderedDict()
+    client_cnt = 0
+    if mode == "local":
+        nodelist, client_cnt = gen_local_nodelist(num_nodes)
+    elif mode == "remoteclient":
+        raise NotImplementedError
+    elif mode == "cluster":
+        nodelist, client_cnt = gen_cluster_nodelist(ip_list, ".pft.org")
+    else:
+        raise NotImplementedError
+    
+    print("Number of nodes:", len(nodelist))
+    print("Number of clients:", client_cnt)
+
+    print("Creating directory")
+    os.makedirs(outdir, exist_ok=True)
+    pwd = os.getcwd()
+    os.chdir(outdir)
+
+    gen_keys_and_certs(nodelist, DEFAULT_CA_NAME, client_cnt)
+
+    print("Generating Node configs")
+    gen_node_configs(nodelist, node_template, DEFAULT_CA_NAME, outdir)
+
+    print("Generating Client configs")
+    gen_client_configs(client_cnt, nodelist, client_template, DEFAULT_CA_NAME, outdir)
+    os.chdir(pwd)
+
+
+
 @click.command()
 @click.option(
     "-o", "--outdir", required=True,
@@ -315,33 +350,7 @@ def gen_client_configs(num_clients: int, nodelist: OrderedDict[str, Tuple[str, s
     type=click.INT
 )
 def main(outdir, mode, node_template, client_template, ip_list, num_nodes):
-    print("Reading templates")
-    node_template = json.load(open(node_template))
-    client_template = json.load(open(client_template))
-
-    nodelist = OrderedDict()
-    client_cnt = 0
-    if mode == "local":
-        nodelist, client_cnt = gen_local_nodelist(num_nodes)
-    elif mode == "remoteclient":
-        raise NotImplementedError
-    elif mode == "cluster":
-        nodelist, client_cnt = gen_cluster_nodelist(ip_list, ".pft.org")
-    
-    print("Number of nodes:", len(nodelist))
-    print("Number of clients:", client_cnt)
-
-    print("Creating directory")
-    os.makedirs(outdir, exist_ok=True)
-    os.chdir(outdir)
-
-    gen_keys_and_certs(nodelist, DEFAULT_CA_NAME, client_cnt)
-
-    print("Generating Node configs")
-    gen_node_configs(nodelist, node_template, DEFAULT_CA_NAME, outdir)
-
-    print("Generating Client configs")
-    gen_client_configs(client_cnt, nodelist, client_template, DEFAULT_CA_NAME, outdir)
+    gen_config(outdir, mode, node_template, client_template, ip_list, num_nodes)
 
 
 if __name__ == "__main__":

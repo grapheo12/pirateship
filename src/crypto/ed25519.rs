@@ -24,7 +24,7 @@ impl KeyStore {
         let mut keys = HashMap::new();
         let key_path = path::Path::new(pubkey_path.as_str());
         if !key_path.exists() {
-            panic!("Invalid Private Key Path: {}", pubkey_path);
+            panic!("Invalid Public Key Path: {}", pubkey_path);
         }
         let f = match File::open(key_path) {
             Ok(_f) => _f,

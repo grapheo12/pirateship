@@ -106,7 +106,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, _barrier: &tokio::sync
     Ok(())
 }
 
-const NUM_CLIENTS: usize = 20;
+const NUM_CLIENTS: usize = 50;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
