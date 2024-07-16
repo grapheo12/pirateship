@@ -1,4 +1,4 @@
-use std::{collections::HashSet, io::Error, sync::atomic::Ordering, time::Duration};
+use std::{collections::HashSet, io::Error, sync::atomic::Ordering, time::{Duration, Instant}};
 use hex::ToHex;
 use log::{debug, info, warn};
 use prost::Message;
@@ -153,6 +153,7 @@ async fn process_node_request(
         crate::consensus::proto::rpc::proto_payload::Message::Vote(v) => {
             let mut fork = ctx.state.fork.lock().await;
             let chk_hsh = fork.hash_at_n(v.n);
+            
             if chk_hsh.is_some() && cmp_hash(&chk_hsh.unwrap(), &v.fork_digest) {
                 let _l = v.n;
                 let _f = ctx.state.commit_index.load(Ordering::SeqCst) + 1;
@@ -177,6 +178,12 @@ async fn process_node_request(
     
                             // *accepting_client_requests = true;
                             ctx.last_fast_quorum_request.fetch_add(1, Ordering::SeqCst);
+                            if v.n % 1000 == 0 {
+                                let mut lpings = ctx.ping_counters.lock().unwrap();
+                                if let Some(start) = lpings.remove(&v.n){
+                                    info!("Fork index: {} Vote quorum latency: {} us", v.n, start.elapsed().as_micros())
+                                }
+                            }
 
                             {
                                 let mut lack_pend = ctx.client_ack_pending.lock().await;
@@ -288,7 +295,7 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                 biased;
                 v = timer_rx.recv() => { curr_timer_val = v.unwrap(); }
                 node_req_num_ = node_rx.recv_many(&mut curr_node_req, (majority - 1) as usize) => node_req_num = node_req_num_,
-                client_req_num_ = client_rx.recv_many(&mut curr_client_req, 1000) => client_req_num = client_req_num_
+                client_req_num_ = client_rx.recv_many(&mut curr_client_req, 1) => client_req_num = client_req_num_
             }
         } else {
             tokio::select! {
@@ -356,6 +363,10 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                 match fork.push(entry) {
                     Ok(n) => {
                         debug!("Client message sequenced at {}", n);
+                        if n % 1000 == 0{
+                            let mut lpings = ctx.ping_counters.lock().unwrap();
+                            lpings.insert(n, Instant::now());
+                        }
                     }
                     Err(e) => {
                         warn!("Error processing client request: {}", e);
@@ -424,7 +435,7 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                         let sz = buf.len();
                         let bcast_msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
-                        // let start_bcast = Instant::now();
+                        let start_bcast = Instant::now();
                         let _ = PinnedClient::broadcast(&client, &send_list, &bcast_msg).await;
                         // info!("Broadcast time: {} us", start_bcast.elapsed().as_micros());
                     }

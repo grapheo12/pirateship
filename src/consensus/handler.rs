@@ -9,8 +9,9 @@ use hex::ToHex;
 use log::{debug, info, warn};
 use prost::Message;
 use tokio::sync::{mpsc, Mutex};
+use std::time::Instant;
 
-use crate::{config::Config, crypto::DIGEST_LENGTH, rpc::{server::MsgAckChan, MessageRef, PinnedMessage}};
+use crate::{config::Config, rpc::{server::MsgAckChan, MessageRef}};
 
 use super::{
     leader_rotation::get_current_leader,
@@ -74,7 +75,8 @@ pub struct ServerContext {
     pub client_ack_pending: Mutex<HashMap<
         (u64, usize),         // (block_id, tx_id)
         MsgAckChan
-    >>
+    >>,
+    pub ping_counters: std::sync::Mutex<HashMap<u64, Instant>>
 }
 
 #[derive(Clone)]
@@ -92,7 +94,8 @@ impl PinnedServerContext {
             node_queue: (node_ch.0, Mutex::new(node_ch.1)),
             client_queue: (client_ch.0, Mutex::new(client_ch.1)),
             state: ConsensusState::new(),
-            client_ack_pending: Mutex::new(HashMap::new())
+            client_ack_pending: Mutex::new(HashMap::new()),
+            ping_counters: std::sync::Mutex::new(HashMap::new())
         })))
     }
 }

@@ -7,3 +7,6 @@ perf.data*
 
 venv
 __pycache__
+
+*.pdf
+*.png

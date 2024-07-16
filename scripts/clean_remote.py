@@ -34,6 +34,18 @@ def main(ip_list, identity_file):
         }
     ) for client, ip in clients.items()}
 
+    print("Closing orphan processes")
+    for conn in node_conns.values():
+        print(run_all([
+            "pkill -c server"
+        ], conn))
+    
+    for conn in client_conns.values():
+        print(run_all([
+            "pkill -c client"
+        ], conn))
+
+
     print("Deleting everything in $HOME/pft")
     for conn in node_conns.values():
         run_all([

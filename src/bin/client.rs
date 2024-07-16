@@ -15,7 +15,8 @@ use pft::{
 };
 use prost::Message;
 use std::{env, fs, io, path};
-use tokio::{task::JoinSet, time::Instant};
+use tokio::task::JoinSet;
+use std::time::Instant;
 
 fn process_args() -> ClientConfig {
     macro_rules! usage_str {

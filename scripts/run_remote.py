@@ -155,40 +155,7 @@ def copy_logs(node_conns, client_conns, repeat_num, wd):
         copy_log(client, conn, repeat_num, wd)
 
 
-@click.command()
-@click.option(
-    "-nt", "--node_template", required=True,
-    type=click.Path(exists=True, file_okay=True, resolve_path=True),
-    help="JSON template for node config"
-)
-@click.option(
-    "-ct", "--client_template", required=True,
-    type=click.Path(exists=True, file_okay=True, resolve_path=True),
-    help="JSON template for client config"
-)
-@click.option(
-    "-ips", "--ip_list", required=True,
-    help="File with list of node names and IP addresses to be used with cluster config",
-    type=click.Path(exists=True, file_okay=True, resolve_path=True)
-)
-@click.option(
-    "-i", "--identity_file", required=True,
-    help="SSH key",
-    type=click.Path(exists=True, file_okay=True, resolve_path=True)
-)
-@click.option(
-    "-r", "--repeat",
-    default=1,
-    help="Number of times to repeat experiment",
-    type=click.INT
-)
-@click.option(
-    "-s", "--seconds",
-    default=30,
-    help="Seconds to run each experiment",
-    type=click.INT
-)
-def main(node_template, client_template, ip_list, identity_file, repeat, seconds):
+def run_remote(node_template, client_template, ip_list, identity_file, repeat, seconds):
     build_project()
     git_hash = get_current_git_hash()
     gen_config("configs", "cluster", node_template, client_template, ip_list, -1)
@@ -267,7 +234,43 @@ def main(node_template, client_template, ip_list, identity_file, repeat, seconds
                 
         print("Copying logs")
         copy_logs(node_conns, client_conns, i, curr_time)
-        
+
+
+@click.command()
+@click.option(
+    "-nt", "--node_template", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True),
+    help="JSON template for node config"
+)
+@click.option(
+    "-ct", "--client_template", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True),
+    help="JSON template for client config"
+)
+@click.option(
+    "-ips", "--ip_list", required=True,
+    help="File with list of node names and IP addresses to be used with cluster config",
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
+    "-i", "--identity_file", required=True,
+    help="SSH key",
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
+    "-r", "--repeat",
+    default=1,
+    help="Number of times to repeat experiment",
+    type=click.INT
+)
+@click.option(
+    "-s", "--seconds",
+    default=30,
+    help="Seconds to run each experiment",
+    type=click.INT
+)
+def main(node_template, client_template, ip_list, identity_file, repeat, seconds):
+    run_remote(node_template, client_template, ip_list, identity_file, repeat, seconds)
 
     
     
