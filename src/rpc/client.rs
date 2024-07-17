@@ -3,20 +3,16 @@ use futures::{future::join_all, FutureExt};
 use log::{debug, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use std::{
-    collections::{HashMap, HashSet},
-    fs::File,
-    io::{BufReader, Error, ErrorKind},
-    path,
-    pin::Pin,
-    sync::{Arc, RwLock},
+    collections::{HashMap, HashSet}, fs::File, io::{BufReader, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::{Arc, RwLock}
 };
 use tokio::{
-    io::{split, AsyncReadExt, AsyncWriteExt},
+    io::{split, AsyncReadExt, AsyncWriteExt, BufWriter},
     net::TcpStream,
     sync::{
         mpsc::{self, Sender},
         Mutex,
-    }, time::Instant
+    },
+    time::Instant,
 };
 use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
 
@@ -38,11 +34,39 @@ impl<K> PinnedHashSet<K> {
     }
 }
 
+struct BufferedTlsStream {
+    stream: BufWriter<TlsStream<TcpStream>>,
+}
+
+impl BufferedTlsStream {
+    pub fn new(stream: TlsStream<TcpStream>) -> BufferedTlsStream {
+        BufferedTlsStream {
+            stream: BufWriter::new(stream),
+        }
+    }
+}
+
+impl Deref for BufferedTlsStream {
+    type Target = BufWriter<TlsStream<TcpStream>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.stream
+    }
+}
+
+impl DerefMut for BufferedTlsStream {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.stream
+    }
+}
+
 #[derive(Clone)]
-pub struct PinnedTlsStream(Pin<Box<Arc<Mutex<TlsStream<TcpStream>>>>>);
+pub struct PinnedTlsStream(Pin<Box<Arc<Mutex<BufferedTlsStream>>>>);
 impl PinnedTlsStream {
     fn new(stream: TlsStream<TcpStream>) -> PinnedTlsStream {
-        PinnedTlsStream(Box::pin(Arc::new(Mutex::new(stream))))
+        PinnedTlsStream(Box::pin(Arc::new(Mutex::new(BufferedTlsStream::new(
+            stream,
+        )))))
     }
 }
 pub struct Client {
@@ -195,10 +219,8 @@ impl PinnedClient {
             SendDataType::SizeType(d) => {
                 let mut lsock = sock.0.lock().await;
                 lsock.write_u32(d).await // Does this take care of endianness?
-
             }
         };
-
 
         if let Err(e) = e {
             // There is some problem.
@@ -220,7 +242,6 @@ impl PinnedClient {
             return Err(e);
         }
 
-
         Ok(())
     }
     pub async fn send<'b>(
@@ -233,7 +254,11 @@ impl PinnedClient {
 
         Self::send_raw(client, name, &sock, SendDataType::SizeType(len)).await?;
         Self::send_raw(client, name, &sock, SendDataType::ByteType(data)).await?;
-    
+
+        {
+            sock.0.lock().await.flush().await?;
+        }
+
         Ok(())
     }
 
@@ -251,24 +276,34 @@ impl PinnedClient {
         Self::send_raw(client, name, &sock, SendDataType::ByteType(data)).await?;
         let send_time = send_time.elapsed().as_micros();
 
-        debug!("Send time: sz:{}, data: {}, total: {} us", send_sz_time, send_time - send_sz_time, send_time);
-        
+        debug!(
+            "Send time: sz:{}, data: {}, total: {} us",
+            send_sz_time,
+            send_time - send_sz_time,
+            send_time
+        );
+
         // let mut resp_buf = Vec::new();
         let mut sz = 0;
         {
             let mut lsock = sock.0.lock().await;
-            // lsock.flush().await?;
+            lsock.flush().await?;
 
             sz = lsock.read_u32().await? as usize;
             if sz == 0 {
-                return Err(Error::new(ErrorKind::InvalidData, "socket probably closed!"));
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "socket probably closed!",
+                ));
             }
             let mut resp_buf = vec![0u8; sz];
             lsock.read_exact(&mut resp_buf).await?;
-            Ok(PinnedMessage::from(resp_buf, sz as usize, super::SenderType::Auth(name.clone())))
-
+            Ok(PinnedMessage::from(
+                resp_buf,
+                sz as usize,
+                super::SenderType::Auth(name.clone()),
+            ))
         }
-
     }
 
     pub async fn reliable_send<'b>(
@@ -329,7 +364,6 @@ impl PinnedClient {
                 lworkers.insert(_name.clone());
             }
             tokio::spawn(async move {
-
                 // Main loop: Fetch data from channel
                 // Do reliable send
                 // If reliable send fails, die.
