@@ -44,7 +44,7 @@ fn process_args() -> ClientConfig {
 async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -> io::Result<()> {    
     for i in 0..num_requests {
         let client_req = ProtoClientRequest {
-            tx: format!("Tx:{}:{}", idx, i).into_bytes(),
+            tx: format!("Txaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:{}:{}", idx, i).into_bytes(),
             sig: vec![0u8; SIGNATURE_LENGTH],
         };
 
@@ -86,7 +86,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -
 }
 
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 50)]
 async fn main() -> io::Result<()> {
     log4rs::init_config(default_log4rs_config()).unwrap();
     let config = process_args();
