@@ -1,6 +1,8 @@
-use std::{fs::File, io::{self, Error}, path, sync::Arc};
+use std::{fs::File, io::{self, Cursor, Error}, path, sync::Arc};
 
 use crate::{config::Config, crypto::KeyStore, rpc::auth};
+use byteorder::BigEndian;
+use tokio::io::{BufWriter, ReadHalf};
 use hex::ToHex;
 use log::{debug, info, warn};
 use rustls::{
@@ -34,6 +36,75 @@ where
     pub msg_handler: HandlerType<ServerContext>, // Can't be a closure as msg_handler is called from another thread.
     do_auth: bool,
 }
+
+pub struct FrameReader<'a> {
+    pub buffer: Vec<u8>,
+    pub stream: ReadHalf<&'a mut TlsStream<TcpStream>>,
+    pub offset: usize,
+    pub bound: usize
+}
+
+impl<'a> FrameReader<'a> {
+    pub fn new(stream: ReadHalf<&'a mut TlsStream<TcpStream>>) -> FrameReader<'a> {
+        FrameReader {
+            buffer: vec![0u8; 4096],
+            stream,
+            offset: 0,
+            bound: 0
+        }
+    }
+
+    async fn read_next_bytes(&mut self, n: usize, v: &mut Vec<u8>) -> io::Result<()> {
+        let mut pos = 0;
+        let mut n = n;
+        while n > 0 {
+            if self.bound == self.offset {
+                // Need to fetch more data.
+                let n = self.stream.read(self.buffer.as_mut()).await?;
+                self.bound = n;
+                self.offset = 0;
+            }
+
+            if self.bound - self.offset >= n {
+                // Copy in full
+                v[pos..][..n].copy_from_slice(&self.buffer[self.offset..self.offset+n]);
+                self.offset += n;
+                n = 0;
+            }else{
+                // Copy partial.
+                // We'll get the rest in the next iteration of the loop.
+                v[pos..][..self.bound - self.offset].copy_from_slice(&self.buffer[self.offset..self.bound]);
+                self.offset = self.bound;
+                n -= self.bound - self.offset;
+                pos += self.bound - self.offset;
+            }
+        }
+
+        Ok(())
+        
+
+
+    }
+
+    pub async fn get_next_frame(&mut self, buff: &mut Vec<u8>) -> io::Result<usize> {
+        let mut sz_vec = vec![0u8; 4];
+        self.read_next_bytes(4, &mut sz_vec).await?;
+        let mut sz_rdr = Cursor::new(sz_vec);
+        let sz = sz_rdr.read_u32().await.unwrap() as usize;
+        let len = buff.len();
+        if sz > len {
+            buff.reserve(sz - len);
+        }
+
+        self.read_next_bytes(sz, buff).await?;
+
+        Ok(sz)
+    }
+
+}
+
+
+
 
 impl<S> Server<S>
 where
@@ -138,36 +209,15 @@ where
         let (mut rx, mut _tx) = split(stream);
         let mut read_buf = vec![0u8; _server.config.rpc_config.recv_buffer_size as usize];
         let (ack_tx, mut ack_rx) = mpsc::channel(1);
+        let mut tx_buf = BufWriter::new(_tx);
+        let mut rx_buf = FrameReader::new(rx);
         loop {
             // Message format: Size(u32) | Message
             // Message size capped at 4GiB.
             // As message is multipart, TCP won't have atomic delivery.
             // It is better to just close connection if that happens.
             // That is why `await?` with all read calls.
-            let recv_time = Instant::now();
-            let sz = rx.read_u32().await? as usize;
-            let recv_sz_time = recv_time.elapsed().as_micros();
-            if sz == 0 {
-                // End of socket, probably?
-                // Or can be used as a quit signal.
-                break;
-            }
-            if sz > read_buf.len() {
-                let _n = read_buf.len();
-                read_buf.reserve(sz - _n);
-                info!(
-                    "Receive buffer increased capacity to {}",
-                    read_buf.capacity()
-                );
-            }
-            let split_time = Instant::now();
-            let (buf, _) = read_buf.split_at_mut(sz);
-            let split_time = split_time.elapsed().as_micros();
-            let recv_buf_time = Instant::now();
-            rx.read_exact(buf).await?;
-            let recv_buf_time = recv_buf_time.elapsed().as_micros();
-            let recv_time = recv_time.elapsed().as_micros();
-
+            let sz = rx_buf.get_next_frame(&mut read_buf).await?;
             let chan_time = Instant::now();
 
             // This handler is called from within an async function, although it is not async itself.
@@ -175,7 +225,6 @@ where
             // 1. I am not nearly good enough in Rust to store an async function pointer in the underlying Server struct
             // 2. This function shouldn't have any blocking code at all. This should be a short running function to send messages to proper channel.
             let resp = (_server.msg_handler)(ctx, MessageRef::from(&read_buf, sz, &sender), ack_tx.clone());
-            let chan_time = chan_time.elapsed().as_micros();
             if let Err(e) = resp {
                 warn!("Dropping connection: {}", e);
                 break;
@@ -185,18 +234,9 @@ where
                 debug!("Waiting for response!");
                 let mref = ack_rx.recv().await.unwrap();
                 let mref = mref.as_ref();
-                let send_time = Instant::now();
-                _tx.write_u32(mref.1 as u32).await?;
-                _tx.write_all(&mref.0.split_at(mref.1).0).await?;
-                debug!("Sending msg: Size {}, Split {} us, Recv Sz {} us Recv Buf {} Recv total {} us, Chan {} us, Send {} us", 
-                    mref.1 as u32,
-                    split_time,
-                    recv_sz_time,
-                    recv_buf_time,
-                    recv_time,
-                    chan_time,
-                    send_time.elapsed().as_micros()
-                ); 
+                tx_buf.write_u32(mref.1 as u32).await?;
+                tx_buf.write_all(&mref.0.split_at(mref.1).0).await?;
+                tx_buf.flush().await?;
 
 
             }

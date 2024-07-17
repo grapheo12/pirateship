@@ -25,6 +25,7 @@ futures = "0.3.30"
 snmalloc-rs = {version = "0.3.6", features = ["native-cpu"]}
 core_affinity = "0.8.1"
 log4rs = "1.3.0"
+byteorder = "1.5.0"
 
 [build-dependencies]
 prost-build = { version = "0.12" }
