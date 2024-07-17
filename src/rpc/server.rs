@@ -57,11 +57,13 @@ impl<'a> FrameReader<'a> {
     async fn read_next_bytes(&mut self, n: usize, v: &mut Vec<u8>) -> io::Result<()> {
         let mut pos = 0;
         let mut n = n;
+        let get_n = n;
         while n > 0 {
             if self.bound == self.offset {
                 // Need to fetch more data.
-                let n = self.stream.read(self.buffer.as_mut()).await?;
-                self.bound = n;
+                let read_n = self.stream.read(self.buffer.as_mut()).await?;
+                debug!("Fetched {} bytes, Need to fetch {} bytes, pos {}, Currently at: {}", read_n, get_n, pos, n);
+                self.bound = read_n;
                 self.offset = 0;
             }
 
@@ -74,9 +76,9 @@ impl<'a> FrameReader<'a> {
                 // Copy partial.
                 // We'll get the rest in the next iteration of the loop.
                 v[pos..][..self.bound - self.offset].copy_from_slice(&self.buffer[self.offset..self.bound]);
-                self.offset = self.bound;
                 n -= self.bound - self.offset;
                 pos += self.bound - self.offset;
+                self.offset = self.bound;
             }
         }
 
@@ -217,7 +219,14 @@ where
             // As message is multipart, TCP won't have atomic delivery.
             // It is better to just close connection if that happens.
             // That is why `await?` with all read calls.
-            let sz = rx_buf.get_next_frame(&mut read_buf).await?;
+            let sz = match rx_buf.get_next_frame(&mut read_buf).await {
+                Ok(s) => s,
+                Err(e) => {
+                    debug!("Encountered error while reading frame: {}", e);
+                    return Err(e);
+                },
+            };
+            debug!("Size: {}", sz);
             let chan_time = Instant::now();
 
             // This handler is called from within an async function, although it is not async itself.

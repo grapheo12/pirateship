@@ -42,7 +42,8 @@ fn test_nodeconfig_serialize() {
             String::from("node3"),
         ],
         quorum_diversity_k: 3,
-        stats_report_secs: 1
+        stats_report_secs: 1,
+        max_backlog_batch_size: 1000
     };
 
     let config = Config {

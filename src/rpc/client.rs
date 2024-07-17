@@ -1,6 +1,6 @@
 use crate::{config::Config, crypto::KeyStore};
 use futures::{future::join_all, FutureExt};
-use log::{debug, warn};
+use log::{debug, info, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use std::{
     collections::{HashMap, HashSet}, fs::File, io::{BufReader, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::{Arc, RwLock}
@@ -315,7 +315,8 @@ impl PinnedClient {
         while i > 0 {
             let done = match Self::send(client, name, data.clone()).await {
                 Ok(()) => true,
-                Err(_) => {
+                Err(e) => {
+                    warn!("Error in reliable send: {}", e);
                     i -= 1;
                     false
                 }

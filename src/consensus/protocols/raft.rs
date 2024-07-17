@@ -76,14 +76,17 @@ async fn process_node_request(
                     let mut fork = ctx.state.fork.lock().await;
                     let last_n = fork.last();
                     for b in &f.blocks {
+                        debug!("Inserting block {} with {} txs", b.n, b.tx.len());
                         let mut entry = LogEntry {
                             block: b.clone(),
                             replication_votes: HashSet::new(),
                         };
                         entry.replication_votes.insert(get_leader_str(&ctx));
-                        if let Err(_) = fork.push(entry) {
+                        if let Err(e) = fork.push(entry) {
+                            warn!("Error appending block: {}", e);
                             continue;
                         }
+                        debug!("Pushing complete!");
                     }
                     if fork.last() > last_n {
                         // New block has been added. Vote for the last one.
@@ -93,6 +96,7 @@ async fn process_node_request(
                             view: 1,
                             n: fork.last(),
                         };
+                        debug!("Voted for {}", vote.n);
 
                         let rpc_msg_body = ProtoPayload {
                             rpc_type: rpc::RpcType::FastQuorumReply.into(),
@@ -107,6 +111,7 @@ async fn process_node_request(
                             let reply = MessageRef(&buf, buf.len(), &crate::rpc::SenderType::Anon);
                             let _ = PinnedClient::reliable_send(&client, &_sender, reply).await;
                         }
+                        debug!("Sent vote");
                     }
                 }
 
@@ -161,7 +166,7 @@ async fn process_node_request(
                     let total_votes = fork.inc_replication_vote(_sender, i).unwrap();
                     if total_votes >= majority {
                         let ci = ctx.state.commit_index.load(Ordering::SeqCst);
-                        // if ci < v.n && v.n <= fork.last()
+                        if ci < v.n && v.n <= fork.last()
                         // This is just a sanity check
                         {
                             ctx.state.commit_index.store(i, Ordering::SeqCst);
@@ -193,7 +198,7 @@ async fn process_node_request(
                                         let h = hash(&fork.get(*bn).unwrap().block.tx[*txn]);
                                         let msg = PinnedMessage::from(h, DIGEST_LENGTH, 
                                             crate::rpc::SenderType::Anon);
-                                        let _ = chan.send(msg).await;
+                                        let r = chan.send(msg).await;
                                         del_list.push((*bn, *txn));
                                     }
                                 }
@@ -295,7 +300,7 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                 biased;
                 v = timer_rx.recv() => { curr_timer_val = v.unwrap(); }
                 node_req_num_ = node_rx.recv_many(&mut curr_node_req, (majority - 1) as usize) => node_req_num = node_req_num_,
-                client_req_num_ = client_rx.recv_many(&mut curr_client_req, 1) => client_req_num = client_req_num_
+                client_req_num_ = client_rx.recv_many(&mut curr_client_req, ctx.config.consensus_config.max_backlog_batch_size) => client_req_num = client_req_num_
             }
         } else {
             tokio::select! {
@@ -331,12 +336,14 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
                 let fork = ctx.state.fork.lock().await;
                 fork.last() + 1
             };
-            for (ms, _sender, chan) in &curr_client_req {
-                if let crate::consensus::proto::rpc::proto_payload::Message::ClientRequest(req) = ms
-                {
-                    tx.push(req.tx.clone());
-                    let mut lack_pend = ctx.client_ack_pending.lock().await;
-                    lack_pend.insert((block_n, tx.len() - 1), chan.clone());
+            {
+                let mut lack_pend = ctx.client_ack_pending.lock().await;
+                for (ms, _sender, chan) in &curr_client_req {
+                    if let crate::consensus::proto::rpc::proto_payload::Message::ClientRequest(req) = ms
+                    {
+                        tx.push(req.tx.clone());
+                        lack_pend.insert((block_n, tx.len() - 1), chan.clone());
+                    }
                 }
             }
 
@@ -362,7 +369,7 @@ pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result
 
                 match fork.push(entry) {
                     Ok(n) => {
-                        debug!("Client message sequenced at {}", n);
+                        debug!("Client message sequenced at {} {}", n, block_n);
                         if n % 1000 == 0{
                             let mut lpings = ctx.ping_counters.lock().unwrap();
                             lpings.insert(n, Instant::now());

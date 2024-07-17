@@ -126,7 +126,7 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>, a
         Ok(b) => b,
         Err(e) => {
             warn!("Parsing problem: {} ... Dropping connection", e.to_string());
-            debug!("Original message: {:?}", &m.0.as_slice()[0..m.1]);
+            debug!("Original message: {:?} {:?}", &m.0, &m.1);
             return Err(Error::new(ErrorKind::InvalidData, e));
         }
     };
