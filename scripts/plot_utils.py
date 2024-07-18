@@ -75,7 +75,7 @@ def process_latencies(points, ramp_up, ramp_down, latencies):
 Stats = namedtuple("Stats", [
     "mean_tput", "stdev_tput",
     "mean_tput_unbatched", "stdev_tput_unbatched",
-    "mean_latency", "median_latency", "p99_latency", "max_latency", "min_latency", 
+    "mean_latency", "median_latency", "p25_latency", "p75_latency", "p99_latency", "max_latency", "min_latency", 
     "stdev_latency"])
 
 def parse_log_dir(dir, repeats, num_clients, leader, ramp_up, ramp_down) -> Stats:
@@ -114,6 +114,8 @@ def parse_log_dir(dir, repeats, num_clients, leader, ramp_up, ramp_down) -> Stat
         stdev_tput_unbatched=stdev(tputs_unbatched),
         mean_latency=mean(latencies),
         median_latency=median(latencies),
+        p25_latency=quantiles(latencies, n=100)[24],
+        p75_latency=quantiles(latencies, n=100)[74],
         p99_latency=quantiles(latencies, n=100)[98],
         max_latency=max(latencies),
         min_latency=min(latencies),
@@ -135,13 +137,14 @@ def plot_tput_vs_latency(stats: Dict[int, Stats], name: str):
     mean_tputs = [p[1].mean_tput for p in points]
     stdev_tputs = [p[1].stdev_tput for p in points]
     median_latencies = [p[1].median_latency for p in points]
-    stdev_latencies = [p[1].stdev_latency for p in points]
+    yerr_max = [p[1].p75_latency - p[1].median_latency for p in points]
+    yerr_min = [p[1].median_latency - p[1].p25_latency for p in points]
 
     plt.plot(
         np.array(mean_tputs),
         np.array(median_latencies),
-        # yerr=np.array(stdev_latencies),
-        # xerr=np.array(stdev_tputs),
+        yerr=[yerr_min, yerr_max],
+        xerr=np.array(stdev_tputs),
     )
     plt.xlabel("Throughput (req/s)")
     plt.ylabel("Latency (us)")
@@ -157,15 +160,20 @@ def plot_tput_vs_latency_multi(stat_list: List[Dict[int, Stats]], legends: List[
 
         mean_tputs = [p[1].mean_tput for p in points]
         stdev_tputs = [p[1].stdev_tput for p in points]
-        median_latencies = [p[1].median_latency for p in points]
+        mean_latencies = [p[1].mean_latency for p in points]
         stdev_latencies = [p[1].stdev_latency for p in points]
+        yerr_max = [p[1].p75_latency - p[1].median_latency for p in points]
+        yerr_min = [p[1].median_latency - p[1].p25_latency for p in points]
 
         plt.errorbar(
             x=np.array(mean_tputs),
-            y=np.array(median_latencies),
-            yerr=np.array(stdev_latencies),
+            y=np.array(mean_latencies),
+            yerr=[yerr_min, yerr_max],
             xerr=np.array(stdev_tputs),
-            label=legends[i]
+            label=legends[i],
+            marker='o',
+            ecolor='r',
+            capsize=5
         )
     
     

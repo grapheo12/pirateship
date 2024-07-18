@@ -1,9 +1,8 @@
 use std::sync::{atomic::Ordering, Arc};
 
-use futures::future::Join;
 use handler::{consensus_rpc_handler, PinnedServerContext};
 use protocols::get_leader_str;
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinSet;
 
 use crate::{
     config::Config,
@@ -18,6 +17,7 @@ pub mod handler;
 pub mod leader_rotation;
 pub mod log;
 pub mod protocols;
+pub mod timer;
 
 pub mod proto {
     pub mod consensus {

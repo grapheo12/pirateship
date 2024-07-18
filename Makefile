@@ -2,6 +2,10 @@
 all:
 	CC=clang CXX=clang++ cargo build --release
 
+.PHONY: bench
+bench:
+	CC=clang CXX=clang++ cargo bench
+
 .PHONY: clean
 clean:
 	rm -f perf.data perf.data.old

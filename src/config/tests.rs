@@ -43,7 +43,9 @@ fn test_nodeconfig_serialize() {
         ],
         quorum_diversity_k: 3,
         stats_report_secs: 1,
-        max_backlog_batch_size: 1000
+        max_backlog_batch_size: 1000,
+        signature_max_delay_blocks: 128,
+        signature_max_delay_ms: 100
     };
 
     let config = Config {

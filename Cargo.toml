@@ -30,10 +30,21 @@ byteorder = "1.5.0"
 [build-dependencies]
 prost-build = { version = "0.12" }
 
+[dev-dependencies]
+criterion = { version = "0.4", features = ["html_reports"] }
+
+[[bench]]
+name = "sign_bench"
+harness = false
+
+[[bench]]
+name = "verify_bench"
+harness = false
+
 [features]
 round_robin_leader = []
-dummy_2pc = []
-raft = ["round_robin_leader"]
+lucky_raft = ["round_robin_leader"]
+signed_raft = ["round_robin_leader"]
 jolteon = ["round_robin_leader"]
 pirateship = ["round_robin_leader"]
-default = ["raft"]
+default = ["signed_raft"]

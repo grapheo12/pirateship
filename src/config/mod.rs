@@ -40,7 +40,9 @@ pub struct ConsensusConfig {
     pub node_list: Vec<String>, // This better be in the same order in all nodes.
     pub quorum_diversity_k: u64,
     pub stats_report_secs: u64,
-    pub max_backlog_batch_size: usize
+    pub max_backlog_batch_size: usize,
+    pub signature_max_delay_ms: u64,
+    pub signature_max_delay_blocks: u64
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -119,7 +121,9 @@ impl ClientConfig {
                 node_list: Vec::new(),
                 quorum_diversity_k: 0,
                 stats_report_secs: 1,
-                max_backlog_batch_size: 1
+                max_backlog_batch_size: 1,
+                signature_max_delay_blocks: 128,
+                signature_max_delay_ms: 100
             },
         }
     }
