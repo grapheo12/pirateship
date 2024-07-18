@@ -130,6 +130,13 @@ def parse_log_dir_with_total_clients(dir, repeats, num_clients, leader, ramp_up,
 
     return {total_clients: res}
 
+def parse_log_dir_with_sig_delay(dir, repeats, num_clients, leader, ramp_up, ramp_down) -> Dict[str, Stats]:
+    with open(f"{dir}/sig_sweep.txt") as f:
+        sig_delay = str(f.read().strip())
+    res = parse_log_dir(dir, repeats, num_clients, leader, ramp_up, ramp_down)
+
+    return {sig_delay: res}
+
 
 def plot_tput_vs_latency(stats: Dict[int, Stats], name: str):
     points = list(sorted(stats.items()))
@@ -140,7 +147,7 @@ def plot_tput_vs_latency(stats: Dict[int, Stats], name: str):
     yerr_max = [p[1].p75_latency - p[1].median_latency for p in points]
     yerr_min = [p[1].median_latency - p[1].p25_latency for p in points]
 
-    plt.plot(
+    plt.errorbar(
         np.array(mean_tputs),
         np.array(median_latencies),
         yerr=[yerr_min, yerr_max],
@@ -184,6 +191,16 @@ def plot_tput_vs_latency_multi(stat_list: List[Dict[int, Stats]], legends: List[
     plt.savefig(name)
 
 
+def plot_tput_bar_graph(stat_list: Dict[str, Stats], xlabel, name):
+    plt.bar(
+        list(stat_list.keys()),
+        [p.mean_tput for p in stat_list.values()]
+    )
+    plt.xlabel(xlabel)
+    plt.ylabel("Throughput (tx/s)")
+
+    plt.grid()
+    plt.savefig(name)
 
 
 @click.command()
