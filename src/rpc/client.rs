@@ -1,9 +1,9 @@
 use crate::{config::Config, crypto::KeyStore};
 use futures::{future::join_all, FutureExt};
 use log::{debug, info, warn};
-use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
+use rustls::{client::ResolvesClientCert, crypto::aws_lc_rs, pki_types, RootCertStore};
 use std::{
-    collections::{HashMap, HashSet}, fs::File, io::{BufReader, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::{Arc, RwLock}
+    collections::{HashMap, HashSet}, fs::File, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::{Arc, RwLock}
 };
 use tokio::{
     io::{split, AsyncReadExt, AsyncWriteExt, BufWriter},
@@ -36,14 +36,70 @@ impl<K> PinnedHashSet<K> {
 
 struct BufferedTlsStream {
     stream: BufWriter<TlsStream<TcpStream>>,
+    buffer: Vec<u8>,
+    offset: usize,
+    bound: usize
 }
 
 impl BufferedTlsStream {
     pub fn new(stream: TlsStream<TcpStream>) -> BufferedTlsStream {
         BufferedTlsStream {
             stream: BufWriter::new(stream),
+            buffer: vec![0u8; 4096],
+            bound: 0,
+            offset: 0
         }
     }
+
+    async fn read_next_bytes(&mut self, n: usize, v: &mut Vec<u8>) -> io::Result<()> {
+        let mut pos = 0;
+        let mut n = n;
+        let get_n = n;
+        while n > 0 {
+            if self.bound == self.offset {
+                // Need to fetch more data.
+                let read_n = self.stream.read(self.buffer.as_mut()).await?;
+                debug!("Fetched {} bytes, Need to fetch {} bytes, pos {}, Currently at: {}", read_n, get_n, pos, n);
+                self.bound = read_n;
+                self.offset = 0;
+            }
+
+            if self.bound - self.offset >= n {
+                // Copy in full
+                v[pos..][..n].copy_from_slice(&self.buffer[self.offset..self.offset+n]);
+                self.offset += n;
+                n = 0;
+            }else{
+                // Copy partial.
+                // We'll get the rest in the next iteration of the loop.
+                v[pos..][..self.bound - self.offset].copy_from_slice(&self.buffer[self.offset..self.bound]);
+                n -= self.bound - self.offset;
+                pos += self.bound - self.offset;
+                self.offset = self.bound;
+            }
+        }
+
+        Ok(())
+        
+
+
+    }
+
+    pub async fn get_next_frame(&mut self, buff: &mut Vec<u8>) -> io::Result<usize> {
+        let mut sz_vec = vec![0u8; 4];
+        self.read_next_bytes(4, &mut sz_vec).await?;
+        let mut sz_rdr = Cursor::new(sz_vec);
+        let sz = sz_rdr.read_u32().await.unwrap() as usize;
+        let len = buff.len();
+        if sz > len {
+            buff.reserve(sz - len);
+        }
+
+        self.read_next_bytes(sz, buff).await?;
+
+        Ok(sz)
+    }
+
 }
 
 impl Deref for BufferedTlsStream {
@@ -252,10 +308,12 @@ impl PinnedClient {
         let sock = Self::get_sock(client, name).await?;
         let len = data.len() as u32;
 
+        // These two calls will be buffered.
         Self::send_raw(client, name, &sock, SendDataType::SizeType(len)).await?;
         Self::send_raw(client, name, &sock, SendDataType::ByteType(data)).await?;
 
         {
+            // This finally sends the message.
             sock.0.lock().await.flush().await?;
         }
 
@@ -287,17 +345,17 @@ impl PinnedClient {
         let mut sz = 0;
         {
             let mut lsock = sock.0.lock().await;
-            lsock.flush().await?;
+            lsock.flush().await?;  // Need this flush; otherwise it is a deadlock.
 
-            sz = lsock.read_u32().await? as usize;
+            let mut resp_buf = vec![0u8; 256];
+            sz = lsock.get_next_frame(&mut resp_buf).await? as usize;
             if sz == 0 {
                 return Err(Error::new(
                     ErrorKind::InvalidData,
                     "socket probably closed!",
                 ));
             }
-            let mut resp_buf = vec![0u8; sz];
-            lsock.read_exact(&mut resp_buf).await?;
+            
             Ok(PinnedMessage::from(
                 resp_buf,
                 sz as usize,

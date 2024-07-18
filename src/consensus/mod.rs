@@ -57,6 +57,7 @@ impl ConsensusNode {
         let node1 = node.clone();
         let node2 = node.clone();
         let node3 = node.clone();
+        let node4 = node.clone();
         let mut js = JoinSet::new();
         js.spawn(async move {
             let _ = Server::<PinnedServerContext>::run(node1.server.clone(), node1.ctx.clone())
@@ -66,7 +67,10 @@ impl ConsensusNode {
             let _ = protocols::report_stats(&node2.ctx).await;
         });
         js.spawn(async move {
-            let _ = protocols::algorithm(node3.ctx.clone(), node3.client.clone()).await;
+            let _ = protocols::handle_node_messages(node3.ctx.clone(), node3.client.clone()).await;
+        });
+        js.spawn(async move {
+            let _ = protocols::handle_client_messages(node4.ctx.clone(), node4.client.clone()).await;
         });
 
         js

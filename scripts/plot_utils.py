@@ -160,11 +160,11 @@ def plot_tput_vs_latency_multi(stat_list: List[Dict[int, Stats]], legends: List[
         median_latencies = [p[1].median_latency for p in points]
         stdev_latencies = [p[1].stdev_latency for p in points]
 
-        plt.plot(
+        plt.errorbar(
             x=np.array(mean_tputs),
             y=np.array(median_latencies),
-            # yerr=np.array(stdev_latencies),
-            # xerr=np.array(stdev_tputs),
+            yerr=np.array(stdev_latencies),
+            xerr=np.array(stdev_tputs),
             label=legends[i]
         )
     

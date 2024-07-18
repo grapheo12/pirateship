@@ -41,11 +41,6 @@ impl Log {
 
     /// Returns last() on success.
     pub fn push(&mut self, entry: LogEntry) -> Result<u64, Error> {
-        for qc in &entry.block.qc {
-            if qc.n > self.last_qc && qc.n <= self.last() {
-                self.last_qc = qc.n
-            }
-        }
         if entry.block.n != self.last() + 1 {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
@@ -54,6 +49,11 @@ impl Log {
         }
         if !cmp_hash(&entry.block.parent, &self.last_hash()) {
             return Err(Error::new(ErrorKind::InvalidInput, "Hash link violation"));
+        }
+        for qc in &entry.block.qc {
+            if qc.n > self.last_qc && qc.n <= self.last() {
+                self.last_qc = qc.n
+            }
         }
         self.entries.push(entry);
         Ok(self.last())

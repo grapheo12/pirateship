@@ -259,7 +259,11 @@ async fn view_timer(tx: Sender<bool>, timeout: Duration) -> Result<(), Error> {
     }
 }
 
-pub async fn algorithm(ctx: PinnedServerContext, client: PinnedClient) -> Result<(), Error> {
+pub async fn handle_client_messages(ctx: PinnedServerContext, client: PinnedClient) -> Result<(), Error> {
+    Ok(())
+}
+
+pub async fn handle_node_messages(ctx: PinnedServerContext, client: PinnedClient) -> Result<(), Error> {
     let (timer_tx, mut timer_rx) = mpsc::channel(1);
     let timer_handle = tokio::spawn(async move {
         let _ = view_timer(timer_tx, Duration::from_secs(1)).await;

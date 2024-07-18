@@ -44,8 +44,9 @@ fn process_args() -> ClientConfig {
 async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -> io::Result<()> {    
     for i in 0..num_requests {
         let client_req = ProtoClientRequest {
-            tx: format!("Txaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:{}:{}", idx, i).into_bytes(),
-            sig: vec![0u8; SIGNATURE_LENGTH],
+            tx: format!("Tx:{}:{}", idx, i).into_bytes(),
+            // sig: vec![0u8; SIGNATURE_LENGTH],
+            sig: vec![0u8; 1]
         };
 
         let rpc_msg_body = ProtoPayload {
