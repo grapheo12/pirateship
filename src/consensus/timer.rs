@@ -55,11 +55,12 @@ impl ResettableTimer {
         });
     }
 
-    pub async fn wait(mut self: Pin<Box<Self>>) {
+    pub async fn wait(self: &mut Pin<Box<Self>>) -> bool {
         self.rx.recv().await;
+        true
     }
 
-    pub fn reset(self: Pin<Box<Self>>) {
+    pub fn reset(self: &Pin<Box<Self>>) {
         let _ = self.is_cancelled.compare_exchange(
             false,     // If it is currenty false
             true,        // Set it to true

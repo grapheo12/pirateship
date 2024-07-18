@@ -48,7 +48,7 @@ impl ConsensusNode {
         ConsensusNode {
             server: Arc::new(Server::new(config, consensus_rpc_handler, &key_store)),
             client: Client::new(config, &key_store).into(),
-            ctx: PinnedServerContext::new(config),
+            ctx: PinnedServerContext::new(config, &key_store),
         }
     }
 

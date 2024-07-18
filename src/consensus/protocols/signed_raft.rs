@@ -82,7 +82,13 @@ async fn process_node_request(
                             replication_votes: HashSet::new(),
                         };
                         entry.replication_votes.insert(get_leader_str(&ctx));
-                        if let Err(e) = fork.push(entry) {
+
+                        let res = if entry.has_signature() {
+                            fork.verify_and_push(entry, &ctx.keys, &get_leader_str(&ctx))
+                        }else{
+                            fork.push(entry)
+                        };
+                        if let Err(e) = res {
                             warn!("Error appending block: {}", e);
                             continue;
                         }
@@ -264,6 +270,8 @@ async fn view_timer(tx: Sender<bool>, timeout: Duration) -> Result<(), Error> {
 pub async fn handle_client_messages(ctx: PinnedServerContext, client: PinnedClient) -> Result<(), Error> {
     let mut client_rx = ctx.0.client_queue.1.lock().await;
     let mut curr_client_req = Vec::new();
+    let mut curr_client_req_num = 0;
+    let mut signature_timer_tick = false;
 
     let majority = get_majority_num(&ctx);
     let send_list = get_everyone_except_me(
@@ -274,11 +282,23 @@ pub async fn handle_client_messages(ctx: PinnedServerContext, client: PinnedClie
     // Signed block logic: Either this timer expires.
     // Or the number of blocks crosses signature_max_delay_blocks.
     // In the later case, reset the timer.
-    let signature_timer = ResettableTimer::new(
+    let mut signature_timer = ResettableTimer::new(
         Duration::from_millis(ctx.config.consensus_config.signature_max_delay_ms)
     );
 
-    while client_rx.recv_many(&mut curr_client_req, ctx.config.consensus_config.max_backlog_batch_size).await > 0 {
+    let mut pending_signatures = 0;
+
+    loop {
+        tokio::select! {
+            biased;
+            n_ = client_rx.recv_many(&mut curr_client_req, ctx.config.consensus_config.max_backlog_batch_size) => {
+                curr_client_req_num = n_;
+            },
+            tick = signature_timer.wait() => {
+                signature_timer_tick = tick;
+            }
+        }
+
         if !ctx.i_am_leader.load(Ordering::SeqCst) {
             // todo:: Change this to reply to client with the current leader.
             curr_client_req.clear();
@@ -291,7 +311,7 @@ pub async fn handle_client_messages(ctx: PinnedServerContext, client: PinnedClie
             let fork = ctx.state.fork.lock().await;
             fork.last() + 1
         };
-        {
+        if curr_client_req_num > 0 { // If I am here due to timeout, don't worry about adding txs.
             let mut lack_pend = ctx.client_ack_pending.lock().await;
             for (ms, _sender, chan) in &curr_client_req {
                 if let crate::consensus::proto::rpc::proto_payload::Message::ClientRequest(req) = ms
@@ -302,109 +322,123 @@ pub async fn handle_client_messages(ctx: PinnedServerContext, client: PinnedClie
             }
         }
 
-        if tx.len() > 0 {
-            let mut fork = ctx.state.fork.lock().await;
-            let block = ProtoBlock {
-                tx,
-                n: block_n,
-                parent: fork.last_hash(),
-                view: 1,
-                qc: Vec::new(),
-                sig: Some(Sig::NoSig(DefferedSignature {})),
-            };
+        pending_signatures += 1;
+        let should_sig = signature_timer_tick    // Either I am running this body because of signature timeout.
+            || (pending_signatures >= ctx.config.consensus_config.signature_max_delay_blocks);
+            // Or I actually got some transactions and I really need to sign
+        
+        let mut fork = ctx.state.fork.lock().await;
+        let block = ProtoBlock {
+            tx,
+            n: block_n,
+            parent: fork.last_hash(),
+            view: 1,
+            qc: Vec::new(),
+            sig: Some(Sig::NoSig(DefferedSignature {})),
+        };
 
-            let mut entry = LogEntry {
-                block,
-                replication_votes: HashSet::new(),
-            };
+        let mut entry = LogEntry {
+            block,
+            replication_votes: HashSet::new(),
+        };
 
-            entry
-                .replication_votes
-                .insert(ctx.config.net_config.name.clone());
+        entry
+            .replication_votes
+            .insert(ctx.config.net_config.name.clone());
 
-            match fork.push(entry) {
-                Ok(n) => {
-                    debug!("Client message sequenced at {} {}", n, block_n);
-                    if n % 1000 == 0{
-                        let mut lpings = ctx.ping_counters.lock().unwrap();
-                        lpings.insert(n, Instant::now());
-                    }
-                }
-                Err(e) => {
-                    warn!("Error processing client request: {}", e);
+        let res = match should_sig {
+            true => {
+                pending_signatures = 0;
+                signature_timer.reset();   
+                fork.push_and_sign(entry, &ctx.keys)
+            },
+            false => fork.push(entry),
+        };
+
+        match res {
+            Ok(n) => {
+                debug!("Client message sequenced at {} {}", n, block_n);
+                if n % 1000 == 0{
+                    let mut lpings = ctx.ping_counters.lock().unwrap();
+                    lpings.insert(n, Instant::now());
                 }
             }
+            Err(e) => {
+                warn!("Error processing client request: {}", e);
+            }
+        }
 
-            if majority == 1 {
-                let ci = ctx.state.commit_index.load(Ordering::SeqCst);
-                if ci < fork.last() {
-                    ctx.state.commit_index.store(fork.last(), Ordering::SeqCst);
-                    {
-                        let mut lack_pend = ctx.client_ack_pending.lock().await;
-                        let mut del_list = Vec::new();
-                        for ((bn, txn), chan) in lack_pend.iter() {
-                            if *bn <= fork.last() {
-                                let h = hash(&fork.get(*bn).unwrap().block.tx[*txn]);
-                                let msg = PinnedMessage::from(h, DIGEST_LENGTH, 
-                                    crate::rpc::SenderType::Anon);
-                                let _ = chan.send(msg).await;
-                                del_list.push((*bn, *txn));
-                            }
+        if majority == 1 {
+            let ci = ctx.state.commit_index.load(Ordering::SeqCst);
+            if ci < fork.last() {
+                ctx.state.commit_index.store(fork.last(), Ordering::SeqCst);
+                {
+                    let mut lack_pend = ctx.client_ack_pending.lock().await;
+                    let mut del_list = Vec::new();
+                    for ((bn, txn), chan) in lack_pend.iter() {
+                        if *bn <= fork.last() {
+                            let h = hash(&fork.get(*bn).unwrap().block.tx[*txn]);
+                            let msg = PinnedMessage::from(h, DIGEST_LENGTH, 
+                                crate::rpc::SenderType::Anon);
+                            let _ = chan.send(msg).await;
+                            del_list.push((*bn, *txn));
                         }
-                        for d in del_list {
-                            lack_pend.remove(&d);
-                        }
-
                     }
-                    ctx.state.num_committed_txs.fetch_add(
-                        fork.get(fork.last()).unwrap().block.tx.len(),
-                        Ordering::SeqCst);
-                    debug!(
-                        "New Commit Index: {}, Fork Digest: {} Tx: {} num_txs: {}",
-                        ctx.state.commit_index.load(Ordering::SeqCst),
-                        fork.last_hash().encode_hex::<String>(),
-                        String::from_utf8(
-                            fork.get(fork.last()).unwrap().block.tx[0].clone()
-                        )
-                        .unwrap(),
-                        ctx.state.num_committed_txs.load(Ordering::SeqCst)
-                    );
+                    for d in del_list {
+                        lack_pend.remove(&d);
+                    }
+
                 }
-            } else {
-                // accepting_client_requests = false; // Finish replicating this request before processing the next.
+                ctx.state.num_committed_txs.fetch_add(
+                    fork.get(fork.last()).unwrap().block.tx.len(),
+                    Ordering::SeqCst);
+                debug!(
+                    "New Commit Index: {}, Fork Digest: {} Tx: {} num_txs: {}",
+                    ctx.state.commit_index.load(Ordering::SeqCst),
+                    fork.last_hash().encode_hex::<String>(),
+                    String::from_utf8(
+                        fork.get(fork.last()).unwrap().block.tx[0].clone()
+                    )
+                    .unwrap(),
+                    ctx.state.num_committed_txs.load(Ordering::SeqCst)
+                );
+            }
+        } else {
+            // accepting_client_requests = false; // Finish replicating this request before processing the next.
 
-                let ae = ProtoAppendEntries {
-                    fork: Some(ProtoFork {
-                        blocks: vec![fork.get(fork.last()).unwrap().block.clone()],
-                    }),
-                    commit_index: ctx.state.commit_index.load(Ordering::SeqCst),
-                    byz_commit_index: 0,
-                    view: 1,
-                };
+            let ae = ProtoAppendEntries {
+                fork: Some(ProtoFork {
+                    blocks: vec![fork.get(fork.last()).unwrap().block.clone()],
+                }),
+                commit_index: ctx.state.commit_index.load(Ordering::SeqCst),
+                byz_commit_index: 0,
+                view: 1,
+            };
 
-                // ctx.last_fast_quorum_request.fetch_add(1, Ordering::SeqCst);
+            // ctx.last_fast_quorum_request.fetch_add(1, Ordering::SeqCst);
 
-                let rpc_msg_body = ProtoPayload {
-                    rpc_type: rpc::RpcType::FastQuorumRequest.into(),
-                    rpc_seq_num: ctx.last_fast_quorum_request.load(Ordering::SeqCst),
-                    message: Some(
-                        consensus::proto::rpc::proto_payload::Message::AppendEntries(ae),
-                    ),
-                };
+            let rpc_msg_body = ProtoPayload {
+                rpc_type: rpc::RpcType::FastQuorumRequest.into(),
+                rpc_seq_num: ctx.last_fast_quorum_request.load(Ordering::SeqCst),
+                message: Some(
+                    consensus::proto::rpc::proto_payload::Message::AppendEntries(ae),
+                ),
+            };
 
-                let mut buf = Vec::new();
-                if let Ok(_) = rpc_msg_body.encode(&mut buf) {
-                    let sz = buf.len();
-                    let bcast_msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
+            let mut buf = Vec::new();
+            if let Ok(_) = rpc_msg_body.encode(&mut buf) {
+                let sz = buf.len();
+                let bcast_msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
-                    let start_bcast = Instant::now();
-                    let _ = PinnedClient::broadcast(&client, &send_list, &bcast_msg).await;
-                    // info!("Broadcast time: {} us", start_bcast.elapsed().as_micros());
-                }
+                let start_bcast = Instant::now();
+                let _ = PinnedClient::broadcast(&client, &send_list, &bcast_msg).await;
+                // info!("Broadcast time: {} us", start_bcast.elapsed().as_micros());
             }
         }
 
         curr_client_req.clear();
+        curr_client_req_num = 0;
+        signature_timer_tick = false;
     }
 
     Ok(())

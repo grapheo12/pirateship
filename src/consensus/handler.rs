@@ -11,7 +11,7 @@ use prost::Message;
 use tokio::sync::{mpsc, Mutex};
 use std::time::Instant;
 
-use crate::{config::Config, rpc::{server::MsgAckChan, MessageRef}};
+use crate::{config::Config, crypto::KeyStore, rpc::{server::MsgAckChan, MessageRef}};
 
 use super::{
     leader_rotation::get_current_leader,
@@ -76,14 +76,15 @@ pub struct ServerContext {
         (u64, usize),         // (block_id, tx_id)
         MsgAckChan
     >>,
-    pub ping_counters: std::sync::Mutex<HashMap<u64, Instant>>
+    pub ping_counters: std::sync::Mutex<HashMap<u64, Instant>>,
+    pub keys: KeyStore
 }
 
 #[derive(Clone)]
 pub struct PinnedServerContext(pub Arc<Pin<Box<ServerContext>>>);
 
 impl PinnedServerContext {
-    pub fn new(cfg: &Config) -> PinnedServerContext {
+    pub fn new(cfg: &Config, keys: &KeyStore) -> PinnedServerContext {
         let node_ch = mpsc::unbounded_channel();
         let client_ch = mpsc::unbounded_channel();
         PinnedServerContext(Arc::new(Box::pin(ServerContext {
@@ -95,7 +96,8 @@ impl PinnedServerContext {
             client_queue: (client_ch.0, Mutex::new(client_ch.1)),
             state: ConsensusState::new(),
             client_ack_pending: Mutex::new(HashMap::new()),
-            ping_counters: std::sync::Mutex::new(HashMap::new())
+            ping_counters: std::sync::Mutex::new(HashMap::new()),
+            keys: keys.clone()
         })))
     }
 }
@@ -255,10 +257,6 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>, a
                     },
                 };
 
-                // Send ack for mempool inclusion.
-                let mut buf = Vec::new();
-                msg.0.encode(&mut buf);
-                let sig = crate::crypto::hash(&buf);  // @todo: This could be a signature. Bring the keystore here
                 return Ok(true);
             }
         }

@@ -1,18 +1,29 @@
-use std::{
-    collections::HashSet,
-    io::{Error, ErrorKind},
-};
+use std::{collections::HashSet, io::{Error, ErrorKind}};
 
+use ed25519_dalek::SIGNATURE_LENGTH;
 use prost::Message;
 
-use crate::crypto::{cmp_hash, hash, DIGEST_LENGTH};
+use crate::crypto::{cmp_hash, hash, KeyStore, DIGEST_LENGTH};
 
-use super::proto::consensus::ProtoBlock;
+use super::proto::consensus::{proto_block::Sig, DefferedSignature, ProtoBlock};
 
 #[derive(Clone, Debug)]
 pub struct LogEntry {
     pub block: ProtoBlock,
     pub replication_votes: HashSet<String>,
+}
+
+impl LogEntry {
+    pub fn has_signature(&self) -> bool {
+        if self.block.sig.is_none() {
+            return false;
+        }
+
+        match self.block.sig.clone().unwrap() {
+            Sig::NoSig(_) => false,
+            Sig::ProposerSig(_) => true,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -87,7 +98,7 @@ impl Log {
             return None;
         }
         
-        let mut buf = vec![0u8; DIGEST_LENGTH];
+        let mut buf = Vec::new();
         
         if n > 0 {
             self.entries[(n - 1) as usize]
@@ -103,4 +114,62 @@ impl Log {
     pub fn last_hash(&self) -> Vec<u8> {
         self.hash_at_n(self.last()).unwrap()
     }
+
+    /// entry is an unsigned.
+    /// push while entry.block.sig is set to empty.
+    /// Sign the last_hash(), then add the signature back.
+    /// Pretend this as an atomic operation.
+    /// If an entry needs to be signed, use this fn instead of push and manually signing.
+    pub fn push_and_sign(&mut self, entry: LogEntry, keys: &KeyStore) -> Result<u64, Error> {
+        let mut entry = entry;
+        entry.block.sig = Some(Sig::NoSig(DefferedSignature {}));
+        let n = self.push(entry)?;
+        let sig = keys.sign(&self.last_hash());
+        let len = self.entries.len();
+        self.entries[len - 1].block.sig = Some(Sig::ProposerSig(sig.to_vec()));
+
+        Ok(n)
+    }
+
+    /// This the counterpart of push_and_sign
+    /// Verify the signature the same way it was created.
+    /// Again, use this in favor of push, if block is signed.
+    pub fn verify_and_push(&mut self, entry: LogEntry, keys: &KeyStore, proposer: &String) -> Result<u64, Error> {
+        let mut entry = entry;
+        let sig_opt = entry.block.sig.clone();
+        if sig_opt.is_none() {
+            return Err(Error::new(ErrorKind::InvalidData, "No signature"));
+        }
+        let sig = match sig_opt.clone().unwrap() {
+            Sig::NoSig(_) => {
+                return Err(Error::new(ErrorKind::InvalidData, "Blank signature"));
+            },
+            Sig::ProposerSig(psig) => {
+                let _sig: &[u8; SIGNATURE_LENGTH] = match psig.as_slice().try_into() {
+                    Ok(_s) => _s,
+                    Err(_) => {
+                        return Err(Error::new(ErrorKind::InvalidData, "Malformed signature"));
+                    },
+                };
+                _sig.clone()
+            },  
+        };
+
+        // This is how the signature was created.
+        entry.block.sig = Some(Sig::NoSig(DefferedSignature {}));
+
+        // This is essentially the last_hash logic.
+        let mut buf = Vec::new();
+        entry.block.encode(&mut buf).unwrap();
+        let hash_without_sig = hash(&buf);
+
+        if !keys.verify(proposer, &sig, &hash_without_sig) {
+            return Err(Error::new(ErrorKind::InvalidData, "Signature not verified"));
+        }
+
+        entry.block.sig = sig_opt;
+
+        self.push(entry)     // Push the ORIGINAL entry
+    }
+
 }
