@@ -1,7 +1,8 @@
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
 
 use futures::future::Join;
 use handler::{consensus_rpc_handler, PinnedServerContext};
+use protocols::get_leader_str;
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::{
@@ -54,11 +55,15 @@ impl ConsensusNode {
     pub fn run(node: Arc<Self>) -> JoinSet<()> {
         // These are just increasing ref counts.
         // It is pointing to the same server instance.
+        node.ctx.state.view.store(1, Ordering::SeqCst);
+        if node.ctx.config.net_config.name == get_leader_str(&node.ctx) {
+            node.ctx.i_am_leader.store(true, Ordering::SeqCst);
+        }
+        let mut js = JoinSet::new();
         let node1 = node.clone();
         let node2 = node.clone();
         let node3 = node.clone();
         let node4 = node.clone();
-        let mut js = JoinSet::new();
         js.spawn(async move {
             let _ = Server::<PinnedServerContext>::run(node1.server.clone(), node1.ctx.clone())
                 .await;
