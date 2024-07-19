@@ -1,8 +1,9 @@
 from pprint import pprint
 import click
-from plot_utils import plot_tput_vs_latency_multi, parse_log_dir_with_sig_delay, plot_tput_vs_latency, plot_tput_bar_graph
+from plot_utils import parse_log_dir_with_sig_delay, plot_tput_bar_graph, plot_latency_cdf
 import os
 from dateutil.parser import isoparse
+import matplotlib.pyplot as plt
 
 @click.command()
 @click.option(
@@ -41,12 +42,7 @@ from dateutil.parser import isoparse
     "-o", "--out", required=True,
     type=click.STRING
 )
-@click.option(
-    "--legend", multiple=True,
-    default=[],
-    type=click.STRING
-)
-def main(path, start, end, repeats, num_clients, leader, ramp_up, ramp_down, out, legend):
+def main(path, start, end, repeats, num_clients, leader, ramp_up, ramp_down, out):
     dir = list(os.scandir(path))
     dir = [str(p.path) for p in dir if p.is_dir()]
     start = isoparse(start)
@@ -57,24 +53,40 @@ def main(path, start, end, repeats, num_clients, leader, ramp_up, ramp_down, out
 
     print(len(dir), start, end)
 
-    if len(legend) == 0:
-        stats = {}
-        for d in dir:
-            res = parse_log_dir_with_sig_delay(d, repeats, num_clients, leader, ramp_up, ramp_down)
-            stats.update(res)
+    stats = {}
+    for d in dir:
+        res = parse_log_dir_with_sig_delay(d, repeats, num_clients, leader, ramp_up, ramp_down)
+        stats.update(res)
 
-        pprint(stats)
-        plot_tput_bar_graph(stats, "(Delay blocks, Delay ms)", out)
+    uniq_blocks = set()
+    uniq_ms = set()
+    for k in stats.keys():
+        blk, ms = k.split()
+        uniq_blocks.add(int(blk))
+        uniq_ms.add(int(ms))
+
+    if len(uniq_blocks) == 1:
+        # Only retain the ms part
+        stats = {
+            f"{k.split()[1]} ms": v for k, v in stats.items()
+        }
+    elif len(uniq_ms) == 1:
+        # Only retain the blocks part
+        stats = {
+            f"{k.split()[0]} blks": v for k, v in stats.items()
+        }
     else:
-        assert len(dir) % len(legend) == 0
-        per_legend = len(dir) // len(legend)
-        stats = [{} for _ in range(len(legend))]
-        for i, d in enumerate(dir):
-            res = parse_log_dir_with_sig_delay(d, repeats, num_clients, leader, ramp_up, ramp_down)
-            stats[i // per_legend].update(res)
+        # Retain everything
+        stats = {
+            f"{k.split()[0]} blks, {k.split()[1]} ms": v for k, v in stats.items()
+        }
 
-        pprint(stats)
-        plot_tput_vs_latency_multi(stats, legend, out)
+
+
+    pprint(stats)
+    plot_latency_cdf(stats, f"latency_cdf_{out}")
+    plt.close()
+    plot_tput_bar_graph(stats, f"tput_{out}")
 
 
 if __name__ == "__main__":

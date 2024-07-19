@@ -6,9 +6,8 @@ from run_remote import run_nodes, run_clients, kill_clients, kill_nodes, copy_lo
 import time
 from fabric import Connection
 import datetime
-
-from plot_utils import parse_log_dir_with_sig_delay, plot_tput_vs_latency, plot_tput_bar_graph
-
+from plot_utils import parse_log_dir_with_sig_delay, plot_tput_bar_graph, plot_latency_cdf
+import matplotlib.pyplot as plt
 
 def run_with_given_signature_sweep(node_template, client_template, ip_list, identity_file, repeat, seconds, git_hash, delay_ms, delay_blocks):
     # This is almost same as run_remote.
@@ -190,7 +189,27 @@ def main(node_template, client_template, ip_list, identity_file, repeat, seconds
         stats.update(res)
 
     pprint(stats)
-    plot_tput_vs_latency(stats, f"{dirs[-1]}/plot.png")
+    # plot_tput_vs_latency(stats, f"{dirs[-1]}/plot.png")
+    if len(delay_block) == 1:
+        # Only retain the ms part
+        stats = {
+            f"{k.split()[1]} ms": v for k, v in stats.items()
+        }
+    elif len(delay_ms) == 1:
+        # Only retain the blocks part
+        stats = {
+            f"{k.split()[0]} blks": v for k, v in stats.items()
+        }
+    else:
+        # Retain everything
+        stats = {
+            f"{k.split()[0]} blks, {k.split()[1]} ms": v for k, v in stats.items()
+        }
+
+    plot_latency_cdf(stats, f"{dirs[-1]}/latency_cdf.png")
+    plt.close()
+    plot_tput_bar_graph(stats, f"{dirs[-1]}/tput.png")
+
 
     
 

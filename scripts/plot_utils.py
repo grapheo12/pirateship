@@ -60,6 +60,7 @@ def process_latencies(points, ramp_up, ramp_down, latencies):
         )
         for a in points
     ]
+    total_n = len(points)
 
     # Filter points, only keep if after ramp_up time and before ramp_down time
 
@@ -75,6 +76,7 @@ def process_latencies(points, ramp_up, ramp_down, latencies):
 Stats = namedtuple("Stats", [
     "mean_tput", "stdev_tput",
     "mean_tput_unbatched", "stdev_tput_unbatched",
+    "latency_prob_dist",
     "mean_latency", "median_latency", "p25_latency", "p75_latency", "p99_latency", "max_latency", "min_latency", 
     "stdev_latency"])
 
@@ -106,12 +108,17 @@ def parse_log_dir(dir, repeats, num_clients, leader, ramp_up, ramp_down) -> Stat
                 pass
         process_latencies(points, ramp_up, ramp_down, latencies)
 
-    
+    latency_prob_dist = np.array(latencies)
+    latency_prob_dist.sort()
+    # latency_prob_dist = latency_prob_dist.clip(latency_prob_dist[0], quantiles(latencies, n=100)[98])
+    p = 1. * np.arange(len(latency_prob_dist)) / (len(latency_prob_dist) - 1)
+
     return Stats(
         mean_tput=mean(tputs),
         stdev_tput=stdev(tputs),
         mean_tput_unbatched=mean(tputs_unbatched),
         stdev_tput_unbatched=stdev(tputs_unbatched),
+        latency_prob_dist=(latency_prob_dist, p),
         mean_latency=mean(latencies),
         median_latency=median(latencies),
         p25_latency=quantiles(latencies, n=100)[24],
@@ -191,15 +198,25 @@ def plot_tput_vs_latency_multi(stat_list: List[Dict[int, Stats]], legends: List[
     plt.savefig(name)
 
 
-def plot_tput_bar_graph(stat_list: Dict[str, Stats], xlabel, name):
+def plot_tput_bar_graph(stat_list: Dict[str, Stats], name):
     plt.bar(
         list(stat_list.keys()),
         [p.mean_tput for p in stat_list.values()]
     )
-    plt.xlabel(xlabel)
     plt.ylabel("Throughput (tx/s)")
 
     plt.grid()
+    plt.savefig(name)
+
+def plot_latency_cdf(stat_list: Dict[str, Stats], name):
+    max_p99 = max([v.p99_latency for v in stat_list.values()])
+    for k, v in stat_list.items():
+        plt.plot(v.latency_prob_dist[0], v.latency_prob_dist[1], label=k)
+    
+    plt.xlim(0, max_p99)
+    plt.grid()
+    plt.legend()
+
     plt.savefig(name)
 
 
