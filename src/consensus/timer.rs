@@ -24,7 +24,7 @@ impl ResettableTimer {
         tokio::spawn(async move {
             loop {
                 // This sleep has ms accuracy.
-                sleep(tout);
+                sleep(tout).await;
 
                 // Logic: Send the timeout signal, only if the is_cancelled is false.
                 // If is_cancelled, reset it to false and skip sending this signal.

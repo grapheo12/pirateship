@@ -1,4 +1,3 @@
-use ed25519_dalek::SIGNATURE_LENGTH;
 use hex::ToHex;
 use log::{debug, info};
 use pft::{

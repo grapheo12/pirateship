@@ -3,7 +3,7 @@ use std::{collections::HashSet, io::{Error, ErrorKind}};
 use ed25519_dalek::SIGNATURE_LENGTH;
 use prost::Message;
 
-use crate::crypto::{cmp_hash, hash, KeyStore, DIGEST_LENGTH};
+use crate::crypto::{cmp_hash, hash, KeyStore};
 
 use super::proto::consensus::{proto_block::Sig, DefferedSignature, ProtoBlock};
 

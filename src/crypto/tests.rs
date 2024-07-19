@@ -1,5 +1,3 @@
-use ed25519_dalek::SIGNATURE_LENGTH;
-
 use super::KeyStore;
 
 /// The tests needs a config directory.

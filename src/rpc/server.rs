@@ -1,9 +1,7 @@
 use std::{fs::File, io::{self, Cursor, Error}, path, sync::Arc};
 
 use crate::{config::Config, crypto::KeyStore, rpc::auth};
-use byteorder::BigEndian;
 use tokio::io::{BufWriter, ReadHalf};
-use hex::ToHex;
 use log::{debug, info, warn};
 use rustls::{
     crypto::aws_lc_rs,
@@ -11,7 +9,7 @@ use rustls::{
 };
 use rustls_pemfile::{certs, rsa_private_keys};
 use tokio::{
-    io::{split, AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, runtime::Handle, sync::{mpsc, oneshot}, time::Instant
+    io::{split, AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, sync::mpsc, time::Instant
 };
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
 
@@ -226,8 +224,6 @@ where
                     return Err(e);
                 },
             };
-            debug!("Size: {}", sz);
-            let chan_time = Instant::now();
 
             // This handler is called from within an async function, although it is not async itself.
             // This is because:

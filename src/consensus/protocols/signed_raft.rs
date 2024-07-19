@@ -204,7 +204,7 @@ async fn process_node_request(
                                         let h = hash(&fork.get(*bn).unwrap().block.tx[*txn]);
                                         let msg = PinnedMessage::from(h, DIGEST_LENGTH, 
                                             crate::rpc::SenderType::Anon);
-                                        let r = chan.send(msg).await;
+                                        let _r = chan.send(msg).await;
                                         del_list.push((*bn, *txn));
                                     }
                                 }
@@ -432,7 +432,7 @@ pub async fn handle_client_messages(ctx: PinnedServerContext, client: PinnedClie
 
                 let start_bcast = Instant::now();
                 let _ = PinnedClient::broadcast(&client, &send_list, &bcast_msg).await;
-                // info!("Broadcast time: {} us", start_bcast.elapsed().as_micros());
+                debug!("Broadcast time: {} us", start_bcast.elapsed().as_micros());
             }
         }
 
@@ -441,7 +441,6 @@ pub async fn handle_client_messages(ctx: PinnedServerContext, client: PinnedClie
         signature_timer_tick = false;
     }
 
-    Ok(())
 }
 
 pub async fn handle_node_messages(ctx: PinnedServerContext, client: PinnedClient) -> Result<(), Error> {

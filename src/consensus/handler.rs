@@ -5,8 +5,7 @@ use std::{
     }
 };
 
-use hex::ToHex;
-use log::{debug, info, warn};
+use log::{debug, warn};
 use prost::Message;
 use tokio::sync::{mpsc, Mutex};
 use std::time::Instant;
@@ -115,15 +114,14 @@ impl Deref for PinnedServerContext {
 /// The job is to filter old messages quickly and send them on the channel.
 /// The real consensus handler is a separate green thread that consumes these messages.
 pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>, ack_tx: MsgAckChan) -> Result<bool, Error> {
-    let mut sender = String::from("");
-    match m.2 {
+    let sender = match m.2 {
         crate::rpc::SenderType::Anon => {
             return Err(Error::new(ErrorKind::InvalidData, "unauthenticated message")); // Anonymous replies shouldn't come here
         }
         crate::rpc::SenderType::Auth(name) => {
-            sender = name.to_string();
+            name.to_string()
         }
-    }
+    };
     let body = match ProtoPayload::decode(&m.0.as_slice()[0..m.1]) {
         Ok(b) => b,
         Err(e) => {
