@@ -12,8 +12,7 @@ use crate::{
         log::LogEntry,
         proto::{
             consensus::{
-                proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork,
-                ProtoVote,
+                proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoSignatureArrayEntry, ProtoVote
             },
             rpc::{self, proto_payload, ProtoPayload},
         }, timer::ResettableTimer,
@@ -45,6 +44,11 @@ fn get_majority_num(ctx: &PinnedServerContext) -> u64 {
     n / 2 + 1
 }
 
+fn get_super_majority_num(ctx: &PinnedServerContext) -> u64 {
+    let n = ctx.config.consensus_config.node_list.len() as u64;
+    2 * (n / 3) + 1
+}
+
 fn get_everyone_except_me(my_name: &String, node_list: &Vec<String>) -> Vec<String> {
     node_list
         .iter()
@@ -59,6 +63,7 @@ async fn process_node_request(
     node_num: u64,
     // num_txs: &mut usize,
     majority: u64,
+    super_majority: u64,
     // accepting_client_requests: &mut bool,
     ms: &(proto_payload::Message, String),
     ms_batch_size: usize,
@@ -71,20 +76,26 @@ async fn process_node_request(
                     return Ok(());
                 }
                 // Only take action on this if I am follower
+                let mut vote_sigs = Vec::new();
 
                 if let Some(f) = &ae.fork {
                     let mut fork = ctx.state.fork.lock().await;
                     let last_n = fork.last();
                     for b in &f.blocks {
                         debug!("Inserting block {} with {} txs", b.n, b.tx.len());
-                        let mut entry = LogEntry {
-                            block: b.clone(),
-                            replication_votes: HashSet::new(),
-                        };
+                        let mut entry = LogEntry::new(b.clone());
                         entry.replication_votes.insert(get_leader_str(&ctx));
 
                         let res = if entry.has_signature() {
-                            fork.verify_and_push(entry, &ctx.keys, &get_leader_str(&ctx))
+                            let res = fork.verify_and_push(entry, &ctx.keys, &get_leader_str(&ctx));
+                            if let Ok(_n) = res {
+                                let vote_sig = fork.last_signature(&ctx.keys);
+                                vote_sigs.push(ProtoSignatureArrayEntry {
+                                    n: _n,
+                                    sig: vote_sig.into()
+                                });
+                            }
+                            res
                         }else{
                             fork.push(entry)
                         };
@@ -97,7 +108,7 @@ async fn process_node_request(
                     if fork.last() > last_n {
                         // New block has been added. Vote for the last one.
                         let vote = ProtoVote {
-                            sig_array: Vec::new(),
+                            sig_array: vote_sigs,
                             fork_digest: fork.last_hash(),
                             view: 1,
                             n: fork.last(),
@@ -163,9 +174,42 @@ async fn process_node_request(
         }
         crate::consensus::proto::rpc::proto_payload::Message::Vote(v) => {
             let mut fork = ctx.state.fork.lock().await;
+            if v.n > fork.last() {
+                return Ok(());          // todo: Actually this is an error.
+            }
             let chk_hsh = fork.hash_at_n(v.n);
             
-            if chk_hsh.is_some() && cmp_hash(&chk_hsh.unwrap(), &v.fork_digest) {
+            // Check all signatures in the vote.
+            let mut all_sig_verified = true;
+            'check_votes: for vote_sig in &v.sig_array {
+                if vote_sig.n > fork.last() {
+                    continue;
+                }
+
+                match fork.inc_qc_sig(_sender, &vote_sig.sig, vote_sig.n, &ctx.keys) {
+                    Err(e) => {
+                        warn!("Vote signature error: {}", e);
+                        all_sig_verified = false;
+                        break 'check_votes;
+                    }
+                    Ok(total_qc_votes) => {
+                        if total_qc_votes >= super_majority {
+                            if vote_sig.n % 1000 == 0 {
+                                info!("QC formed for index: {}", vote_sig.n);
+                            }else{
+                                debug!("QC formed for index: {}", vote_sig.n);
+                            }
+                            // Move from byz_qc_pending to next_qc_list and byz_commit_pending
+                        }
+                    },
+                    
+                }
+            }
+            
+            if chk_hsh.is_some()
+                && cmp_hash(&chk_hsh.unwrap(), &v.fork_digest)
+                && all_sig_verified
+            {
                 let _l = v.n;
                 let _f = ctx.state.commit_index.load(Ordering::SeqCst) + 1;
                 for i in _f..(_l + 1){
@@ -337,10 +381,7 @@ pub async fn handle_client_messages(ctx: PinnedServerContext, client: PinnedClie
             sig: Some(Sig::NoSig(DefferedSignature {})),
         };
 
-        let mut entry = LogEntry {
-            block,
-            replication_votes: HashSet::new(),
-        };
+        let mut entry = LogEntry::new(block);
 
         entry
             .replication_votes
@@ -451,6 +492,7 @@ pub async fn handle_node_messages(ctx: PinnedServerContext, client: PinnedClient
 
     let mut node_rx = ctx.0.node_queue.1.lock().await;
     let majority = get_majority_num(&ctx);
+    let super_majority = get_super_majority_num(&ctx);
     let send_list = get_everyone_except_me(
         &ctx.config.net_config.name,
         &ctx.config.consensus_config.node_list,
@@ -488,6 +530,7 @@ pub async fn handle_node_messages(ctx: PinnedServerContext, client: PinnedClient
                     get_node_num(&ctx),
                     // &mut num_txs,
                     majority.clone(),
+                    super_majority.clone(),
                     // &mut accepting_client_requests,
                     req,
                     node_req_num,

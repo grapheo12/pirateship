@@ -204,9 +204,10 @@ def plot_tput_bar_graph(stat_list: Dict[str, Stats], name):
         [p.mean_tput for p in stat_list.values()]
     )
     plt.ylabel("Throughput (tx/s)")
+    plt.xticks(rotation=45)
 
     plt.grid()
-    plt.savefig(name)
+    plt.savefig(name, bbox_inches='tight')
 
 def plot_latency_cdf(stat_list: Dict[str, Stats], name):
     max_p99 = max([v.p99_latency for v in stat_list.values()])

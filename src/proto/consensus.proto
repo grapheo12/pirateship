@@ -57,10 +57,7 @@ message ProtoNewLeaderOk {
 
 message ProtoSignatureArrayEntry {
     uint64 n = 1;                                // Sequence number
-    oneof sig {
-        DefferedSignature no_sig = 2;
-        bytes proposer_sig = 3;
-    }
+    bytes sig = 2;
 }
 
 message ProtoVote {

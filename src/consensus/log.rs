@@ -1,6 +1,6 @@
-use std::{collections::HashSet, io::{Error, ErrorKind}};
+use std::{collections::{HashMap, HashSet}, io::{Error, ErrorKind}};
 
-use ed25519_dalek::SIGNATURE_LENGTH;
+use ed25519_dalek::{Signature, SIGNATURE_LENGTH};
 use prost::Message;
 
 use crate::crypto::{cmp_hash, hash, KeyStore};
@@ -11,9 +11,18 @@ use super::proto::consensus::{proto_block::Sig, DefferedSignature, ProtoBlock};
 pub struct LogEntry {
     pub block: ProtoBlock,
     pub replication_votes: HashSet<String>,
+    pub qc_sigs: HashMap<String, [u8; SIGNATURE_LENGTH]>
 }
 
 impl LogEntry {
+    pub fn new(block: ProtoBlock) -> LogEntry {
+        LogEntry {
+            block,
+            replication_votes: HashSet::new(),
+            qc_sigs: HashMap::new()
+        }
+    }
+
     pub fn has_signature(&self) -> bool {
         if self.block.sig.is_none() {
             return false;
@@ -89,6 +98,29 @@ impl Log {
         let idx = n - 1; // Index is 1-based
         let entry = self.entries.get_mut(idx as usize).unwrap();
         entry.replication_votes.insert(name.clone());
+
+        Ok(entry.replication_votes.len() as u64)
+    }
+
+    /// Increase the signature for these entry.
+    pub fn inc_qc_sig(&mut self, name: &String, sig: &Vec<u8>, n: u64, keys: &KeyStore) -> Result<u64, Error> {
+        if n > self.last() {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Vote for missing block!",
+            ));
+        }
+        
+        if !self.verify_signature_at_n(n, sig, name, keys) {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Invalid signature",
+            ));
+        }
+
+        let idx = n - 1; // Index is 1-based
+        let entry = self.entries.get_mut(idx as usize).unwrap();
+        entry.qc_sigs.insert(name.clone(), sig.as_slice().try_into().unwrap());
 
         Ok(entry.replication_votes.len() as u64)
     }
@@ -171,5 +203,30 @@ impl Log {
 
         self.push(entry)     // Push the ORIGINAL entry
     }
+
+    /// Signature on the hash of the nth block.
+    /// This includes the proposer's signature, if it exists.
+    /// This will NOT be over the same hash that created proposer's signature.
+    pub fn signature_at_n(&self, n: u64, keys: &KeyStore) -> [u8; SIGNATURE_LENGTH] {
+        let hsh = self.hash_at_n(n).unwrap();
+        keys.sign(&hsh)
+    }
+
+    /// Signature on the hash of the last block.
+    /// This includes the proposer's signature, if it exists.
+    /// This will NOT be over the same hash that created proposer's signature.
+    pub fn last_signature(&self, keys: &KeyStore) -> [u8; SIGNATURE_LENGTH] {
+        self.signature_at_n(self.last(), keys)
+    }
+
+    pub fn verify_signature_at_n(&self, n: u64, sig: &Vec<u8>, name: &String, keys: &KeyStore) -> bool {
+        if sig.len() != SIGNATURE_LENGTH {
+            return false
+        }
+        
+        keys.verify(name, sig.as_slice().try_into().unwrap(), &self.hash_at_n(n).unwrap())
+    }
+
+
 
 }
