@@ -1,7 +1,8 @@
-use std::{fs::File, io::{self, Cursor, Error}, path, sync::Arc};
+use std::{collections::HashMap, fs::File, io::{self, Cursor, Error}, path, sync::Arc, time::{Duration, Instant}};
 
 use crate::{config::Config, crypto::KeyStore, rpc::auth};
-use tokio::io::{BufWriter, ReadHalf};
+use indexmap::IndexMap;
+use tokio::{io::{BufWriter, ReadHalf}, sync::{mpsc, oneshot}};
 use log::{debug, info, warn};
 use rustls::{
     crypto::aws_lc_rs,
@@ -9,18 +10,62 @@ use rustls::{
 };
 use rustls_pemfile::{certs, rsa_private_keys};
 use tokio::{
-    io::{split, AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, sync::mpsc, time::Instant
+    io::{split, AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}
 };
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
 
 use super::{MessageRef, PinnedMessage, SenderType};
 
-pub type MsgAckChan = mpsc::Sender<PinnedMessage>;
+#[derive(Clone, Debug)]
+pub struct LatencyProfile {
+    pub start_time: Instant,
+    pub should_print: bool,
+    pub prefix: String,
+    pub durations: IndexMap<String, Duration>
+}
+
+impl LatencyProfile {
+    pub fn new() -> LatencyProfile {
+        LatencyProfile {
+            start_time: Instant::now(),
+            durations: IndexMap::new(),
+            should_print: false,
+            prefix: String::from("")
+        }
+    }
+
+    pub fn register(&mut self, s: &str) {
+        let time = self.start_time.elapsed();
+        self.durations.insert(s.to_string(), time);
+    }
+
+    pub fn print(&self) {
+        if !self.should_print {
+            return;
+        }
+
+        let str_list: Vec<String> = self.durations.iter().map(|(k, v)| {
+            format!("{}: {} us", k, v.as_micros())
+        }).collect();
+
+        info!("{}, {}", self.prefix, str_list.join(", "));
+    }
+}
+
+
+pub type MsgAckChan = mpsc::UnboundedSender<(PinnedMessage, LatencyProfile)>;
+
+pub enum RespType {
+    Resp = 1,
+    NoResp = 2,
+    RespAndTrack = 3
+}
+
 pub type HandlerType<ServerContext> = fn(
     &ServerContext,             // State kept by upper layers
     MessageRef,                 // New message
     MsgAckChan) -> Result<      // Channel to receive response to message
-        bool,                   // Should the caller wait for a response from the channel?
+        RespType,                   // Should the caller wait for a response from the channel?
         Error>;                 // Should this connection be dropped?
 
 pub struct Server<ServerContext>
@@ -206,11 +251,11 @@ where
             };
             sender = SenderType::Auth(name);
         }
-        let (mut rx, mut _tx) = split(stream);
+        let (rx, mut _tx) = split(stream);
         let mut read_buf = vec![0u8; _server.config.rpc_config.recv_buffer_size as usize];
-        let (ack_tx, mut ack_rx) = mpsc::channel(1);
         let mut tx_buf = BufWriter::new(_tx);
         let mut rx_buf = FrameReader::new(rx);
+        let (ack_tx, mut ack_rx) = mpsc::unbounded_channel();
         loop {
             // Message format: Size(u32) | Message
             // Message size capped at 4GiB.
@@ -224,7 +269,7 @@ where
                     return Err(e);
                 },
             };
-
+            
             // This handler is called from within an async function, although it is not async itself.
             // This is because:
             // 1. I am not nearly good enough in Rust to store an async function pointer in the underlying Server struct
@@ -235,15 +280,28 @@ where
                 break;
             }
 
-            if let Ok(true) = resp {
+            if let Ok(RespType::Resp) = resp {            
                 debug!("Waiting for response!");
                 let mref = ack_rx.recv().await.unwrap();
-                let mref = mref.as_ref();
+                let mref = mref.0.as_ref();
                 tx_buf.write_u32(mref.1 as u32).await?;
                 tx_buf.write_all(&mref.0.split_at(mref.1).0).await?;
                 tx_buf.flush().await?;
 
+            }
 
+            if let Ok(RespType::RespAndTrack) = resp {            
+                debug!("Waiting for response!");
+                let (mref, mut profile) = ack_rx.recv().await.unwrap();
+                profile.register("Ack Received");
+                let mref = mref.as_ref();
+                tx_buf.write_u32(mref.1 as u32).await?;
+                tx_buf.write_all(&mref.0[..mref.1]).await?;
+                tx_buf.flush().await?;
+
+
+                profile.register("Ack sent");
+                profile.print();
             }
         }
 

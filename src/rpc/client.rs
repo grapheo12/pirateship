@@ -1,22 +1,22 @@
 use crate::{config::Config, crypto::KeyStore};
 use futures::future::join_all;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use std::{
     collections::{HashMap, HashSet}, fs::File, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::{Arc, RwLock}
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufWriter},
+    io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter},
     net::TcpStream,
     sync::{
-        mpsc::{self, Sender},
+        mpsc::{self, Sender, UnboundedSender},
         Mutex,
     },
-    time::Instant,
 };
+use std::time::Instant;
 use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
 
-use super::{auth, MessageRef, PinnedMessage};
+use super::{auth, server::LatencyProfile, MessageRef, PinnedMessage};
 
 #[derive(Clone)]
 pub struct PinnedHashMap<K, V>(Pin<Box<Arc<RwLock<HashMap<K, V>>>>>);
@@ -129,7 +129,7 @@ pub struct Client {
     pub config: Config,
     pub tls_ca_root_cert: RootCertStore,
     pub sock_map: PinnedHashMap<String, PinnedTlsStream>,
-    pub chan_map: PinnedHashMap<String, Sender<PinnedMessage>>,
+    pub chan_map: PinnedHashMap<String, UnboundedSender<(PinnedMessage, LatencyProfile)>>,
     pub worker_ready: PinnedHashSet<String>,
     pub key_store: KeyStore,
     do_auth: bool,
@@ -401,6 +401,7 @@ impl PinnedClient {
         client: &PinnedClient,
         names: &Vec<String>,
         data: &PinnedMessage,
+        profile: &mut LatencyProfile
     ) -> Result<(), Error> {
         let mut need_to_spawn_workers = Vec::new();
         for name in names {
@@ -411,7 +412,7 @@ impl PinnedClient {
         }
 
         for name in &need_to_spawn_workers {
-            let (tx, mut rx) = mpsc::channel(client.0.config.rpc_config.channel_depth as usize);
+            let (tx, mut rx) = mpsc::unbounded_channel(); // (client.0.config.rpc_config.channel_depth as usize);
             let mut lchans = client.0.chan_map.0.write().unwrap();
             lchans.insert(name.clone(), tx);
 
@@ -426,14 +427,49 @@ impl PinnedClient {
                 // Main loop: Fetch data from channel
                 // Do reliable send
                 // If reliable send fails, die.
-                while let Some(msg) = rx.recv().await {
-                    let msg_ref = msg.as_ref();
-                    match PinnedClient::reliable_send(&_client, &_name, msg_ref).await {
-                        Err(e) => {
+
+                let mut msgs = Vec::new();
+                let c = _client.clone();
+                let sock = Self::get_sock(&c, &_name).await.unwrap();
+                while rx.recv_many(&mut msgs, 10).await > 0 {
+                    let mut should_print_flush_time = false;
+                    let mut combined_prefix = String::from("");
+                    for (msg, profile) in &mut msgs {
+                        // let instant = msg.1;
+                        profile.register("Broadcast chan wait");
+                        let msg_ref = msg.as_ref();
+
+                        let len = msg_ref.len() as u32;
+                        if let Err(e) = Self::send_raw(&c, &_name, &sock, SendDataType::SizeType(len)).await {
                             warn!("Broadcast worker for {} dying: {}", _name, e);
+                            break;
                         }
-                        _ => {}
+                        if let Err(e) = Self::send_raw(&c, &_name, &sock, SendDataType::ByteType(msg_ref)).await {
+                            warn!("Broadcast worker for {} dying: {}", _name, e);
+                            break;
+                        }
+
+                        profile.register("Broadcast send raw");
+
+                        profile.prefix += &String::from(format!(" to {} ", _name));
+                        if profile.should_print {
+                            should_print_flush_time = true;
+                            combined_prefix += &profile.prefix.clone();
+                        }
+
+                        profile.print();
+
                     }
+                    
+                    let flush_time = Instant::now();
+                    let _ = sock.0.lock().await.flush().await;
+
+                    if should_print_flush_time {
+                        info!("[{}] Flush time: {} us", combined_prefix, flush_time.elapsed().as_micros());
+                    }
+                    
+                    
+                    msgs.clear();
                 }
 
                 // Deregister as ready.
@@ -445,18 +481,21 @@ impl PinnedClient {
         }
 
         // At this point, all name in names have a dedicated broadcast worker running.
-        let mut chans = Vec::new();
+        // let mut chans = Vec::new();
         {
             let lchans = client.0.chan_map.0.read().unwrap();
             for name in names {
                 let chan = lchans.get(name).unwrap();
-                chans.push(chan.clone());
+                // chans.push(chan.clone());
+                if let Err(e) = chan.send((data.clone(), profile.clone())) {
+                    warn!("Broadcast error: {}", e);
+                }
             }
         }
 
-        let bcast_futs = chans.iter().map(|c| c.send(data.clone()));
+        // let _bcast_res = chans.iter().map(|c| c.send((data.clone(), Some(Instant::now()))));
 
-        join_all(bcast_futs).await;
+        // join_all(bcast_futs).await;
 
         Ok(())
     }

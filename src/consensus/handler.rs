@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet}, io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
-    }
+    }, time::Duration
 };
 
 use log::{debug, warn};
@@ -10,7 +10,7 @@ use prost::Message;
 use tokio::sync::{mpsc, Mutex};
 use std::time::Instant;
 
-use crate::{config::Config, crypto::KeyStore, rpc::{server::MsgAckChan, MessageRef}};
+use crate::{config::Config, crypto::KeyStore, rpc::{server::{LatencyProfile, MsgAckChan, RespType}, MessageRef}};
 
 use super::{
     leader_rotation::get_current_leader,
@@ -49,8 +49,11 @@ impl ConsensusState {
         }
     }
 }
-pub type ForwardedMessage = (rpc::proto_payload::Message, String);
-pub type ForwardedMessageWithAckChan = (rpc::proto_payload::Message, String, MsgAckChan);
+
+
+
+pub type ForwardedMessage = (rpc::proto_payload::Message, String, LatencyProfile);
+pub type ForwardedMessageWithAckChan = (rpc::proto_payload::Message, String, MsgAckChan, LatencyProfile);
 
 /// Keeps track of the rpc sequence numbers ONLY when I am the leader.
 /// For fast quorum replies: if seq_num < last_fast_quorum_request, drop message.
@@ -73,7 +76,7 @@ pub struct ServerContext {
     pub state: ConsensusState,
     pub client_ack_pending: Mutex<HashMap<
         (u64, usize),         // (block_id, tx_id)
-        MsgAckChan
+        (MsgAckChan, LatencyProfile)
     >>,
     pub ping_counters: std::sync::Mutex<HashMap<u64, Instant>>,
     pub keys: KeyStore
@@ -113,7 +116,8 @@ impl Deref for PinnedServerContext {
 /// No blocking and/or locking allowed.
 /// The job is to filter old messages quickly and send them on the channel.
 /// The real consensus handler is a separate green thread that consumes these messages.
-pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>, ack_tx: MsgAckChan) -> Result<bool, Error> {
+pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>, ack_tx: MsgAckChan) -> Result<RespType, Error> {
+    let mut profile = LatencyProfile::new();
     let sender = match m.2 {
         crate::rpc::SenderType::Anon => {
             return Err(Error::new(ErrorKind::InvalidData, "unauthenticated message")); // Anonymous replies shouldn't come here
@@ -135,7 +139,7 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>, a
         Some(m) => m,
         None => {
             warn!("Nil message");
-            return Ok(false);
+            return Ok(RespType::NoResp);
         }
     };
 
@@ -143,12 +147,12 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>, a
         match &msg {
             rpc::proto_payload::Message::ViewChange(_msg) => {
                 if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return Ok(false); // Old view message
+                    return Ok(RespType::NoResp); // Old view message
                 }
             }
             rpc::proto_payload::Message::AppendEntries(_msg) => {
                 if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return Ok(false); // Old view message
+                    return Ok(RespType::NoResp); // Old view message
                 }
 
                 match body.rpc_type() {
@@ -169,26 +173,26 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>, a
                         _msg.view,
                     )]
                 {
-                    return Ok(false); // This leader is not supposed to send message with this view.
+                    return Ok(RespType::NoResp); // This leader is not supposed to send message with this view.
                 }
             }
             rpc::proto_payload::Message::NewLeader(_msg) => {
                 if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return Ok(false); // Old view message
+                    return Ok(RespType::NoResp); // Old view message
                 }
             }
             rpc::proto_payload::Message::NewLeaderOk(_) => {
                 // I am not leader, these messages shouldn't appear to me now.
-                return Ok(false);
+                return Ok(RespType::NoResp);
             }
             rpc::proto_payload::Message::Vote(_) => {
                 // I am not leader, these messages shouldn't appear to me now.
-                return Ok(false);
+                return Ok(RespType::NoResp);
             }
             rpc::proto_payload::Message::ClientRequest(_) => {
-                let msg = (body.message.unwrap(), sender, ack_tx.clone());
+                let msg = (body.message.unwrap(), sender, ack_tx, profile);
 
-                match ctx.client_queue.0.send(msg.clone()) {
+                match ctx.client_queue.0.send(msg) {
                     // Does this make a double copy?
                     Ok(_) => {}
                     Err(e) => match e {
@@ -199,7 +203,7 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>, a
                 };
 
                 // Wait for ack
-                return Ok(true);
+                return Ok(RespType::Resp);
             }
         }
     } else {
@@ -209,43 +213,44 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>, a
                 < ctx.last_diverse_quorum_request.load(Ordering::Relaxed)
                     - ctx.config.consensus_config.quorum_diversity_k
         {
-            return Ok(false); // Old message
+            return Ok(RespType::NoResp); // Old message
         }
 
         if body.rpc_type() == rpc::RpcType::FastQuorumReply
             && body.rpc_seq_num < ctx.last_fast_quorum_request.load(Ordering::Relaxed)
         {
-            return Ok(false); // Old message
+            return Ok(RespType::NoResp); // Old message
         }
 
         match &msg {
             rpc::proto_payload::Message::ViewChange(_msg) => {
                 if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return Ok(false); // Old view message
+                    return Ok(RespType::NoResp); // Old view message
                 }
             }
             rpc::proto_payload::Message::AppendEntries(_) => {
-                return Ok(false); // I will not respond to other's AppendEntries while I am leader.
+                return Ok(RespType::NoResp); // I will not respond to other's AppendEntries while I am leader.
             }
             rpc::proto_payload::Message::NewLeader(_msg) => {
                 if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return Ok(false); // Old view message
+                    return Ok(RespType::NoResp); // Old view message
                 }
             }
             rpc::proto_payload::Message::NewLeaderOk(_msg) => {
                 if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return Ok(false); // Old view message
+                    return Ok(RespType::NoResp); // Old view message
                 }
             }
             rpc::proto_payload::Message::Vote(_msg) => {
                 if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return Ok(false); // Old view message
+                    return Ok(RespType::NoResp); // Old view message
                 }
             }
             rpc::proto_payload::Message::ClientRequest(_) => {
-                let msg = (body.message.unwrap(), sender, ack_tx.clone());
+                let msg = (body.message.unwrap(), sender, ack_tx, profile);
 
-                match ctx.client_queue.0.send(msg.clone()) {
+
+                match ctx.client_queue.0.send(msg) {
                     // Does this make a double copy?
                     Ok(_) => {}
                     Err(e) => match e {
@@ -255,14 +260,14 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>, a
                     },
                 };
 
-                return Ok(true);
+                return Ok(RespType::RespAndTrack);
             }
         }
     }
 
     // If code reaches here, it should be processed by the consensus algorithm.
     // Can be used for load shedding here.
-    let msg = (body.message.unwrap(), sender);
+    let msg = (body.message.unwrap(), sender, profile);
 
     match ctx.node_queue.0.send(msg.clone()) {
         // Does this make a double copy?
@@ -274,5 +279,5 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>, a
         },
     };
 
-    Ok(false)
+    Ok(RespType::NoResp)
 }

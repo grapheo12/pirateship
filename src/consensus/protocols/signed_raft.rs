@@ -1,4 +1,5 @@
-use std::{collections::HashSet, io::Error, sync::atomic::Ordering, time::{Duration, Instant}};
+use std::{collections::HashSet, fmt::format, io::Error, sync::atomic::Ordering, time::{Duration, Instant}};
+use futures::SinkExt;
 use hex::ToHex;
 use log::{debug, info, warn};
 use prost::Message;
@@ -7,18 +8,17 @@ use tokio::{sync::mpsc::{self, Sender}, time::sleep};
 use crate::{
     consensus::{
         self,
-        handler::PinnedServerContext,
+        handler::{ForwardedMessage, PinnedServerContext},
         leader_rotation::get_current_leader,
         log::LogEntry,
         proto::{
-            consensus::{
+            client::ProtoClientReply, consensus::{
                 proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoSignatureArrayEntry, ProtoVote
-            },
-            rpc::{self, proto_payload, ProtoPayload},
+            }, rpc::{self, proto_payload, ProtoPayload}
         }, timer::ResettableTimer,
     },
     crypto::{cmp_hash, hash, DIGEST_LENGTH},
-    rpc::{client::PinnedClient, MessageRef, PinnedMessage},
+    rpc::{client::PinnedClient, server::LatencyProfile, MessageRef, PinnedMessage},
 };
 
 pub fn get_leader_str(ctx: &PinnedServerContext) -> String {
@@ -65,12 +65,14 @@ async fn process_node_request(
     majority: u64,
     super_majority: u64,
     // accepting_client_requests: &mut bool,
-    ms: &(proto_payload::Message, String),
+    ms: &mut ForwardedMessage,
     ms_batch_size: usize,
 ) -> Result<(), Error> {
-    let (msg, _sender) = ms;
+    let (msg, sender, profile) = ms;
+    let _sender = sender.clone();
     match &msg {
         crate::consensus::proto::rpc::proto_payload::Message::AppendEntries(ae) => {
+            profile.register("AE chan wait");
             if !ctx.i_am_leader.load(Ordering::SeqCst) {
                 if !_sender.eq(&get_leader_str(&ctx)) {
                     return Ok(());
@@ -79,39 +81,47 @@ async fn process_node_request(
                 let mut vote_sigs = Vec::new();
 
                 if let Some(f) = &ae.fork {
-                    let mut fork = ctx.state.fork.lock().await;
-                    let last_n = fork.last();
-                    for b in &f.blocks {
-                        debug!("Inserting block {} with {} txs", b.n, b.tx.len());
-                        let mut entry = LogEntry::new(b.clone());
-                        entry.replication_votes.insert(get_leader_str(&ctx));
+                    let (last_n, updated_last_n, digest) = {
 
-                        let res = if entry.has_signature() {
-                            let res = fork.verify_and_push(entry, &ctx.keys, &get_leader_str(&ctx));
-                            if let Ok(_n) = res {
-                                let vote_sig = fork.last_signature(&ctx.keys);
-                                vote_sigs.push(ProtoSignatureArrayEntry {
-                                    n: _n,
-                                    sig: vote_sig.into()
-                                });
+                        let mut fork = ctx.state.fork.lock().await;
+                        let last_n = fork.last();
+                        for b in &f.blocks {
+                            debug!("Inserting block {} with {} txs", b.n, b.tx.len());
+                            let mut entry = LogEntry::new(b.clone());
+                            entry.replication_votes.insert(get_leader_str(&ctx));
+    
+                            let res = if entry.has_signature() {
+                                let res = fork.verify_and_push(entry, &ctx.keys, &get_leader_str(&ctx));
+                                if let Ok(_n) = res {
+                                    let vote_sig = fork.last_signature(&ctx.keys);
+                                    vote_sigs.push(ProtoSignatureArrayEntry {
+                                        n: _n,
+                                        sig: vote_sig.into()
+                                    });
+                                }
+                                res
+                            }else{
+                                fork.push(entry)
+                            };
+                            if let Err(e) = res {
+                                warn!("Error appending block: {}", e);
+                                continue;
                             }
-                            res
-                        }else{
-                            fork.push(entry)
-                        };
-                        if let Err(e) = res {
-                            warn!("Error appending block: {}", e);
-                            continue;
+                            debug!("Pushing complete!");
                         }
-                        debug!("Pushing complete!");
-                    }
-                    if fork.last() > last_n {
+                        let updated_last_n = fork.last();
+
+                        (last_n, updated_last_n, fork.last_hash())
+                    };
+                    profile.register("Fork push");
+
+                    if updated_last_n > last_n {
                         // New block has been added. Vote for the last one.
                         let vote = ProtoVote {
                             sig_array: vote_sigs,
-                            fork_digest: fork.last_hash(),
+                            fork_digest: digest,
                             view: 1,
-                            n: fork.last(),
+                            n: updated_last_n,
                         };
                         debug!("Voted for {}", vote.n);
 
@@ -123,12 +133,28 @@ async fn process_node_request(
                             )),
                         };
 
+                        profile.register("Prepare vote");
+
                         let mut buf = Vec::new();
                         if let Ok(_) = rpc_msg_body.encode(&mut buf) {
-                            let reply = MessageRef(&buf, buf.len(), &crate::rpc::SenderType::Anon);
-                            let _ = PinnedClient::reliable_send(&client, &_sender, reply).await;
+                            // let reply = MessageRef(&buf, buf.len(), &crate::rpc::SenderType::Anon);
+                            let sz = buf.len();
+                            let reply = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
+                            let mut profile = LatencyProfile::new();
+                            if updated_last_n % 1000 == 0 {
+                                profile.should_print = true;
+                                profile.prefix = String::from(format!("Vote for block {}", updated_last_n));
+                            }
+                            let _ = PinnedClient::broadcast(&client, &vec![_sender.clone()], &reply, &mut profile).await;
                         }
                         debug!("Sent vote");
+                        profile.register("Sent vote");
+                        
+                        if updated_last_n % 1000 == 0 {
+                            profile.should_print = true;
+                            profile.prefix = String::from(format!("Block: {}", updated_last_n));
+                            profile.print();
+                        }
                     }
                 }
 
@@ -145,12 +171,29 @@ async fn process_node_request(
                     {
                         let mut lack_pend = ctx.client_ack_pending.lock().await;
                         let mut del_list = Vec::new();
-                        for ((bn, txn), chan) in lack_pend.iter() {
+                        for ((bn, txn), mut chan) in lack_pend.iter() {
                             if *bn <= ae.commit_index {
                                 let h = hash(&fork.get(*bn).unwrap().block.tx[*txn]);
-                                let msg = PinnedMessage::from(h, DIGEST_LENGTH, 
+                                
+                                let response = ProtoClientReply {
+                                    req_digest: h,
+                                    block_n: (*bn) as u64,
+                                    tx_n: (*txn) as u64
+                                };
+
+                                let v = response.encode_to_vec();
+                                let vlen = v.len();
+                                
+                                let msg = PinnedMessage::from(v, vlen, 
                                     crate::rpc::SenderType::Anon);
-                                let _ = chan.send(msg).await;
+
+                                let mut profile = chan.1.clone();
+                                profile.register("Init Sending Client Response");
+                                if *bn % 1000 == 0 {
+                                    profile.should_print = true;
+                                    profile.prefix = String::from(format!("Block: {}, Txn: {}", *bn, *txn));
+                                }
+                                let _ = chan.0.send((msg, profile));
                                 del_list.push((*bn, *txn));
                             }
                         }
@@ -173,6 +216,7 @@ async fn process_node_request(
             }
         }
         crate::consensus::proto::rpc::proto_payload::Message::Vote(v) => {
+            profile.register("Vote chan wait");
             let mut fork = ctx.state.fork.lock().await;
             if v.n > fork.last() {
                 return Ok(());          // todo: Actually this is an error.
@@ -186,7 +230,7 @@ async fn process_node_request(
                     continue;
                 }
 
-                match fork.inc_qc_sig(_sender, &vote_sig.sig, vote_sig.n, &ctx.keys) {
+                match fork.inc_qc_sig(&_sender, &vote_sig.sig, vote_sig.n, &ctx.keys) {
                     Err(e) => {
                         warn!("Vote signature error: {}", e);
                         all_sig_verified = false;
@@ -205,6 +249,13 @@ async fn process_node_request(
                     
                 }
             }
+
+            profile.register("Vote signature checks");
+            if v.n % 1000 == 0 {
+                profile.should_print = true;
+                profile.prefix = String::from(format!("Vote for Block {} from {}", v.n, _sender));
+                profile.print();
+            }
             
             if chk_hsh.is_some()
                 && cmp_hash(&chk_hsh.unwrap(), &v.fork_digest)
@@ -213,7 +264,7 @@ async fn process_node_request(
                 let _l = v.n;
                 let _f = ctx.state.commit_index.load(Ordering::SeqCst) + 1;
                 for i in _f..(_l + 1){
-                    let total_votes = fork.inc_replication_vote(_sender, i).unwrap();
+                    let total_votes = fork.inc_replication_vote(&_sender, i).unwrap();
                     if total_votes >= majority {
                         let ci = ctx.state.commit_index.load(Ordering::SeqCst);
                         if ci < v.n && v.n <= fork.last()
@@ -233,9 +284,9 @@ async fn process_node_request(
     
                             // *accepting_client_requests = true;
                             ctx.last_fast_quorum_request.fetch_add(1, Ordering::SeqCst);
-                            if v.n % 1000 == 0 {
+                            if i % 1000 == 0 {
                                 let mut lpings = ctx.ping_counters.lock().unwrap();
-                                if let Some(start) = lpings.remove(&v.n){
+                                if let Some(start) = lpings.remove(&i){
                                     info!("Fork index: {} Vote quorum latency: {} us", v.n, start.elapsed().as_micros())
                                 }
                             }
@@ -245,10 +296,31 @@ async fn process_node_request(
                                 let mut del_list = Vec::new();
                                 for ((bn, txn), chan) in lack_pend.iter() {
                                     if *bn <= i {
+                                        let hash_time = Instant::now();
                                         let h = hash(&fork.get(*bn).unwrap().block.tx[*txn]);
-                                        let msg = PinnedMessage::from(h, DIGEST_LENGTH, 
+                                        if *bn % 1000  == 0 {
+                                            info!("Hash time: {} us", hash_time.elapsed().as_micros());
+                                        }
+                                        let response = ProtoClientReply {
+                                            req_digest: h,
+                                            block_n: (*bn) as u64,
+                                            tx_n: (*txn) as u64
+                                        };
+
+                                        let v = response.encode_to_vec();
+                                        let vlen = v.len();
+                                        let msg = PinnedMessage::from(v, vlen, 
                                             crate::rpc::SenderType::Anon);
-                                        let _r = chan.send(msg).await;
+
+                                        let mut profile = chan.1.clone();
+                                        profile.register("Init Sending Client Response");
+                                        if *bn % 1000 == 0 {
+                                            profile.should_print = true;
+                                            profile.prefix = String::from(format!("Block: {}, Txn: {}", *bn, *txn));
+                                        }
+
+                                        let _r = chan.0.send((msg, profile));
+                                        
                                         del_list.push((*bn, *txn));
                                     }
                                 }
@@ -357,11 +429,14 @@ pub async fn handle_client_messages(ctx: PinnedServerContext, client: PinnedClie
         };
         if curr_client_req_num > 0 { // If I am here due to timeout, don't worry about adding txs.
             let mut lack_pend = ctx.client_ack_pending.lock().await;
-            for (ms, _sender, chan) in &curr_client_req {
+            for (ms, _sender, chan, profile) in &mut curr_client_req {
+                profile.register("Client channel recv");
+
+                
                 if let crate::consensus::proto::rpc::proto_payload::Message::ClientRequest(req) = ms
                 {
                     tx.push(req.tx.clone());
-                    lack_pend.insert((block_n, tx.len() - 1), chan.clone());
+                    lack_pend.insert((block_n, tx.len() - 1), (chan.clone(), profile.to_owned()));
                 }
             }
         }
@@ -370,6 +445,7 @@ pub async fn handle_client_messages(ctx: PinnedServerContext, client: PinnedClie
         let should_sig = signature_timer_tick    // Either I am running this body because of signature timeout.
             || (pending_signatures >= ctx.config.consensus_config.signature_max_delay_blocks);
             // Or I actually got some transactions and I really need to sign
+        let mut profile = LatencyProfile::new();
         
         let mut fork = ctx.state.fork.lock().await;
         let block = ProtoBlock {
@@ -403,6 +479,7 @@ pub async fn handle_client_messages(ctx: PinnedServerContext, client: PinnedClie
                     let mut lpings = ctx.ping_counters.lock().unwrap();
                     lpings.insert(n, Instant::now());
                 }
+                profile.register("Block create");
             }
             Err(e) => {
                 warn!("Error processing client request: {}", e);
@@ -419,9 +496,26 @@ pub async fn handle_client_messages(ctx: PinnedServerContext, client: PinnedClie
                     for ((bn, txn), chan) in lack_pend.iter() {
                         if *bn <= fork.last() {
                             let h = hash(&fork.get(*bn).unwrap().block.tx[*txn]);
-                            let msg = PinnedMessage::from(h, DIGEST_LENGTH, 
+                            
+                            let response = ProtoClientReply {
+                                req_digest: h,
+                                block_n: (*bn) as u64,
+                                tx_n: (*txn) as u64
+                            };
+
+                            let v = response.encode_to_vec();
+                            let vlen = v.len();
+
+                            let msg = PinnedMessage::from(v, vlen, 
                                 crate::rpc::SenderType::Anon);
-                            let _ = chan.send(msg).await;
+                            
+                            let mut profile = chan.1.clone();
+                            profile.register("Init Sending Client Response");
+                            if *bn % 1000 == 0 {
+                                profile.should_print = true;
+                                profile.prefix = String::from(format!("Block: {}, Txn: {}", *bn, *txn));
+                            }
+                            let _ = chan.0.send((msg, profile));
                             del_list.push((*bn, *txn));
                         }
                     }
@@ -470,10 +564,15 @@ pub async fn handle_client_messages(ctx: PinnedServerContext, client: PinnedClie
             if let Ok(_) = rpc_msg_body.encode(&mut buf) {
                 let sz = buf.len();
                 let bcast_msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
-
+                if block_n % 1000 == 0 {
+                    profile.should_print = true;
+                    profile.prefix = String::from(format!("AppendEntries Block {}", block_n));
+                }
                 let start_bcast = Instant::now();
-                let _ = PinnedClient::broadcast(&client, &send_list, &bcast_msg).await;
-                debug!("Broadcast time: {} us", start_bcast.elapsed().as_micros());
+                let _ = PinnedClient::broadcast(&client, &send_list, &bcast_msg, &mut profile).await;
+                if block_n % 1000 == 0 {
+                    info!("AppendEntries Block: {}, Broadcast time: {} us", block_n, start_bcast.elapsed().as_micros());
+                }
             }
         }
 
@@ -523,7 +622,7 @@ pub async fn handle_node_messages(ctx: PinnedServerContext, client: PinnedClient
         }
 
         if node_req_num > 0 {
-            for req in &curr_node_req {
+            for req in &mut curr_node_req {
                 process_node_request(
                     &ctx,
                     &client,

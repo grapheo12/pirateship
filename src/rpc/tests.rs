@@ -14,10 +14,10 @@ use tokio::time::sleep;
 use crate::{
     config::Config,
     crypto::KeyStore,
-    rpc::{client::Client, server::Server, PinnedMessage},
+    rpc::{client::Client, server::{LatencyProfile, Server}, PinnedMessage},
 };
 
-use super::{auth::HandshakeResponse, client::PinnedClient, server::MsgAckChan, MessageRef};
+use super::{auth::HandshakeResponse, client::PinnedClient, server::{MsgAckChan, RespType}, MessageRef};
 
 fn process_args(i: i32) -> Config {
     let _p = format!("configs/node{i}.json");
@@ -31,12 +31,12 @@ fn process_args(i: i32) -> Config {
     Config::deserialize(&cfg_contents)
 }
 
-fn mock_msg_handler(_ctx: &(), buf: MessageRef, _tx: MsgAckChan) -> Result<bool, Error> {
+fn mock_msg_handler(_ctx: &(), buf: MessageRef, _tx: MsgAckChan) -> Result<RespType, Error> {
     info!(
         "Received message: {}",
         std::str::from_utf8(&buf).unwrap_or("Parsing error")
     );
-    Ok(false)
+    Ok(RespType::NoResp)
 }
 
 async fn run_body(
@@ -128,7 +128,7 @@ async fn test_unauthenticated_client_server() {
 
 struct ServerCtx(i32);
 
-fn drop_after_n(ctx: &Arc<Mutex<Pin<Box<ServerCtx>>>>, m: MessageRef, _tx: MsgAckChan) -> Result<bool, Error> {
+fn drop_after_n(ctx: &Arc<Mutex<Pin<Box<ServerCtx>>>>, m: MessageRef, _tx: MsgAckChan) -> Result<RespType, Error> {
     let mut _ctx = ctx.lock().unwrap();
     _ctx.0 -= 1;
     info!(
@@ -140,7 +140,7 @@ fn drop_after_n(ctx: &Arc<Mutex<Pin<Box<ServerCtx>>>>, m: MessageRef, _tx: MsgAc
     if _ctx.0 <= 0 {
         return Err(Error::new(ErrorKind::BrokenPipe, "breaking connection"));
     }
-    Ok(false)
+    Ok(RespType::NoResp)
 }
 
 #[tokio::test]
@@ -188,21 +188,21 @@ async fn test_3_node_bcast() {
     let data = data.into_bytes();
     let sz = data.len();
     let data = PinnedMessage::from(data, sz, super::SenderType::Anon);
-    PinnedClient::broadcast(&client, &names, &data)
+    PinnedClient::broadcast(&client, &names, &data, &mut LatencyProfile::new())
         .await
         .expect("Broadcast should complete with 3 nodes!");
     sleep(Duration::from_millis(100)).await;
     server_handle1.abort();
     let _ = tokio::join!(server_handle1);
     sleep(Duration::from_millis(1000)).await;
-    PinnedClient::broadcast(&client, &names, &data)
+    PinnedClient::broadcast(&client, &names, &data, &mut LatencyProfile::new())
         .await
         .expect("Broadcast should complete with 2 nodes!");
     sleep(Duration::from_millis(100)).await;
     server_handle2.abort();
     let _ = tokio::join!(server_handle2);
 
-    PinnedClient::broadcast(&client, &names, &data)
+    PinnedClient::broadcast(&client, &names, &data, &mut LatencyProfile::new())
         .await
         .expect("There are not enough nodes!");
 

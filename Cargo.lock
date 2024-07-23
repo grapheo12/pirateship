@@ -1213,6 +1213,7 @@ dependencies = [
  "ed25519-dalek",
  "futures",
  "hex",
+ "indexmap 2.2.6",
  "log",
  "log4rs",
  "prost",

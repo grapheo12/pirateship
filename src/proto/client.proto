@@ -10,5 +10,6 @@ message ProtoClientRequest {
 
 message ProtoClientReply {
     bytes req_digest = 1;
-    bytes n = 2;
+    uint64 block_n = 2;
+    uint64 tx_n = 3;
 }

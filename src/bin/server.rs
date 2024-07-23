@@ -66,7 +66,7 @@ fn main() {
     let i = Box::pin(AtomicUsize::new(0));
     let runtime = runtime::Builder::new_multi_thread()
         .enable_all()
-        .worker_threads(NUM_THREADS)
+        .worker_threads(num_threads)
         .on_thread_start(move || {
             let _cids = core_ids.clone();
             let lcores = _cids.lock().unwrap();

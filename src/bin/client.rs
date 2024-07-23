@@ -3,7 +3,7 @@ use log::{debug, info};
 use pft::{
     config::{default_log4rs_config, ClientConfig},
     consensus::proto::{
-        client::ProtoClientRequest,
+        client::{ProtoClientReply, ProtoClientRequest},
         rpc::{self, ProtoPayload},
     },
     crypto::KeyStore,
@@ -67,19 +67,21 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -
         )
         .await
         .unwrap();
-
-        if i % 1000 == 0 {
-            info!("Client Id: {}, Msg Id: {}, Latency: {} us",
-                idx, i,
-                start.elapsed().as_micros()
-            );
-        } else {
-            debug!("Sending message: {} Reply: {} {} Time: {} us",
-                format!("Tx:{}:{}", idx, i),
-                msg.as_ref().0.encode_hex::<String>(), msg.as_ref().1,
+        let sz = msg.as_ref().1;
+        let resp = ProtoClientReply::decode(&msg.as_ref().0.as_slice()[..sz]).unwrap();
+        if resp.block_n % 1000 == 0 {
+            info!("Client Id: {}, Msg Id: {}, Block num: {}, Tx num: {}, Latency: {} us",
+                idx, i, resp.block_n, resp.tx_n,
                 start.elapsed().as_micros()
             );
         }
+        // } else {
+        //     debug!("Sending message: {} Reply: {} {} Time: {} us",
+        //         format!("Tx:{}:{}", idx, i),
+        //         msg.as_ref().0.encode_hex::<String>(), msg.as_ref().1,
+        //         start.elapsed().as_micros()
+        //     );
+        // }
     }
 
     Ok(())
