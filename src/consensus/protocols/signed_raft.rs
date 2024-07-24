@@ -2,7 +2,7 @@ use hex::ToHex;
 use log::{debug, info, warn};
 use prost::Message;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fmt::format,
     io::{Error, ErrorKind},
     sync::atomic::Ordering,
@@ -285,7 +285,7 @@ pub async fn do_push_append_entries_to_fork(
                     seq_nums.push(_n);
                 },
                 Err(e) => {
-                    warn!("Error appending block: {}", e);
+                    warn!("Error appending block: {} seq_num: {}", e, b.n);
                     continue;
                 }
             }
@@ -334,13 +334,9 @@ pub async fn do_reply_vote(ctx: PinnedServerContext, client: PinnedClient, vote:
 pub async fn process_node_request(
     ctx: &PinnedServerContext,
     client: &PinnedClient,
-    node_num: u64,
-    // num_txs: &mut usize,
     majority: u64,
     super_majority: u64,
-    // accepting_client_requests: &mut bool,
     ms: &mut ForwardedMessage,
-    ms_batch_size: usize,
 ) -> Result<(), Error> {
     let (msg, sender, profile) = ms;
     let _sender = sender.clone();
@@ -654,10 +650,39 @@ pub async fn handle_node_messages(
     let timer_handle = tokio::spawn(async move {
         let _ = view_timer(timer_tx, Duration::from_secs(1)).await;
     });
-
-    let mut node_rx = ctx.0.node_queue.1.lock().await;
     let majority = get_majority_num(&ctx);
     let super_majority = get_super_majority_num(&ctx);
+
+    // Spawn all vote processing workers.
+    // This thread will also act as one.
+    let mut vote_worker_chans = Vec::new();
+    let mut vote_worker_rr_cnt = 1u16;
+    for _ in 1..ctx.config.consensus_config.vote_processing_workers {
+        // 0th index is for this thread
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        vote_worker_chans.push(tx);
+        let ctx = ctx.clone();
+        let client = client.clone();
+        tokio::spawn(async move {
+            loop {
+                let msg = rx.recv().await;
+                if let None = msg {
+                    break;
+                }
+                let mut msg = msg.unwrap();
+                let _ = process_node_request(
+                    &ctx,
+                    &client,
+                    majority,
+                    super_majority,
+                    &mut msg,
+                )
+                .await;
+            }
+        });
+    }
+
+    let mut node_rx = ctx.0.node_queue.1.lock().await;
     let send_list = get_everyone_except_me(
         &ctx.config.net_config.name,
         &ctx.config.consensus_config.node_list,
@@ -680,29 +705,41 @@ pub async fn handle_node_messages(
             node_req_num_ = node_rx.recv_many(&mut curr_node_req, (majority - 1) as usize) => node_req_num = node_req_num_,
         }
 
-        if curr_timer_val {
-            handle_timeout(&ctx).await?;
-        }
-
-        if node_req_num > 0 {
-            for req in &mut curr_node_req {
-                process_node_request(
-                    &ctx,
-                    &client,
-                    get_node_num(&ctx),
-                    majority,
-                    super_majority,
-                    req,
-                    node_req_num,
-                )
-                .await?;
-            }
-        }
-
         if curr_timer_val == false && node_req_num == 0 {
             warn!("Consensus node dying!");
             break; // Select failed because both channels were closed!
         }
+
+        if curr_timer_val {
+            handle_timeout(&ctx).await?;
+        }
+
+        while node_req_num > 0 {
+            // @todo: Really need a VecDeque::pop_front() here. But this suffices for now.
+            let mut req = curr_node_req.remove(0);
+            node_req_num -= 1;
+            // AppendEntries should be processed by a single thread.
+            // Only votes can be safely processed by multiple threads.
+            if let crate::consensus::proto::rpc::proto_payload::Message::Vote(_) = req.0 {
+                let rr_cnt = vote_worker_rr_cnt % ctx.config.consensus_config.vote_processing_workers;
+                vote_worker_rr_cnt += 1;
+                if rr_cnt == 0 {
+                    // Let this thread process it.
+                    process_node_request(
+                        &ctx, &client, majority, super_majority, &mut req
+                    ).await?;    
+                }else{
+                    // Push it to a worker
+                    let _ = vote_worker_chans[(rr_cnt - 1) as usize].send(req);
+                }
+            }else{
+                process_node_request(
+                    &ctx, &client, majority, super_majority, &mut req
+                ).await?;
+            }
+        }
+
+        
 
         // Reset for the next iteration
         curr_node_req.clear();
