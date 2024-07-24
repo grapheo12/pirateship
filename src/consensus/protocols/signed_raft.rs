@@ -122,6 +122,7 @@ pub fn do_commit(
     let mut del_list = Vec::new();
     for ((bn, txn), chan) in lack_pend.iter() {
         if *bn <= n {
+            ctx.state.num_committed_txs.fetch_add(1, Ordering::SeqCst);
             let h = hash(&fork.get(*bn).unwrap().block.tx[*txn]);
 
             let response = ProtoClientReply {
@@ -148,6 +149,40 @@ pub fn do_commit(
     for d in del_list {
         lack_pend.remove(&d);
     }
+
+    // This is not very accurate.
+    // However, we are assuming the vote.n is monotonic.
+    // If that doesn't hold, this can cause rejection of legitimate votes.
+    // Causing deadlocks.
+    ctx.last_fast_quorum_request.fetch_add(1, Ordering::SeqCst);
+
+    // Every thousandth block is added in ping_counters.
+    {
+        let mut lpings = ctx.ping_counters.lock().unwrap();
+        let mut del_pings = Vec::new();
+        for (_n, start) in lpings.iter() {
+            if *_n <= n {
+                info!(
+                    "Fork index: {} Vote quorum latency: {} us",
+                    *_n,
+                    start.elapsed().as_micros()
+                );
+                del_pings.push(*_n);
+            }
+        }
+        for _n in del_pings {
+            lpings.remove(&_n);
+        }
+    }
+
+    debug!(
+        "New Commit Index: {}, Fork Digest: {} Tx: {}, num_txs: {}",
+        ctx.state.commit_index.load(Ordering::SeqCst),
+        fork.last_hash().encode_hex::<String>(),
+        String::from_utf8(fork.last_hash())
+            .unwrap(),
+        ctx.state.num_committed_txs.load(Ordering::SeqCst)
+    );
 }
 
 pub fn do_create_qcs(_ctx: &PinnedServerContext, _fork: &mut MutexGuard<Log>, qcs: &Vec<u64>) {
@@ -172,6 +207,11 @@ pub async fn do_process_vote(
     let mut fork = ctx.state.fork.lock().await;
     let ci = ctx.state.commit_index.load(Ordering::SeqCst);
     let mut updated_ci = ci;
+
+    if !cmp_hash(&fork.hash_at_n(vote.n).unwrap(), &vote.fork_digest) {
+        warn!("Wrong digest, skipping vote");
+        return Ok(())
+    }
 
     // A vote at n is considered a vote at 1..n
     // So we should increase replication count for anything >= ci
@@ -213,6 +253,84 @@ pub async fn do_process_vote(
     Ok(())
 }
 
+pub async fn do_push_append_entries_to_fork(
+    ctx: PinnedServerContext,
+    ae: &ProtoAppendEntries,
+    sender: &String,
+) -> (u64 /* last_n */, u64 /* updated_last_n */, Vec<u64> /* Sequence numbers */) {
+    let mut fork = ctx.state.fork.lock().await;
+    let last_n = fork.last();
+    let mut updated_last_n = last_n;
+    let mut seq_nums = Vec::new();
+
+    if !sender.eq(&get_leader_str(&ctx)) {
+        // Can't accept blocks from non-leader.
+
+        return (last_n, updated_last_n, seq_nums);
+    }
+
+
+    if let Some(f) = &ae.fork {
+        for b in &f.blocks {
+            debug!("Inserting block {} with {} txs", b.n, b.tx.len());
+            let entry = LogEntry::new(b.clone());
+
+            let res = if entry.has_signature() {
+                fork.verify_and_push(entry, &ctx.keys, &get_leader_str(&ctx))
+            } else {
+                fork.push(entry)
+            };
+            match res {
+                Ok(_n) => {
+                    seq_nums.push(_n);
+                },
+                Err(e) => {
+                    warn!("Error appending block: {}", e);
+                    continue;
+                }
+            }
+        }
+        debug!("Pushing complete!");
+        updated_last_n = fork.last();
+    }
+
+    (last_n, updated_last_n, seq_nums)
+}
+
+pub async fn do_reply_vote(ctx: PinnedServerContext, client: PinnedClient, vote: ProtoVote, reply_to: &String) -> Result<(), Error> {
+    let vote_n = vote.n;
+    let rpc_msg_body = ProtoPayload {
+        rpc_type: rpc::RpcType::FastQuorumReply.into(),
+        rpc_seq_num: ctx.last_fast_quorum_request.load(Ordering::SeqCst),
+        message: Some(consensus::proto::rpc::proto_payload::Message::Vote(
+            vote,
+        )),
+    };
+
+
+    let mut buf = Vec::new();
+    if let Ok(_) = rpc_msg_body.encode(&mut buf) {
+        // let reply = MessageRef(&buf, buf.len(), &crate::rpc::SenderType::Anon);
+        let sz = buf.len();
+        let reply = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
+        let mut profile = LatencyProfile::new();
+        if vote_n % 1000 == 0 {
+            profile.should_print = true;
+            profile.prefix =
+                String::from(format!("Vote for block {}", vote_n));
+        }
+        let _ = PinnedClient::broadcast(
+            &client,
+            &vec![reply_to.clone()],
+            &reply,
+            &mut profile,
+        )
+        .await;
+    }
+    debug!("Sent vote");
+
+    Ok(())
+}
 pub async fn process_node_request(
     ctx: &PinnedServerContext,
     client: &PinnedClient,
@@ -229,285 +347,39 @@ pub async fn process_node_request(
     match &msg {
         crate::consensus::proto::rpc::proto_payload::Message::AppendEntries(ae) => {
             profile.register("AE chan wait");
-            if !ctx.i_am_leader.load(Ordering::SeqCst) {
-                if !_sender.eq(&get_leader_str(&ctx)) {
-                    return Ok(());
-                }
-                // Only take action on this if I am follower
-                let mut vote_sigs = Vec::new();
+            let (last_n, updated_last_n, seq_nums) = do_push_append_entries_to_fork(ctx.clone(), ae, sender).await;
+            profile.register("Fork push");
 
-                if let Some(f) = &ae.fork {
-                    let (last_n, updated_last_n, digest) = {
-                        let mut fork = ctx.state.fork.lock().await;
-                        let last_n = fork.last();
-                        for b in &f.blocks {
-                            debug!("Inserting block {} with {} txs", b.n, b.tx.len());
-                            let mut entry = LogEntry::new(b.clone());
-                            entry.replication_votes.insert(get_leader_str(&ctx));
+            if updated_last_n > last_n {
+                // New block has been added. Vote for the last one.
+                let vote = create_vote_for_blocks(ctx.clone(), &seq_nums).await?;
+                profile.register("Prepare vote");
+                do_reply_vote(ctx.clone(), client.clone(), vote, &sender).await?;
+                profile.register("Sent vote");
 
-                            let res = if entry.has_signature() {
-                                let res =
-                                    fork.verify_and_push(entry, &ctx.keys, &get_leader_str(&ctx));
-                                if let Ok(_n) = res {
-                                    let vote_sig = fork.last_signature(&ctx.keys);
-                                    vote_sigs.push(ProtoSignatureArrayEntry {
-                                        n: _n,
-                                        sig: vote_sig.into(),
-                                    });
-                                }
-                                res
-                            } else {
-                                fork.push(entry)
-                            };
-                            if let Err(e) = res {
-                                warn!("Error appending block: {}", e);
-                                continue;
-                            }
-                            debug!("Pushing complete!");
-                        }
-                        let updated_last_n = fork.last();
-
-                        (last_n, updated_last_n, fork.last_hash())
-                    };
-                    profile.register("Fork push");
-
-                    if updated_last_n > last_n {
-                        // New block has been added. Vote for the last one.
-                        let vote = ProtoVote {
-                            sig_array: vote_sigs,
-                            fork_digest: digest,
-                            view: 1,
-                            n: updated_last_n,
-                        };
-                        debug!("Voted for {}", vote.n);
-
-                        let rpc_msg_body = ProtoPayload {
-                            rpc_type: rpc::RpcType::FastQuorumReply.into(),
-                            rpc_seq_num: ctx.last_fast_quorum_request.load(Ordering::SeqCst),
-                            message: Some(consensus::proto::rpc::proto_payload::Message::Vote(
-                                vote,
-                            )),
-                        };
-
-                        profile.register("Prepare vote");
-
-                        let mut buf = Vec::new();
-                        if let Ok(_) = rpc_msg_body.encode(&mut buf) {
-                            // let reply = MessageRef(&buf, buf.len(), &crate::rpc::SenderType::Anon);
-                            let sz = buf.len();
-                            let reply = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
-                            let mut profile = LatencyProfile::new();
-                            if updated_last_n % 1000 == 0 {
-                                profile.should_print = true;
-                                profile.prefix =
-                                    String::from(format!("Vote for block {}", updated_last_n));
-                            }
-                            let _ = PinnedClient::broadcast(
-                                &client,
-                                &vec![_sender.clone()],
-                                &reply,
-                                &mut profile,
-                            )
-                            .await;
-                        }
-                        debug!("Sent vote");
-                        profile.register("Sent vote");
-
-                        if updated_last_n % 1000 == 0 {
-                            profile.should_print = true;
-                            profile.prefix = String::from(format!("Block: {}", updated_last_n));
-                            profile.print();
-                        }
-                    }
-                }
-
-                let fork = ctx.state.fork.lock().await;
-                let ci = ctx.state.commit_index.load(Ordering::SeqCst);
-                if ae.commit_index > ci {
-                    ctx.state
-                        .commit_index
-                        .store(ae.commit_index, Ordering::SeqCst);
-
-                    ctx.state.num_committed_txs.fetch_add(
-                        fork.get(ae.commit_index).unwrap().block.tx.len(),
-                        Ordering::SeqCst,
-                    );
-                    {
-                        let mut lack_pend = ctx.client_ack_pending.lock().await;
-                        let mut del_list = Vec::new();
-                        for ((bn, txn), mut chan) in lack_pend.iter() {
-                            if *bn <= ae.commit_index {
-                                let h = hash(&fork.get(*bn).unwrap().block.tx[*txn]);
-
-                                let response = ProtoClientReply {
-                                    req_digest: h,
-                                    block_n: (*bn) as u64,
-                                    tx_n: (*txn) as u64,
-                                };
-
-                                let v = response.encode_to_vec();
-                                let vlen = v.len();
-
-                                let msg =
-                                    PinnedMessage::from(v, vlen, crate::rpc::SenderType::Anon);
-
-                                let mut profile = chan.1.clone();
-                                profile.register("Init Sending Client Response");
-                                if *bn % 1000 == 0 {
-                                    profile.should_print = true;
-                                    profile.prefix =
-                                        String::from(format!("Block: {}, Txn: {}", *bn, *txn));
-                                }
-                                let _ = chan.0.send((msg, profile));
-                                del_list.push((*bn, *txn));
-                            }
-                        }
-                        for d in del_list {
-                            lack_pend.remove(&d);
-                        }
-                    }
-                    debug!(
-                        "New Commit Index: {}, Fork Digest: {} Tx: {}, num_txs: {}",
-                        ctx.state.commit_index.load(Ordering::SeqCst),
-                        fork.last_hash().encode_hex::<String>(),
-                        String::from_utf8(fork.get(ae.commit_index).unwrap().block.tx[0].clone())
-                            .unwrap(),
-                        ctx.state.num_committed_txs.load(Ordering::SeqCst)
-                    );
-                }
+                if updated_last_n % 1000 == 0 {
+                    profile.should_print = true;
+                    profile.prefix = String::from(format!("Block: {}", updated_last_n));
+                    profile.print();
+                }             
             }
+
+            {
+                let ci = ctx.state.commit_index.load(Ordering::SeqCst);
+                let new_ci = ae.commit_index;
+                let mut fork = ctx.state.fork.lock().await;
+                let mut lack_pend = ctx.client_ack_pending.lock().await;
+                // Followers should not have pending client requests.
+                // But this same interface is good for refactoring.
+                
+                do_commit(ctx, &mut fork, &mut lack_pend, new_ci, ci);
+            }
+                
         }
         crate::consensus::proto::rpc::proto_payload::Message::Vote(v) => {
             profile.register("Vote chan wait");
-            let mut fork = ctx.state.fork.lock().await;
-            if v.n > fork.last() {
-                return Ok(()); // todo: Actually this is an error.
-            }
-            let chk_hsh = fork.hash_at_n(v.n);
-
-            // Check all signatures in the vote.
-            let mut all_sig_verified = true;
-            'check_votes: for vote_sig in &v.sig_array {
-                if vote_sig.n > fork.last() {
-                    continue;
-                }
-
-                match fork.inc_qc_sig(&_sender, &vote_sig.sig, vote_sig.n, &ctx.keys) {
-                    Err(e) => {
-                        warn!("Vote signature error: {}", e);
-                        all_sig_verified = false;
-                        break 'check_votes;
-                    }
-                    Ok(total_qc_votes) => {
-                        if total_qc_votes >= super_majority {
-                            if vote_sig.n % 1000 == 0 {
-                                info!("QC formed for index: {}", vote_sig.n);
-                            } else {
-                                debug!("QC formed for index: {}", vote_sig.n);
-                            }
-                            // Move from byz_qc_pending to next_qc_list and byz_commit_pending
-                        }
-                    }
-                }
-            }
-
-            profile.register("Vote signature checks");
-            if v.n % 1000 == 0 {
-                profile.should_print = true;
-                profile.prefix = String::from(format!("Vote for Block {} from {}", v.n, _sender));
-                profile.print();
-            }
-
-            if chk_hsh.is_some() && cmp_hash(&chk_hsh.unwrap(), &v.fork_digest) && all_sig_verified
-            {
-                let _l = v.n;
-                let _f = ctx.state.commit_index.load(Ordering::SeqCst) + 1;
-                for i in _f..(_l + 1) {
-                    let total_votes = fork.inc_replication_vote(&_sender, i).unwrap();
-                    if total_votes >= majority {
-                        let ci = ctx.state.commit_index.load(Ordering::SeqCst);
-                        if ci < v.n && v.n <= fork.last()
-                        // This is just a sanity check
-                        {
-                            ctx.state.commit_index.store(i, Ordering::SeqCst);
-                            ctx.state
-                                .num_committed_txs
-                                .fetch_add(fork.get(i).unwrap().block.tx.len(), Ordering::SeqCst);
-                            debug!(
-                                "New Commit Index: {}, Fork Digest: {} Tx: {}, num_txs: {}, vote_batch_size: {}",
-                                ctx.state.commit_index.load(Ordering::SeqCst),
-                                v.fork_digest.encode_hex::<String>(),
-                                String::from_utf8(fork.get(i).unwrap().block.tx[0].clone())
-                                    .unwrap(),
-                                ctx.state.num_committed_txs.load(Ordering::SeqCst),
-                                ms_batch_size
-                            );
-
-                            // *accepting_client_requests = true;
-                            ctx.last_fast_quorum_request.fetch_add(1, Ordering::SeqCst);
-                            if i % 1000 == 0 {
-                                let mut lpings = ctx.ping_counters.lock().unwrap();
-                                if let Some(start) = lpings.remove(&i) {
-                                    info!(
-                                        "Fork index: {} Vote quorum latency: {} us",
-                                        v.n,
-                                        start.elapsed().as_micros()
-                                    )
-                                }
-                            }
-
-                            {
-                                let mut lack_pend = ctx.client_ack_pending.lock().await;
-                                let mut del_list = Vec::new();
-                                for ((bn, txn), chan) in lack_pend.iter() {
-                                    if *bn <= i {
-                                        let hash_time = Instant::now();
-                                        let h = hash(&fork.get(*bn).unwrap().block.tx[*txn]);
-                                        if *bn % 1000 == 0 {
-                                            info!(
-                                                "Hash time: {} us",
-                                                hash_time.elapsed().as_micros()
-                                            );
-                                        }
-                                        let response = ProtoClientReply {
-                                            req_digest: h,
-                                            block_n: (*bn) as u64,
-                                            tx_n: (*txn) as u64,
-                                        };
-
-                                        let v = response.encode_to_vec();
-                                        let vlen = v.len();
-                                        let msg = PinnedMessage::from(
-                                            v,
-                                            vlen,
-                                            crate::rpc::SenderType::Anon,
-                                        );
-
-                                        let mut profile = chan.1.clone();
-                                        profile.register("Init Sending Client Response");
-                                        if *bn % 1000 == 0 {
-                                            profile.should_print = true;
-                                            profile.prefix = String::from(format!(
-                                                "Block: {}, Txn: {}",
-                                                *bn, *txn
-                                            ));
-                                        }
-
-                                        let _r = chan.0.send((msg, profile));
-
-                                        del_list.push((*bn, *txn));
-                                    }
-                                }
-                                for d in del_list {
-                                    lack_pend.remove(&d);
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                info!("Bad vote received!");
-            }
+            let _ = do_process_vote(ctx.clone(), v, sender, majority, super_majority).await;
+            profile.register("Vote process");
         }
         _ => {}
     }
@@ -538,12 +410,12 @@ pub async fn report_stats(ctx: &PinnedServerContext) -> Result<(), Error> {
             let lack_pend = ctx.client_ack_pending.lock().await;
 
             info!("fork.last = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, num_txs = {}, fork.last_hash = {}",
-                  fork.last(),
-                  ctx.state.commit_index.load(Ordering::SeqCst),
-                  ctx.state.byz_commit_index.load(Ordering::SeqCst),
-                  lack_pend.len(),
-                  ctx.state.num_committed_txs.load(Ordering::SeqCst),
-                  fork.last_hash().encode_hex::<String>()
+                fork.last(),
+                ctx.state.commit_index.load(Ordering::SeqCst),
+                ctx.state.byz_commit_index.load(Ordering::SeqCst),
+                lack_pend.len(),
+                ctx.state.num_committed_txs.load(Ordering::SeqCst),
+                fork.last_hash().encode_hex::<String>()
             );
         }
     }
@@ -589,10 +461,6 @@ pub async fn create_and_push_block(
     };
 
     let entry = LogEntry::new(block);
-
-    // entry
-    //     .replication_votes
-    //     .insert(ctx.config.net_config.name.clone());
 
     let res = match should_sign {
         true => {
@@ -737,6 +605,11 @@ pub async fn handle_client_messages(
                 signature_timer_tick = tick;
             }
         }
+        
+        if curr_client_req_num == 0 && signature_timer_tick == false {
+            // Channels are all closed.
+            return Ok(());
+        }
 
         if !ctx.i_am_leader.load(Ordering::SeqCst) {
             // todo:: Change this to reply to client with the current leader.
@@ -758,14 +631,15 @@ pub async fn handle_client_messages(
             should_sig,
             &send_list,
             majority,
-            super_majority
+            super_majority,
         )
         .await?;
 
-        if curr_client_req_num == 0 && signature_timer_tick == false {
-            // Channels are all closed.
-            return Ok(());
-        }
+        pending_signatures = 0;
+        signature_timer.reset();
+
+
+        // Reset for next iteration
         curr_client_req.clear();
         curr_client_req_num = 0;
         signature_timer_tick = false;
@@ -795,12 +669,9 @@ pub async fn handle_node_messages(
         &send_list
     );
 
-    // let mut accepting_client_requests = true;
     let mut curr_node_req = Vec::new();
     let mut curr_timer_val = false;
     let mut node_req_num = 0;
-
-    // let mut num_txs = 0;
 
     loop {
         tokio::select! {
@@ -819,10 +690,8 @@ pub async fn handle_node_messages(
                     &ctx,
                     &client,
                     get_node_num(&ctx),
-                    // &mut num_txs,
-                    majority.clone(),
-                    super_majority.clone(),
-                    // &mut accepting_client_requests,
+                    majority,
+                    super_majority,
                     req,
                     node_req_num,
                 )

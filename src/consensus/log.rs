@@ -103,6 +103,7 @@ impl Log {
     }
 
     /// Increase the signature for these entry.
+    /// Checks the correctness against current fork
     pub fn inc_qc_sig(&mut self, name: &String, sig: &Vec<u8>, n: u64, keys: &KeyStore) -> Result<u64, Error> {
         if n > self.last() {
             return Err(Error::new(
