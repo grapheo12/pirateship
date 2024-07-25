@@ -1,8 +1,8 @@
 use std::{
     collections::{HashMap, HashSet}, io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize},
         Arc,
-    }, time::Duration
+    }
 };
 
 use log::{debug, warn};
@@ -13,7 +13,6 @@ use std::time::Instant;
 use crate::{config::Config, crypto::KeyStore, rpc::{server::{LatencyProfile, MsgAckChan, RespType}, MessageRef}};
 
 use super::{
-    leader_rotation::get_current_leader,
     log::Log,
     proto::{
         consensus::{ProtoBlock, ProtoQuorumCertificate, ProtoVote},
@@ -117,7 +116,7 @@ impl Deref for PinnedServerContext {
 /// The job is to filter old messages quickly and send them on the channel.
 /// The real consensus handler is a separate green thread that consumes these messages.
 pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>, ack_tx: MsgAckChan) -> Result<RespType, Error> {
-    let mut profile = LatencyProfile::new();
+    let profile = LatencyProfile::new();
     let sender = match m.2 {
         crate::rpc::SenderType::Anon => {
             return Err(Error::new(ErrorKind::InvalidData, "unauthenticated message")); // Anonymous replies shouldn't come here
@@ -143,141 +142,22 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>, a
         }
     };
 
-    if !ctx.i_am_leader.load(Ordering::SeqCst) {
-        match &msg {
-            rpc::proto_payload::Message::ViewChange(_msg) => {
-                if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return Ok(RespType::NoResp); // Old view message
-                }
-            }
-            rpc::proto_payload::Message::AppendEntries(_msg) => {
-                if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return Ok(RespType::NoResp); // Old view message
-                }
-
-                match body.rpc_type() {
-                    rpc::RpcType::FastQuorumRequest => {
-                        ctx.last_fast_quorum_request
-                            .store(body.rpc_seq_num, Ordering::SeqCst);
-                    }
-                    rpc::RpcType::DiverseQuorumRequest => {
-                        ctx.last_diverse_quorum_request
-                            .store(body.rpc_seq_num, Ordering::SeqCst);
-                    }
-                    _ => {}
-                }
-
-                if sender
-                    != ctx.config.consensus_config.node_list[get_current_leader(
-                        ctx.config.consensus_config.node_list.len() as u64,
-                        _msg.view,
-                    )]
-                {
-                    return Ok(RespType::NoResp); // This leader is not supposed to send message with this view.
-                }
-            }
-            rpc::proto_payload::Message::NewLeader(_msg) => {
-                if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return Ok(RespType::NoResp); // Old view message
-                }
-            }
-            rpc::proto_payload::Message::NewLeaderOk(_) => {
-                // I am not leader, these messages shouldn't appear to me now.
-                return Ok(RespType::NoResp);
-            }
-            rpc::proto_payload::Message::Vote(_) => {
-                // I am not leader, these messages shouldn't appear to me now.
-                return Ok(RespType::NoResp);
-            }
-            rpc::proto_payload::Message::ClientRequest(_) => {
-                let msg = (body.message.unwrap(), sender, ack_tx, profile);
-
-                match ctx.client_queue.0.send(msg) {
-                    // Does this make a double copy?
-                    Ok(_) => {}
-                    Err(e) => match e {
-                        _ => {
-                            return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
-                        }
-                    },
-                };
-
-                // Wait for ack
-                return Ok(RespType::Resp);
-            }
-        }
-    } else {
-        // I am the leader
-        if body.rpc_type() == rpc::RpcType::DiverseQuorumReply
-            && body.rpc_seq_num
-                < ctx.last_diverse_quorum_request.load(Ordering::Relaxed)
-                    - ctx.config.consensus_config.quorum_diversity_k
-        {
-            return Ok(RespType::NoResp); // Old message
-        }
-
-        if body.rpc_type() == rpc::RpcType::FastQuorumReply
-            && body.rpc_seq_num < ctx.last_fast_quorum_request.load(Ordering::Relaxed)
-        {
-            return Ok(RespType::NoResp); // Old message
-        }
-
-        match &msg {
-            rpc::proto_payload::Message::ViewChange(_msg) => {
-                if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return Ok(RespType::NoResp); // Old view message
-                }
-            }
-            rpc::proto_payload::Message::AppendEntries(_) => {
-                return Ok(RespType::NoResp); // I will not respond to other's AppendEntries while I am leader.
-            }
-            rpc::proto_payload::Message::NewLeader(_msg) => {
-                if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return Ok(RespType::NoResp); // Old view message
-                }
-            }
-            rpc::proto_payload::Message::NewLeaderOk(_msg) => {
-                if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return Ok(RespType::NoResp); // Old view message
-                }
-            }
-            rpc::proto_payload::Message::Vote(_msg) => {
-                if _msg.view < ctx.state.view.load(Ordering::SeqCst) {
-                    return Ok(RespType::NoResp); // Old view message
-                }
-            }
-            rpc::proto_payload::Message::ClientRequest(_) => {
-                let msg = (body.message.unwrap(), sender, ack_tx, profile);
-
-
-                match ctx.client_queue.0.send(msg) {
-                    // Does this make a double copy?
-                    Ok(_) => {}
-                    Err(e) => match e {
-                        _ => {
-                            return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
-                        }
-                    },
-                };
-
-                return Ok(RespType::RespAndTrack);
-            }
-        }
-    }
-
-    // If code reaches here, it should be processed by the consensus algorithm.
-    // Can be used for load shedding here.
-    let msg = (body.message.unwrap(), sender, profile);
-
-    match ctx.node_queue.0.send(msg.clone()) {
-        // Does this make a double copy?
-        Ok(_) => {}
-        Err(e) => match e {
-            _ => {
+    match &msg {
+        rpc::proto_payload::Message::ClientRequest(_) => {
+            let msg = (body.message.unwrap(), sender, ack_tx, profile);
+            if let Err(_) = ctx.client_queue.0.send(msg){
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }
+            return Ok(RespType::RespAndTrack);
+            
         },
-    };
+        _ => {
+            let msg = (body.message.unwrap(), sender, profile);
+            if let Err(_) = ctx.node_queue.0.send(msg){
+                return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
+            }
 
-    Ok(RespType::NoResp)
+            return Ok(RespType::NoResp);
+        }
+    }
 }
