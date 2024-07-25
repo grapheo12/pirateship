@@ -1,11 +1,12 @@
 use std::{collections::{HashMap, HashSet}, io::{Error, ErrorKind}};
 
-use ed25519_dalek::{Signature, SIGNATURE_LENGTH};
+use ed25519_dalek::SIGNATURE_LENGTH;
+use log::info;
 use prost::Message;
 
 use crate::crypto::{cmp_hash, hash, KeyStore};
 
-use super::proto::consensus::{proto_block::Sig, DefferedSignature, ProtoBlock};
+use super::proto::consensus::{proto_block::Sig, DefferedSignature, ProtoBlock, ProtoNameWithSignature, ProtoQuorumCertificate};
 
 #[derive(Clone, Debug)]
 pub struct LogEntry {
@@ -38,6 +39,8 @@ impl LogEntry {
 #[derive(Clone, Debug)]
 pub struct Log {
     entries: Vec<LogEntry>,
+    
+    /// Highest QC.n seen so far
     last_qc: u64,
 }
 
@@ -123,7 +126,52 @@ impl Log {
         let entry = self.entries.get_mut(idx as usize).unwrap();
         entry.qc_sigs.insert(name.clone(), sig.as_slice().try_into().unwrap());
 
-        Ok(entry.replication_votes.len() as u64)
+        Ok(entry.qc_sigs.len() as u64)
+    }
+
+    pub fn get_qc_at_n(&self, n: u64) -> Result<ProtoQuorumCertificate, Error> {
+        let sig_map = self.get(n)?.qc_sigs.clone();
+        Ok(ProtoQuorumCertificate {
+            digest: self.hash_at_n(n).unwrap(),
+            n,
+            sig: sig_map.into_iter().map(|(k, v)| {
+                ProtoNameWithSignature {
+                    name: k,
+                    sig: v.to_vec()
+                }
+            }).collect()
+        })
+    }
+
+    pub fn verify_qc_at_n(&self, n: u64, qc: &ProtoQuorumCertificate, supermajority: u64, keys: &KeyStore) -> Result<(), Error> {
+        if n > self.last() || n == 0{
+            return Err(Error::new(ErrorKind::InvalidData, "Wrong index"));
+        }
+        if !cmp_hash(&self.hash_at_n(n).unwrap(), &qc.digest) {
+            return Err(Error::new(ErrorKind::InvalidData, "Hash mismatch"));
+        }
+
+        let mut matching_sigs = 0;
+
+        for ProtoNameWithSignature{name, sig} in &qc.sig {
+            let sig: [u8; SIGNATURE_LENGTH] = match sig.as_slice().try_into() {
+                Ok(s) => s,
+                Err(_) => {
+                    continue;
+                }
+            };
+            if keys.verify(name, &sig, &qc.digest) {
+                matching_sigs += 1;
+            }
+            // @todo: Not implementing the mechanism of having signature on a later block,
+            // with witnesses to that block
+        }
+        
+        if matching_sigs < supermajority {
+            return Err(Error::new(ErrorKind::InvalidData, "Not enough matching signatures"));
+        }
+
+        Ok(())
     }
 
     pub fn hash_at_n(&self, n: u64) -> Option<Vec<u8>> {

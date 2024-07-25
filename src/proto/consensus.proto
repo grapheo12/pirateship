@@ -2,10 +2,15 @@ syntax = "proto3";
 
 package proto.consensus;
 
+message ProtoNameWithSignature {
+    string name = 1;
+    bytes sig = 2;
+}
 message ProtoQuorumCertificate {
     bytes digest = 1;                        // Hash of certifying block
     uint64 n = 2;                            // Sequence number of certifying block
-    map<string, bytes> sig = 3;              // signer node --> Signature mapping 
+    repeated ProtoNameWithSignature sig = 3; // signer node --> Signature mapping;
+                                             // but represented as array of tuples, so that protobuf doesn't reorder them
 }
 
 // Empty type

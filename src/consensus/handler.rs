@@ -29,8 +29,7 @@ pub struct ConsensusState {
     pub commit_index: AtomicU64,
     pub num_committed_txs: AtomicUsize,
     pub byz_commit_index: AtomicU64,
-    pub byz_qc_pending: Mutex<HashMap<ProtoBlock, HashSet<(String, ProtoVote)>>>,
-    pub byz_commit_pending: Mutex<HashMap<ProtoQuorumCertificate, HashSet<(String, ProtoVote)>>>,
+    pub byz_qc_pending: Mutex<HashSet<u64>>,
     pub next_qc_list: Mutex<Vec<ProtoQuorumCertificate>>,
 }
 
@@ -42,8 +41,7 @@ impl ConsensusState {
             commit_index: AtomicU64::new(0),
             num_committed_txs: AtomicUsize::new(0),
             byz_commit_index: AtomicU64::new(0),
-            byz_qc_pending: Mutex::new(HashMap::new()),
-            byz_commit_pending: Mutex::new(HashMap::new()),
+            byz_qc_pending: Mutex::new(HashSet::new()),
             next_qc_list: Mutex::new(Vec::new()),
         }
     }

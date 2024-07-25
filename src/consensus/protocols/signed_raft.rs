@@ -23,8 +23,7 @@ use crate::{
         proto::{
             client::ProtoClientReply,
             consensus::{
-                proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork,
-                ProtoSignatureArrayEntry, ProtoVote,
+                proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoVote
             },
             rpc::{self, proto_payload, ProtoPayload},
         },
@@ -185,9 +184,24 @@ pub fn do_commit(
     );
 }
 
-pub fn do_create_qcs(_ctx: &PinnedServerContext, _fork: &mut MutexGuard<Log>, qcs: &Vec<u64>) {
+pub fn do_create_qcs(_ctx: &PinnedServerContext, fork: &mut MutexGuard<Log>, next_qc_list: &mut MutexGuard<Vec<ProtoQuorumCertificate>>, byz_qc_pending: &mut MutexGuard<HashSet<u64>>, qcs: &Vec<u64>) {    
     for n in qcs {
-        if n % 1000 == 0 {
+        // It is already done.
+        if *n <= fork.last_qc() {
+            continue;
+        }
+
+        let qc = match fork.get_qc_at_n(*n) {
+            Ok(qc) => qc,
+            Err(_) => {
+                continue;
+            },
+        };
+
+        next_qc_list.push(qc);
+        byz_qc_pending.remove(n);
+
+        if *n % 1000 == 0 {
             info!("QC formed for index: {}", n);
         } else {
             debug!("QC formed for index: {}", n);
@@ -248,7 +262,12 @@ pub async fn do_process_vote(
         do_commit(&ctx, &mut fork, &mut lack_pend, updated_ci, ci);
     }
 
-    do_create_qcs(&ctx, &mut fork, &qcs);
+    {
+        let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
+        let mut next_qc_list = ctx.state.next_qc_list.lock().await;
+        do_create_qcs(&ctx, &mut fork, &mut next_qc_list, &mut byz_qc_pending, &qcs);
+    }
+
 
     Ok(())
 }
@@ -405,8 +424,8 @@ pub async fn report_stats(ctx: &PinnedServerContext) -> Result<(), Error> {
             let fork = ctx.state.fork.lock().await;
             let lack_pend = ctx.client_ack_pending.lock().await;
 
-            info!("fork.last = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, num_txs = {}, fork.last_hash = {}",
-                fork.last(),
+            info!("fork.last = {}, fork.last_qc = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, num_txs = {}, fork.last_hash = {}",
+                fork.last(), fork.last_qc(),
                 ctx.state.commit_index.load(Ordering::SeqCst),
                 ctx.state.byz_commit_index.load(Ordering::SeqCst),
                 lack_pend.len(),
@@ -447,7 +466,7 @@ pub async fn create_and_push_block(
         }
     }
 
-    let block = ProtoBlock {
+    let mut block = ProtoBlock {
         tx,
         n: block_n,
         parent: fork.last_hash(),
@@ -455,6 +474,13 @@ pub async fn create_and_push_block(
         qc: Vec::new(),
         sig: Some(Sig::NoSig(DefferedSignature {})),
     };
+
+    if should_sign {
+        // Include the next qc list.
+        let mut next_qc_list = ctx.state.next_qc_list.lock().await;
+        block.qc = next_qc_list.clone();
+        next_qc_list.clear();
+    }
 
     let entry = LogEntry::new(block);
 
@@ -531,6 +557,13 @@ pub async fn broadcast_append_entries(
     Ok(())
 }
 
+pub fn do_add_block_to_byz_qc_pending(byz_qc_pending: &mut MutexGuard<HashSet<u64>>, ae: &ProtoAppendEntries) {
+    let blocks: &Vec<ProtoBlock> = ae.fork.as_ref().unwrap().blocks.as_ref();
+    for b in blocks {
+        byz_qc_pending.insert(b.n);
+    }
+}
+
 pub async fn do_append_entries(
     ctx: PinnedServerContext,
     client: PinnedClient,
@@ -542,6 +575,12 @@ pub async fn do_append_entries(
 ) -> Result<(), Error> {
     // Create the block, holding a lock on the fork state.
     let (ae, profile) = create_and_push_block(ctx.clone(), reqs, should_sign).await?;
+
+    // Add this block to byz_qc_pending
+    {
+        let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
+        do_add_block_to_byz_qc_pending(&mut byz_qc_pending, &ae);
+    }
 
     // Vote for self; necessary since the network subsystem doesn't send my message to me.
     let block_n = ae.fork.as_ref().unwrap().blocks.len();
