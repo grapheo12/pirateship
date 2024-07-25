@@ -459,11 +459,7 @@ pub async fn create_and_push_block(
     let entry = LogEntry::new(block);
 
     let res = match should_sign {
-        true => {
-            // pending_signatures = 0;
-            // signature_timer.reset();
-            fork.push_and_sign(entry, &ctx.keys)
-        }
+        true => fork.push_and_sign(entry, &ctx.keys),
         false => fork.push(entry),
     };
 
@@ -631,8 +627,10 @@ pub async fn handle_client_messages(
         )
         .await?;
 
-        pending_signatures = 0;
-        signature_timer.reset();
+        if should_sig {
+            pending_signatures = 0;
+            signature_timer.reset();
+        }
 
 
         // Reset for next iteration
