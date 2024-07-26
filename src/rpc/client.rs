@@ -1,6 +1,6 @@
 use crate::{config::Config, crypto::KeyStore};
 use futures::future::join_all;
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use std::{
     collections::{HashMap, HashSet}, fs::File, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::{Arc, RwLock}
@@ -465,7 +465,7 @@ impl PinnedClient {
                     let _ = sock.0.lock().await.flush().await;
 
                     if should_print_flush_time {
-                        info!("[{}] Flush time: {} us", combined_prefix, flush_time.elapsed().as_micros());
+                        trace!("[{}] Flush time: {} us", combined_prefix, flush_time.elapsed().as_micros());
                     }
                     
                     

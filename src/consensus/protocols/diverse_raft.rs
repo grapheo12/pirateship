@@ -1,5 +1,5 @@
 use hex::ToHex;
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use prost::Message;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -181,7 +181,7 @@ pub fn do_commit(
         let mut del_pings = Vec::new();
         for (_n, start) in lpings.iter() {
             if *_n <= n {
-                info!(
+                trace!(
                     "Fork index: {} Vote quorum latency: {} us",
                     *_n,
                     start.elapsed().as_micros()
@@ -222,7 +222,7 @@ pub fn do_create_qcs(_ctx: &PinnedServerContext, fork: &mut MutexGuard<Log>, nex
         byz_qc_pending.remove(n);
 
         if *n % 1000 == 0 {
-            info!("QC formed for index: {}", n);
+            trace!("QC formed for index: {}", n);
         } else {
             debug!("QC formed for index: {}", n);
         }
@@ -638,7 +638,7 @@ pub async fn broadcast_append_entries(
     let start_bcast = Instant::now();
     let _ = PinnedClient::broadcast(&client, &send_list, &bcast_msg, &mut profile).await;
     if block_n % 1000 == 0 {
-        info!(
+        trace!(
             "AppendEntries Block: {}, Broadcast time: {} us",
             block_n,
             start_bcast.elapsed().as_micros()

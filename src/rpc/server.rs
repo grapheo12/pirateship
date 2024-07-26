@@ -3,7 +3,7 @@ use std::{collections::HashMap, fs::File, io::{self, Cursor, Error}, path, sync:
 use crate::{config::Config, crypto::KeyStore, rpc::auth};
 use indexmap::IndexMap;
 use tokio::{io::{BufWriter, ReadHalf}, sync::{mpsc, oneshot}};
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use rustls::{
     crypto::aws_lc_rs,
     pki_types::{CertificateDer, PrivateKeyDer},
@@ -48,7 +48,7 @@ impl LatencyProfile {
             format!("{}: {} us", k, v.as_micros())
         }).collect();
 
-        info!("{}, {}", self.prefix, str_list.join(", "));
+        trace!("{}, {}", self.prefix, str_list.join(", "));
     }
 }
 
@@ -241,7 +241,7 @@ where
             let res = auth::handshake_server(&_server, stream).await;
             let name = match res {
                 Ok(nam) => {
-                    info!("Authenticated {} at Addr {}", nam, addr);
+                    trace!("Authenticated {} at Addr {}", nam, addr);
                     nam
                 }
                 Err(e) => {
