@@ -227,8 +227,6 @@ pub fn do_create_qcs(_ctx: &PinnedServerContext, fork: &mut MutexGuard<Log>, nex
             debug!("QC formed for index: {}", n);
         }
     }
-
-    // @todo
 }
 
 pub async fn do_process_vote(
@@ -292,6 +290,28 @@ pub async fn do_process_vote(
     Ok(())
 }
 
+pub fn maybe_byzantine_commit(ctx: &PinnedServerContext, fork: &MutexGuard<Log>) {
+    // 2-chain commit rule.
+    let last_qc = fork.last_qc();
+    if last_qc == 0 {
+        return;
+    }
+    // Get the highest qc included in the block with last_qc.
+    let block_qcs = &fork.get(last_qc).unwrap().block.qc;
+    let mut updated_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+    if block_qcs.len() == 0 && updated_bci > 0 {
+        warn!("Invariant violation: No QC found!");
+        return;
+    }
+    for qc in block_qcs {
+        if qc.n > updated_bci {
+            updated_bci = qc.n;
+        }
+    }
+
+    ctx.state.byz_commit_index.store(updated_bci, Ordering::SeqCst);
+}
+
 pub async fn do_push_append_entries_to_fork(
     ctx: PinnedServerContext,
     ae: &ProtoAppendEntries,
@@ -334,13 +354,16 @@ pub async fn do_push_append_entries_to_fork(
         updated_last_n = fork.last();
     }
 
-    // If the last_qc progressed forward, need to clean up byz_qc_pending
     if fork.last_qc() > last_qc {
+        // If the last_qc progressed forward, need to clean up byz_qc_pending
         let last_qc = fork.last_qc();
         let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
         byz_qc_pending.retain(|&n| {
             n > last_qc
         });
+
+        // Also the byzantine commit index may move
+        maybe_byzantine_commit(&ctx, &fork);
     }
 
     (last_n, updated_last_n, seq_nums)
@@ -525,6 +548,8 @@ pub async fn create_and_push_block(
                 lpings.insert(n, Instant::now());
             }
             profile.register("Block create");
+
+            maybe_byzantine_commit(&ctx, &fork);
         }
         Err(e) => {
             warn!("Error processing client request: {}", e);
