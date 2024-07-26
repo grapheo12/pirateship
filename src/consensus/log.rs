@@ -12,6 +12,9 @@ use super::proto::consensus::{proto_block::Sig, DefferedSignature, ProtoBlock, P
 pub struct LogEntry {
     pub block: ProtoBlock,
     pub replication_votes: HashSet<String>,
+
+    /// Accumulate signatures in the leader.
+    /// Used as signature cache in the followers.
     pub qc_sigs: HashMap<String, [u8; SIGNATURE_LENGTH]>
 }
 
@@ -105,6 +108,21 @@ impl Log {
         Ok(entry.replication_votes.len() as u64)
     }
 
+    pub fn inc_qc_sig_unverified(&mut self, name: &String, sig: &Vec<u8>, n: u64) -> Result<u64, Error> {
+        if n > self.last() {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Vote for missing block!",
+            ));
+        }
+
+        let idx = n - 1; // Index is 1-based
+        let entry = self.entries.get_mut(idx as usize).unwrap();
+        entry.qc_sigs.insert(name.clone(), sig.as_slice().try_into().unwrap());
+
+        Ok(entry.qc_sigs.len() as u64)
+    }
+    
     /// Increase the signature for these entry.
     /// Checks the correctness against current fork
     pub fn inc_qc_sig(&mut self, name: &String, sig: &Vec<u8>, n: u64, keys: &KeyStore) -> Result<u64, Error> {

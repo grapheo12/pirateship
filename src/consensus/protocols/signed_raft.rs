@@ -78,8 +78,13 @@ pub async fn create_vote_for_blocks(
     seq_nums: &Vec<u64>,
 ) -> Result<ProtoVote, Error> {
     let mut fork = ctx.state.fork.lock().await;
+    let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
+
     let mut vote_sigs = Vec::new();
     let mut max_n = 0;
+
+    let mut atleast_one_sig_block = false;
+
     for n in seq_nums {
         let n = *n;
         if n > fork.last() {
@@ -91,12 +96,33 @@ pub async fn create_vote_for_blocks(
         }
 
         if fork.get(n)?.has_signature() {
+            atleast_one_sig_block = true;
             let sig = fork.signature_at_n(n, &ctx.keys).to_vec();
-            vote_sigs.push(ProtoSignatureArrayEntry { n, sig });
+
+            // This is just caching the signature.
+            fork.inc_qc_sig_unverified(&ctx.config.net_config.name, &sig, n)?;
+
+            // Add the block to byz_qc_pending,
+            // along with all other blocks for which I have sent signature before,
+            // but haven't seen a QC
+            byz_qc_pending.insert(n);
+
         }
 
         fork.inc_replication_vote(&ctx.config.net_config.name, n)?;
     }
+
+    // Resend signatures for QCs I did not get yet.
+    // This is safer than creating QCs with votes to higher blocks.
+    if atleast_one_sig_block { // Invariant: Only signature blocks get signature votes.
+        for n in byz_qc_pending.iter() {
+            if let Some(sig) = fork.get(*n)?.qc_sigs.get(&ctx.config.net_config.name) {
+                vote_sigs.push(ProtoSignatureArrayEntry{ n: *n, sig: sig.to_vec() });
+            }
+        }
+    }
+
+
 
     Ok(ProtoVote {
         sig_array: vote_sigs,
@@ -279,6 +305,7 @@ pub async fn do_push_append_entries_to_fork(
 ) -> (u64 /* last_n */, u64 /* updated_last_n */, Vec<u64> /* Sequence numbers */) {
     let mut fork = ctx.state.fork.lock().await;
     let last_n = fork.last();
+    let last_qc = fork.last_qc();
     let mut updated_last_n = last_n;
     let mut seq_nums = Vec::new();
 
@@ -311,6 +338,15 @@ pub async fn do_push_append_entries_to_fork(
         }
         debug!("Pushing complete!");
         updated_last_n = fork.last();
+    }
+
+    // If the last_qc progressed forward, need to clean up byz_qc_pending
+    if fork.last_qc() > last_qc {
+        let last_qc = fork.last_qc();
+        let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
+        byz_qc_pending.retain(|&n| {
+            n > last_qc
+        });
     }
 
     (last_n, updated_last_n, seq_nums)

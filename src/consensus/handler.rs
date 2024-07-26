@@ -1,10 +1,11 @@
 use std::{
-    collections::{HashMap, HashSet}, io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::{
+    collections::{HashMap, HashSet, VecDeque}, io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize},
         Arc,
     }
 };
 
+use ed25519_dalek::SIGNATURE_LENGTH;
 use log::{debug, warn};
 use prost::Message;
 use tokio::sync::{mpsc, Mutex};
