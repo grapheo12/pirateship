@@ -1,26 +1,32 @@
-use std::{pin::Pin, sync::atomic::AtomicBool, time::Duration};
+use std::{pin::Pin, sync::{atomic::AtomicBool, Arc}, time::Duration};
 
-use tokio::{sync::mpsc, time::sleep};
+use tokio::{sync::{mpsc, Mutex}, task::JoinHandle, time::sleep};
 
 pub struct ResettableTimer {
     pub timeout: Duration,
     tx: mpsc::Sender<bool>,
-    rx: mpsc::Receiver<bool>,
+    rx: Mutex<mpsc::Receiver<bool>>,
     is_cancelled: AtomicBool
 }
 
 impl ResettableTimer {
-    pub fn new(timeout: Duration) -> Pin<Box<Self>> {
+    pub fn new(timeout: Duration) -> Arc<Pin<Box<Self>>> {
         let (tx, rx) = mpsc::channel(1);
-        Box::pin(ResettableTimer {
-            timeout, tx, rx,
+        Arc::new(Box::pin(ResettableTimer {
+            timeout, tx, rx: Mutex::new(rx),
             is_cancelled: AtomicBool::new(false)
-        })
+        }))
     }
 
-    pub async fn run(self: Pin<Box<Self>>) {
+    pub async fn fire_now(self: &Arc<Pin<Box<Self>>>) {
+        let tx = self.tx.clone();
+        let _ = tx.send(true).await;
+    }
+
+    pub async fn run(self: &Arc<Pin<Box<Self>>>) -> JoinHandle<()>{
         let tx = self.tx.clone();
         let tout = self.timeout;
+        let _self = self.clone();
         tokio::spawn(async move {
             loop {
                 // This sleep has ms accuracy.
@@ -36,7 +42,7 @@ impl ResettableTimer {
                 //                      Should have fired here |
                 //                                    Fires here
 
-                match self.is_cancelled.compare_exchange(
+                match _self.is_cancelled.compare_exchange(
                     true,     // If it is currenty true
                     false,        // Set it to false
                     std::sync::atomic::Ordering::Release,    
@@ -52,11 +58,12 @@ impl ResettableTimer {
                 };
                 
             }
-        });
+        })
     }
 
-    pub async fn wait(self: &mut Pin<Box<Self>>) -> bool {
-        self.rx.recv().await;
+    pub async fn wait(self: &mut Arc<Pin<Box<Self>>>) -> bool {
+        let mut rx = self.rx.lock().await;
+        rx.recv().await;
         true
     }
 

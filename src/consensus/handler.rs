@@ -1,22 +1,32 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque}, io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::{
+    collections::{HashMap, HashSet},
+    io::{Error, ErrorKind},
+    ops::Deref,
+    pin::Pin,
+    sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize},
         Arc,
-    }
+    },
 };
 
-use ed25519_dalek::SIGNATURE_LENGTH;
 use log::{debug, warn};
 use prost::Message;
-use tokio::sync::{mpsc, Mutex};
 use std::time::Instant;
+use tokio::sync::{mpsc, Mutex};
 
-use crate::{config::Config, crypto::KeyStore, rpc::{server::{LatencyProfile, MsgAckChan, RespType}, MessageRef}};
+use crate::{
+    config::Config,
+    crypto::KeyStore,
+    rpc::{
+        server::{LatencyProfile, MsgAckChan, RespType},
+        MessageRef,
+    },
+};
 
 use super::{
     log::Log,
     proto::{
-        consensus::{ProtoBlock, ProtoQuorumCertificate, ProtoVote},
+        consensus::ProtoQuorumCertificate,
         rpc::{self, ProtoPayload},
     },
 };
@@ -48,14 +58,18 @@ impl ConsensusState {
     }
 }
 
-
-
 pub type ForwardedMessage = (rpc::proto_payload::Message, String, LatencyProfile);
-pub type ForwardedMessageWithAckChan = (rpc::proto_payload::Message, String, MsgAckChan, LatencyProfile);
+pub type ForwardedMessageWithAckChan = (
+    rpc::proto_payload::Message,
+    String,
+    MsgAckChan,
+    LatencyProfile,
+);
 
 pub struct ServerContext {
     pub config: Config,
     pub i_am_leader: AtomicBool,
+    pub view_is_stable: AtomicBool,
     pub node_queue: (
         mpsc::UnboundedSender<ForwardedMessage>,
         Mutex<mpsc::UnboundedReceiver<ForwardedMessage>>,
@@ -65,12 +79,14 @@ pub struct ServerContext {
         Mutex<mpsc::UnboundedReceiver<ForwardedMessageWithAckChan>>,
     ),
     pub state: ConsensusState,
-    pub client_ack_pending: Mutex<HashMap<
-        (u64, usize),         // (block_id, tx_id)
-        (MsgAckChan, LatencyProfile)
-    >>,
+    pub client_ack_pending: Mutex<
+        HashMap<
+            (u64, usize), // (block_id, tx_id)
+            (MsgAckChan, LatencyProfile),
+        >,
+    >,
     pub ping_counters: std::sync::Mutex<HashMap<u64, Instant>>,
-    pub keys: KeyStore
+    pub keys: KeyStore,
 }
 
 #[derive(Clone)]
@@ -83,12 +99,13 @@ impl PinnedServerContext {
         PinnedServerContext(Arc::new(Box::pin(ServerContext {
             config: cfg.clone(),
             i_am_leader: AtomicBool::new(false),
+            view_is_stable: AtomicBool::new(false),
             node_queue: (node_ch.0, Mutex::new(node_ch.1)),
             client_queue: (client_ch.0, Mutex::new(client_ch.1)),
             state: ConsensusState::new(),
             client_ack_pending: Mutex::new(HashMap::new()),
             ping_counters: std::sync::Mutex::new(HashMap::new()),
-            keys: keys.clone()
+            keys: keys.clone(),
         })))
     }
 }
@@ -105,15 +122,20 @@ impl Deref for PinnedServerContext {
 /// No blocking and/or locking allowed.
 /// The job is to filter old messages quickly and send them on the channel.
 /// The real consensus handler is a separate green thread that consumes these messages.
-pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>, ack_tx: MsgAckChan) -> Result<RespType, Error> {
+pub fn consensus_rpc_handler<'a>(
+    ctx: &PinnedServerContext,
+    m: MessageRef<'a>,
+    ack_tx: MsgAckChan,
+) -> Result<RespType, Error> {
     let profile = LatencyProfile::new();
     let sender = match m.2 {
         crate::rpc::SenderType::Anon => {
-            return Err(Error::new(ErrorKind::InvalidData, "unauthenticated message")); // Anonymous replies shouldn't come here
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "unauthenticated message",
+            )); // Anonymous replies shouldn't come here
         }
-        crate::rpc::SenderType::Auth(name) => {
-            name.to_string()
-        }
+        crate::rpc::SenderType::Auth(name) => name.to_string(),
     };
     let body = match ProtoPayload::decode(&m.0.as_slice()[0..m.1]) {
         Ok(b) => b,
@@ -135,15 +157,14 @@ pub fn consensus_rpc_handler<'a>(ctx: &PinnedServerContext, m: MessageRef<'a>, a
     match &msg {
         rpc::proto_payload::Message::ClientRequest(_) => {
             let msg = (body.message.unwrap(), sender, ack_tx, profile);
-            if let Err(_) = ctx.client_queue.0.send(msg){
+            if let Err(_) = ctx.client_queue.0.send(msg) {
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }
             return Ok(RespType::RespAndTrack);
-            
-        },
+        }
         _ => {
             let msg = (body.message.unwrap(), sender, profile);
-            if let Err(_) = ctx.node_queue.0.send(msg){
+            if let Err(_) = ctx.node_queue.0.send(msg) {
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }
 

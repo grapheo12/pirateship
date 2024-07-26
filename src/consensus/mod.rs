@@ -55,10 +55,6 @@ impl ConsensusNode {
     pub fn run(node: Arc<Self>) -> JoinSet<()> {
         // These are just increasing ref counts.
         // It is pointing to the same server instance.
-        node.ctx.state.view.store(1, Ordering::SeqCst);
-        if node.ctx.config.net_config.name == get_leader_str(&node.ctx) {
-            node.ctx.i_am_leader.store(true, Ordering::SeqCst);
-        }
         let mut js = JoinSet::new();
         let node1 = node.clone();
         let node2 = node.clone();

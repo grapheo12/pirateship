@@ -8,8 +8,24 @@ message ProtoClientRequest {
     bytes sig = 2;
 }
 
-message ProtoClientReply {
+message ProtoTransactionReceipt {
     bytes req_digest = 1;
     uint64 block_n = 2;
     uint64 tx_n = 3;
 }
+
+message ProtoTryAgain { }
+
+message ProtoCurrentLeader {
+    string name = 1;
+}
+
+message ProtoClientReply {
+    oneof reply {
+        ProtoTransactionReceipt receipt = 1;
+        ProtoTryAgain try_again = 2;
+        ProtoCurrentLeader leader = 3; 
+    }
+}
+
+

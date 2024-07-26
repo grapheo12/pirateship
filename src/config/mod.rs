@@ -42,6 +42,7 @@ pub struct ConsensusConfig {
     pub stats_report_secs: u64,
     pub max_backlog_batch_size: usize,
     pub signature_max_delay_ms: u64,
+    pub view_timeout_ms: u64,
     pub signature_max_delay_blocks: u64,
     pub vote_processing_workers: u16
 }
@@ -125,6 +126,7 @@ impl ClientConfig {
                 max_backlog_batch_size: 1,
                 signature_max_delay_blocks: 128,
                 signature_max_delay_ms: 100,
+                view_timeout_ms: 150,
                 vote_processing_workers: 128
             },
         }

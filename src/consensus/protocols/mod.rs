@@ -19,6 +19,6 @@ mod jolteon;
 pub use jolteon::*;
 
 #[cfg(feature = "cochin")]
-mod pirateship;
+mod cochin;
 #[cfg(feature = "cochin")]
-pub use pirateship::*;
+pub use cochin::*;

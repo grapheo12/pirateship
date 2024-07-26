@@ -41,7 +41,9 @@ fn process_args() -> ClientConfig {
 }
 
 async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -> io::Result<()> {    
-    for i in 0..num_requests {
+    let mut curr_leader = String::from("node1");
+    let mut i = 0;
+    while i < num_requests {
         let client_req = ProtoClientRequest {
             tx: format!("Tx:{}:{}", idx, i).into_bytes(),
             // sig: vec![0u8; SIGNATURE_LENGTH],
@@ -60,13 +62,30 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -
         let start = Instant::now();
         let msg = PinnedClient::send_and_await_reply(
             &client,
-            &String::from("node1"),
+            &curr_leader,
             MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon),
         )
         .await
         .unwrap();
         let sz = msg.as_ref().1;
         let resp = ProtoClientReply::decode(&msg.as_ref().0.as_slice()[..sz]).unwrap();
+        if let None = resp.reply {
+            continue;
+        }
+        let resp = match resp.reply.unwrap() {
+            pft::consensus::proto::client::proto_client_reply::Reply::Receipt(r) => r,
+            pft::consensus::proto::client::proto_client_reply::Reply::TryAgain(_) => {
+                continue;
+            },
+            pft::consensus::proto::client::proto_client_reply::Reply::Leader(l) => {
+                curr_leader = l.name.clone();
+                info!("New leader: {}", curr_leader);
+                continue;
+            },
+        };
+
+
+        
         if resp.block_n % 1000 == 0 {
             info!("Client Id: {}, Msg Id: {}, Block num: {}, Tx num: {}, Latency: {} us",
                 idx, i, resp.block_n, resp.tx_n,
@@ -80,6 +99,8 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -
         //         start.elapsed().as_micros()
         //     );
         // }
+
+        i += 1;
     }
 
     Ok(())

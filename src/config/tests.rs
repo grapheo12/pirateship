@@ -46,7 +46,8 @@ fn test_nodeconfig_serialize() {
         max_backlog_batch_size: 1000,
         signature_max_delay_blocks: 128,
         signature_max_delay_ms: 100,
-        vote_processing_workers: 128
+        vote_processing_workers: 128,
+        view_timeout_ms: 150
     };
 
     let config = Config {
