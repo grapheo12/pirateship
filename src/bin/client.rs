@@ -49,8 +49,6 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -
         };
 
         let rpc_msg_body = ProtoPayload {
-            rpc_type: rpc::RpcType::OneWay.into(),
-            rpc_seq_num: i as u64,
             message: Some(
                 pft::consensus::proto::rpc::proto_payload::Message::ClientRequest(client_req),
             ),

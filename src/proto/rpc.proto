@@ -4,13 +4,6 @@ package proto.rpc;
 import "consensus.proto";
 import "client.proto";
 
-enum RPCType {
-    FastQuorumRequest = 0;
-    DiverseQuorumRequest = 1;
-    FastQuorumReply = 2;
-    DiverseQuorumReply = 3;
-    OneWay = 4;             // For client requests.
-}
 
 message ProtoPayload {
     oneof message {
@@ -21,8 +14,4 @@ message ProtoPayload {
         proto.consensus.ProtoVote vote = 5;
         proto.client.ProtoClientRequest client_request = 6;     
     }
-
-    RPCType rpc_type = 7;
-    uint64 rpc_seq_num = 8;               // To be used for deduplication: (sender name, rpc_type, rpc_seq_no) is unique
-
 }

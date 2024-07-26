@@ -175,12 +175,6 @@ pub fn do_commit(
         lack_pend.remove(&d);
     }
 
-    // This is not very accurate.
-    // However, we are assuming the vote.n is monotonic.
-    // If that doesn't hold, this can cause rejection of legitimate votes.
-    // Causing deadlocks.
-    ctx.last_fast_quorum_request.fetch_add(1, Ordering::SeqCst);
-
     // Every thousandth block is added in ping_counters.
     {
         let mut lpings = ctx.ping_counters.lock().unwrap();
@@ -355,8 +349,6 @@ pub async fn do_push_append_entries_to_fork(
 pub async fn do_reply_vote(ctx: PinnedServerContext, client: PinnedClient, vote: ProtoVote, reply_to: &String) -> Result<(), Error> {
     let vote_n = vote.n;
     let rpc_msg_body = ProtoPayload {
-        rpc_type: rpc::RpcType::FastQuorumReply.into(),
-        rpc_seq_num: ctx.last_fast_quorum_request.load(Ordering::SeqCst),
         message: Some(consensus::proto::rpc::proto_payload::Message::Vote(
             vote,
         )),
@@ -568,8 +560,6 @@ pub async fn broadcast_append_entries(
     let block_n = ae.fork.as_ref().unwrap().blocks[block_n - 1].n;
 
     let rpc_msg_body = ProtoPayload {
-        rpc_type: rpc::RpcType::FastQuorumRequest.into(),
-        rpc_seq_num: ctx.last_fast_quorum_request.load(Ordering::SeqCst),
         message: Some(consensus::proto::rpc::proto_payload::Message::AppendEntries(ae)),
     };
 

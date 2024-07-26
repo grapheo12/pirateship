@@ -53,15 +53,8 @@ impl ConsensusState {
 pub type ForwardedMessage = (rpc::proto_payload::Message, String, LatencyProfile);
 pub type ForwardedMessageWithAckChan = (rpc::proto_payload::Message, String, MsgAckChan, LatencyProfile);
 
-/// Keeps track of the rpc sequence numbers ONLY when I am the leader.
-/// For fast quorum replies: if seq_num < last_fast_quorum_request, drop message.
-/// For diverse quorum replies: if seq_num < last_diverse_quorum - k, drop message,
-/// where k is the quorum diversity constant.
-/// When I regain leadership, I should restart from here.
 pub struct ServerContext {
     pub config: Config,
-    pub last_fast_quorum_request: AtomicU64,
-    pub last_diverse_quorum_request: AtomicU64,
     pub i_am_leader: AtomicBool,
     pub node_queue: (
         mpsc::UnboundedSender<ForwardedMessage>,
@@ -89,8 +82,6 @@ impl PinnedServerContext {
         let client_ch = mpsc::unbounded_channel();
         PinnedServerContext(Arc::new(Box::pin(ServerContext {
             config: cfg.clone(),
-            last_fast_quorum_request: AtomicU64::new(1),
-            last_diverse_quorum_request: AtomicU64::new(1),
             i_am_leader: AtomicBool::new(false),
             node_queue: (node_ch.0, Mutex::new(node_ch.1)),
             client_queue: (client_ch.0, Mutex::new(client_ch.1)),
