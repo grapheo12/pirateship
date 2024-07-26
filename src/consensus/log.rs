@@ -6,7 +6,7 @@ use prost::Message;
 
 use crate::crypto::{cmp_hash, hash, KeyStore};
 
-use super::proto::consensus::{proto_block::Sig, DefferedSignature, ProtoBlock, ProtoNameWithSignature, ProtoQuorumCertificate};
+use super::proto::consensus::{proto_block::Sig, DefferedSignature, ProtoBlock, ProtoFork, ProtoNameWithSignature, ProtoQuorumCertificate};
 
 #[derive(Clone, Debug)]
 pub struct LogEntry {
@@ -292,6 +292,23 @@ impl Log {
         }
         
         keys.verify(name, sig.as_slice().try_into().unwrap(), &self.hash_at_n(n).unwrap())
+    }
+
+
+    pub fn serialize_from_n(&self, n: u64) -> ProtoFork {
+        let mut fork = ProtoFork {
+            blocks: Vec::new(),
+        };
+
+        for i in n..(self.last() + 1) {
+            if i == 0 {
+                continue;
+            }
+            let block = self.get(i).unwrap().block.clone();
+            fork.blocks.push(block);
+        }
+
+        fork
     }
 
 

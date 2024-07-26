@@ -1,12 +1,8 @@
 use hex::ToHex;
-use log::{debug, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use prost::Message;
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    fmt::format,
-    io::{Error, ErrorKind},
-    sync::atomic::Ordering,
-    time::{Duration, Instant},
+    clone, collections::{HashMap, HashSet, VecDeque}, fmt::format, io::{Error, ErrorKind}, sync::atomic::Ordering, time::{Duration, Instant}
 };
 use tokio::{
     join, sync::{mpsc::{self, Sender}, MutexGuard}, time::sleep
@@ -21,7 +17,7 @@ use crate::{
         proto::{
             client::{ProtoClientReply, ProtoCurrentLeader, ProtoTransactionReceipt, ProtoTryAgain},
             consensus::{
-                proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoVote
+                proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote
             },
             rpc::{self, proto_payload, ProtoPayload},
         },
@@ -36,10 +32,14 @@ use crate::{
 };
 
 pub fn get_leader_str(ctx: &PinnedServerContext) -> String {
+    get_leader_str_for_view(ctx, ctx.state.view.load(Ordering::SeqCst))
+}
+
+pub fn get_leader_str_for_view(ctx: &PinnedServerContext, view: u64) -> String {
     ctx.config.consensus_config.node_list
         [get_current_leader(
             ctx.config.consensus_config.node_list.len() as u64,
-            ctx.state.view.load(Ordering::SeqCst)
+            view
         )]
     .clone()
 }
@@ -456,6 +456,106 @@ pub async fn do_reply_vote(ctx: PinnedServerContext, client: PinnedClient, vote:
 
     Ok(())
 }
+
+pub async fn do_process_view_change(ctx: PinnedServerContext, vc: &ProtoViewChange, sender: &String, super_majority: u64) {
+    if vc.view < ctx.state.view.load(Ordering::SeqCst)
+       || (vc.view == ctx.state.view.load(Ordering::SeqCst) && ctx.view_is_stable.load(Ordering::SeqCst))
+    {
+        return;         // View Change for older views.
+    }
+
+    if vc.fork.is_none() {
+        return;
+    }
+
+    if !ctx.config.net_config.name.eq(&get_leader_str_for_view(&ctx, vc.view)) {
+        // I am not the leader for this message's intended view
+        // @todo: Pacemaker: Use this as a signal to do view change
+        return;
+    }
+
+    // Check the signature on the fork.
+    let mut buf_last = Vec::new();
+    if vc.fork.is_some() && vc.fork.as_ref().unwrap().blocks.len() > 0 {
+        let block = vc.fork.as_ref().unwrap().blocks.len();
+        let block = &vc.fork.as_ref().unwrap().blocks[block];
+        if let Err(e) = block.encode(&mut buf_last) {
+            error!("{}", e);
+            return;
+        }
+    }
+    // This is the last_hash() logic.
+    let hash_last = hash(&buf_last);
+    let sig = match vc.fork_sig.as_slice().try_into() {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("Invalid fork signature: {}", e);
+            return;
+        },
+    };
+    if !ctx.keys.verify(sender, &sig, &hash_last) {
+        warn!("Invalid fork signature from {}", sender);
+        return;
+    }
+
+    let mut fork_buf = ctx.state.fork_buffer.lock().await;
+    if !fork_buf.contains_key(&vc.view) {
+        fork_buf.insert(vc.view, HashMap::new());
+    }
+    fork_buf.get_mut(&vc.view).unwrap()
+        .insert(sender.clone(), vc.fork.as_ref().unwrap().clone());
+
+    let total_forks = fork_buf.get(&vc.view).unwrap().len();
+
+    if total_forks >= super_majority as usize {
+        // Got 2f + 1 view change messages.
+        // Need to update view and take over as leader.
+
+        // Get the set of forks, `F` (as in pseudocode)
+        let fork_set = fork_buf.get(&vc.view).unwrap().clone();
+        // Delete all buffers up till this view.
+        fork_buf.retain(|&n, _| {
+            n > vc.view
+        });
+
+        drop(fork_buf);
+
+        do_init_new_leader(ctx, vc.view, fork_set, super_majority).await;
+
+    }
+}
+
+pub async fn do_init_new_leader(ctx: PinnedServerContext, view: u64, fork_set: HashMap<String, ProtoFork>, super_majority: u64) {
+    if ctx.state.view.load(Ordering::SeqCst) > view ||
+       (ctx.state.view.load(Ordering::SeqCst) == view && ctx.view_is_stable.load(Ordering::SeqCst)) ||
+       fork_set.len() < super_majority as usize ||
+       ctx.config.net_config.name != get_leader_str_for_view(&ctx, view)
+    {
+        // Precondition check
+        return;
+    }
+
+    // Stop accepting client messages
+    ctx.view_is_stable.store(false, Ordering::SeqCst);
+    
+    // Increase view
+    ctx.state.view.store(view, Ordering::SeqCst);
+    ctx.i_am_leader.store(true, Ordering::SeqCst);
+
+    info!("Trying to gain stable leadership for view {}", view);
+
+    // @todo
+
+    // Choose fork
+
+    // Overwrite local fork with chosen fork
+
+    // Broadcast fork and wait for responses.
+
+    // If I get AppendEntries or NewLeader from higher view during this time, 
+    // need to update view again and become a follower.
+}
+
 pub async fn process_node_request(
     ctx: &PinnedServerContext,
     client: &PinnedClient,
@@ -501,6 +601,11 @@ pub async fn process_node_request(
             profile.register("Vote chan wait");
             let _ = do_process_vote(ctx.clone(), v, sender, majority, super_majority).await;
             profile.register("Vote process");
+        },
+        crate::consensus::proto::rpc::proto_payload::Message::ViewChange(vc) => {
+            profile.register("View Change chan wait");
+            let _ = do_process_view_change(ctx.clone(), vc, sender, super_majority).await;
+            profile.register("View change process");
         }
         _ => {}
     }
@@ -508,7 +613,7 @@ pub async fn process_node_request(
     Ok(())
 }
 
-async fn do_init_view_change(ctx: &PinnedServerContext) -> Result<(), Error> {
+async fn do_init_view_change(ctx: &PinnedServerContext, client: &PinnedClient, super_majority: u64) -> Result<(), Error> {
     // Stop accepting new client requests, immediately.
     ctx.view_is_stable.store(false, Ordering::SeqCst);
     ctx.i_am_leader.store(false, Ordering::SeqCst);
@@ -518,13 +623,43 @@ async fn do_init_view_change(ctx: &PinnedServerContext) -> Result<(), Error> {
         + 1; // Fetch_add returns the old val
     let leader = get_leader_str(ctx);
 
-    if leader.eq(&ctx.config.net_config.name) {
-        ctx.i_am_leader.store(true, Ordering::SeqCst);
+    warn!("Moved to new view {} with leader {}", view, leader);
+
+    // Send everything from bci onwards.
+    // This is equivalent to sending the sending all preprepare and prepare messages in PBFT
+    let fork = ctx.state.fork.lock().await;
+    let fork_from_bci = fork.serialize_from_n(ctx.state.byz_commit_index.load(Ordering::SeqCst));
+
+    let vc_msg = ProtoViewChange {
+        view,
+        fork: Some(fork_from_bci),
+        fork_sig: fork.last_signature(&ctx.keys).to_vec(),
+    };
+
+    if leader == ctx.config.net_config.name {
+        // I won't send the message to myself.
+        // @todo: Pacemaker: broadcast this
+        do_process_view_change(ctx.clone(), &vc_msg, &ctx.config.net_config.name, super_majority).await;
+        return Ok(());
     }
 
-    warn!("Moved to new view {} with leader {}", view, leader);
-    ctx.view_is_stable.store(true, Ordering::SeqCst);
+    let mut buf = Vec::new();
+
+    let rpc_msg_body = ProtoPayload {
+        message: Some(consensus::proto::rpc::proto_payload::Message::ViewChange(vc_msg)),
+    };
+
+    rpc_msg_body.encode(&mut buf)?;
+    let sz = buf.len();
+    let bcast_msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
     
+    let mut profile = LatencyProfile::new();
+    profile.prefix = String::from(format!("View change to {}", leader));
+    profile.should_print = true;
+    if let Err(e) = PinnedClient::broadcast(client, &vec![leader.clone()], &bcast_msg, &mut profile).await {
+        error!("Could not broadcast ViewChange: {}", e);
+    }
+
     Ok(())
 }
 
@@ -915,7 +1050,7 @@ pub async fn handle_node_messages(
         }
 
         if view_timer_tick {
-            do_init_view_change(&ctx).await?;
+            do_init_view_change(&ctx, &client, super_majority).await?;
         }
 
         while node_req_num > 0 {

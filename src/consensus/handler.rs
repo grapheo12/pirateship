@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     io::{Error, ErrorKind},
     ops::Deref,
     pin::Pin,
@@ -26,7 +26,7 @@ use crate::{
 use super::{
     log::Log,
     proto::{
-        consensus::ProtoQuorumCertificate,
+        consensus::{ProtoFork, ProtoQuorumCertificate},
         rpc::{self, ProtoPayload},
     },
 };
@@ -42,6 +42,7 @@ pub struct ConsensusState {
     pub byz_commit_index: AtomicU64,
     pub byz_qc_pending: Mutex<HashSet<u64>>,
     pub next_qc_list: Mutex<Vec<ProtoQuorumCertificate>>,
+    pub fork_buffer: Mutex<BTreeMap<u64, HashMap<String, ProtoFork>>>
 }
 
 impl ConsensusState {
@@ -54,6 +55,7 @@ impl ConsensusState {
             byz_commit_index: AtomicU64::new(0),
             byz_qc_pending: Mutex::new(HashSet::new()),
             next_qc_list: Mutex::new(Vec::new()),
+            fork_buffer: Mutex::new(BTreeMap::new())
         }
     }
 }
