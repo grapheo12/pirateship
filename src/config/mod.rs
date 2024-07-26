@@ -38,7 +38,7 @@ pub struct RpcConfig {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ConsensusConfig {
     pub node_list: Vec<String>, // This better be in the same order in all nodes.
-    pub quorum_diversity_k: u64,
+    pub quorum_diversity_k: usize,
     pub stats_report_secs: u64,
     pub max_backlog_batch_size: usize,
     pub signature_max_delay_ms: u64,

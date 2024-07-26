@@ -237,23 +237,9 @@ pub async fn do_process_vote(
     super_majority: u64,
 ) -> Result<(), Error> {
     let mut fork = ctx.state.fork.lock().await;
-    let ci = ctx.state.commit_index.load(Ordering::SeqCst);
-    let mut updated_ci = ci;
-
     if !cmp_hash(&fork.hash_at_n(vote.n).unwrap(), &vote.fork_digest) {
         warn!("Wrong digest, skipping vote");
         return Ok(())
-    }
-
-    // A vote at n is considered a vote at 1..n
-    // So we should increase replication count for anything >= ci
-    for i in (ci + 1)..(vote.n + 1) {
-        if i > fork.last() {
-            break;
-        }
-        if fork.inc_replication_vote(sender, i)? >= majority {
-            updated_ci = i;
-        }
     }
 
     let mut qcs = Vec::new();
@@ -276,15 +262,67 @@ pub async fn do_process_vote(
     }
 
     {
-        let mut lack_pend = ctx.client_ack_pending.lock().await;
-        do_commit(&ctx, &mut fork, &mut lack_pend, updated_ci, ci);
-    }
-
-    {
         let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
         let mut next_qc_list = ctx.state.next_qc_list.lock().await;
         do_create_qcs(&ctx, &mut fork, &mut next_qc_list, &mut byz_qc_pending, &qcs);
     }
+
+    let ci = ctx.state.commit_index.load(Ordering::SeqCst);
+    let mut updated_ci = ci;
+
+    // Quorum Diversity logic:
+    // If the block is signed, is in byz_qc_pending AND |byz_qc_pending| >= k
+    // Wait for supermajority, else, wait for majority
+    // for crash commit
+    let mut qd_should_wait_supermajority = false;
+    // Since followers are sending signatures for older unqc-ed signed blocks with the current blocks anyway
+    // This is a monotonic condition.
+    // The first signed block I encounter that is in byz_qc_pending and |byz_qc_pending| >= k
+    // I flip this to true. This should hold the crash commit for all block (signed or unsigned) after this block.
+    // Once this signed block has supermajority, the other unsigned blocks will be committed back because they already got majority.  
+
+
+    // A vote at n is considered a vote at 1..n
+    // So we should increase replication count for anything >= ci
+    for i in (ci + 1)..(vote.n + 1) {
+        if i > fork.last() {
+            warn!("Vote({}) higher than fork.last() = {}", i, fork.last());
+            break;
+        }
+
+        let mut __flipped = false;
+        let mut __byz_qc_pending_len = 0;
+        if fork.get(i).unwrap().has_signature() {
+            let byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
+            if byz_qc_pending.contains(&i) && byz_qc_pending.len() >= ctx.config.consensus_config.quorum_diversity_k {
+                qd_should_wait_supermajority = true;
+                __flipped = true;
+                __byz_qc_pending_len = byz_qc_pending.len();
+            }
+        }
+
+        if __flipped { // Trying to avoid printing stuff while holding a lock (although I am holding a lock on fork :-))
+            warn!("Waiting for super_majority due to quorum diversity. |byz_qc_pending| = {}", __byz_qc_pending_len);
+        }
+
+        if qd_should_wait_supermajority {
+            if fork.inc_replication_vote(sender, i)? >= super_majority {
+                updated_ci = i;
+            }
+        }else{
+            if fork.inc_replication_vote(sender, i)? >= majority {
+                updated_ci = i;
+            }
+        }
+
+    }
+
+
+    {
+        let mut lack_pend = ctx.client_ack_pending.lock().await;
+        do_commit(&ctx, &mut fork, &mut lack_pend, updated_ci, ci);
+    }
+
 
 
     Ok(())
@@ -474,12 +512,14 @@ pub async fn report_stats(ctx: &PinnedServerContext) -> Result<(), Error> {
         {
             let fork = ctx.state.fork.lock().await;
             let lack_pend = ctx.client_ack_pending.lock().await;
+            let byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
 
-            info!("fork.last = {}, fork.last_qc = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, num_txs = {}, fork.last_hash = {}",
+            info!("fork.last = {}, fork.last_qc = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, pending_qcs = {} num_txs = {}, fork.last_hash = {}",
                 fork.last(), fork.last_qc(),
                 ctx.state.commit_index.load(Ordering::SeqCst),
                 ctx.state.byz_commit_index.load(Ordering::SeqCst),
                 lack_pend.len(),
+                byz_qc_pending.len(),
                 ctx.state.num_committed_txs.load(Ordering::SeqCst),
                 fork.last_hash().encode_hex::<String>()
             );
@@ -627,8 +667,8 @@ pub async fn do_append_entries(
     // Create the block, holding a lock on the fork state.
     let (ae, profile) = create_and_push_block(ctx.clone(), reqs, should_sign).await?;
 
-    // Add this block to byz_qc_pending
-    {
+    // Add this block to byz_qc_pending, if it is a signed block
+    if should_sign {
         let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
         do_add_block_to_byz_qc_pending(&mut byz_qc_pending, &ae);
     }

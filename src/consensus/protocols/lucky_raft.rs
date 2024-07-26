@@ -674,11 +674,7 @@ pub async fn handle_client_messages(
             continue;
         }
 
-        pending_signatures += 1;
-        let should_sig = signature_timer_tick    // Either I am running this body because of signature timeout.
-            || (pending_signatures >= ctx.config.consensus_config.signature_max_delay_blocks);
-        // Or I actually got some transactions and I really need to sign
-
+        let should_sig = false;         // This is the only difference between lucky_raft and signed_raft.
         // Ok I am the leader.
 
         do_append_entries(
