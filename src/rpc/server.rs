@@ -138,7 +138,8 @@ impl<'a> FrameReader<'a> {
         let sz = sz_rdr.read_u32().await.unwrap() as usize;
         let len = buff.len();
         if sz > len {
-            buff.reserve(sz - len);
+            buff.extend(vec![0u8; sz - len]);
+            // buff.reserve(sz - len);
         }
 
         self.read_next_bytes(sz, buff).await?;

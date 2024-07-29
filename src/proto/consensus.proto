@@ -16,16 +16,33 @@ message ProtoQuorumCertificate {
 // Empty type
 message DefferedSignature { }
 
+message ProtoViewChange {
+    uint64 view = 1;
+    ProtoFork fork = 2;
+    bytes fork_sig = 3;
+}
+
+message ProtoForkValidation {
+    ProtoViewChange view_change_message = 1;
+    string name = 2;
+}
+
+
 message ProtoBlock {
     repeated bytes tx = 1;                   // list of transactions; needs to be its own type later.
     uint64 n = 2;                            // sequence number; u64 => don't worry about wrap-around.
     bytes parent = 3;                        // Hash chain parent
     uint64 view = 4;                         // proposer must be Leader(view)
     repeated ProtoQuorumCertificate qc = 5;  // List of quorum certificates attached to this block.
+    repeated ProtoForkValidation fork_validation = 6; // List of view change messages. To check if this block is coming from a suitable fork.
+    bool view_is_stable = 7;
+    
     oneof sig {
-        DefferedSignature no_sig = 6;
-        bytes proposer_sig = 7;
+        DefferedSignature no_sig = 8;
+        bytes proposer_sig = 9;
     }
+
+
 }
 
 // This is different from the logical view of a fork with fields `last` and `last_qc`.
@@ -33,32 +50,27 @@ message ProtoFork {
     repeated ProtoBlock blocks = 1;
 }
 
-message ProtoViewChange {
-    uint64 view = 1;
-    ProtoFork fork = 2;
-    bytes fork_sig = 3;
-}
 
 message ProtoAppendEntries {
     ProtoFork fork = 1;
     uint64 commit_index = 2;
-    uint64 byz_commit_index = 3;
     uint64 view = 4;
+    bool view_is_stable = 5;
 }
 
-message ProtoNewLeader {
-    map<string, ProtoFork> forks = 1;           // node --> fork mapping
-    map<string, bytes> fork_sigs = 2;           // node --> fork signature mapping
-    string chosen_fork_node = 3;                // node whose fork is chosen; logically: a pointer to the chosen fork
-    uint64 view = 4;
-}
+// message ProtoNewLeader {
+//     map<string, ProtoFork> forks = 1;           // node --> fork mapping
+//     map<string, bytes> fork_sigs = 2;           // node --> fork signature mapping
+//     string chosen_fork_node = 3;                // node whose fork is chosen; logically: a pointer to the chosen fork
+//     uint64 view = 4;
+// }
 
-message ProtoNewLeaderOk {
-    bytes fork_digest = 1;                       // Hash of the last block of the chosen fork
-    bytes list_digest = 2;                       // Hash of the ProtoNewLeader message
-    uint64 view = 3;
-    bytes sig = 4;                               // Signature on fields 1, 2, 3.       
-}
+// message ProtoNewLeaderOk {
+//     bytes fork_digest = 1;                       // Hash of the last block of the chosen fork
+//     bytes list_digest = 2;                       // Hash of the ProtoNewLeader message
+//     uint64 view = 3;
+//     bytes sig = 4;                               // Signature on fields 1, 2, 3.       
+// }
 
 message ProtoSignatureArrayEntry {
     uint64 n = 1;                                // Sequence number

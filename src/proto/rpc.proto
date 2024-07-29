@@ -9,9 +9,7 @@ message ProtoPayload {
     oneof message {
         proto.consensus.ProtoViewChange view_change = 1;
         proto.consensus.ProtoAppendEntries append_entries = 2;
-        proto.consensus.ProtoNewLeader new_leader = 3;
-        proto.consensus.ProtoNewLeaderOk new_leader_ok = 4;
-        proto.consensus.ProtoVote vote = 5;
-        proto.client.ProtoClientRequest client_request = 6;     
+        proto.consensus.ProtoVote vote = 3;
+        proto.client.ProtoClientRequest client_request = 4;     
     }
 }

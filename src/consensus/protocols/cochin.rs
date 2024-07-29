@@ -1,11 +1,23 @@
 use hex::ToHex;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
+use rustls::crypto::hash::Hash;
 use std::{
-    clone, collections::{HashMap, HashSet, VecDeque}, fmt::format, io::{Error, ErrorKind}, sync::atomic::Ordering, time::{Duration, Instant}
+    borrow::Borrow,
+    clone,
+    collections::{HashMap, HashSet, VecDeque},
+    fmt::format,
+    io::{Error, ErrorKind},
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
 };
 use tokio::{
-    join, sync::{mpsc::{self, Sender}, MutexGuard}, time::sleep
+    join,
+    sync::{
+        mpsc::{self, Sender},
+        MutexGuard,
+    },
+    time::sleep,
 };
 
 use crate::{
@@ -15,9 +27,13 @@ use crate::{
         leader_rotation::get_current_leader,
         log::{Log, LogEntry},
         proto::{
-            client::{ProtoClientReply, ProtoCurrentLeader, ProtoTransactionReceipt, ProtoTryAgain},
+            client::{
+                ProtoClientReply, ProtoCurrentLeader, ProtoTransactionReceipt, ProtoTryAgain,
+            },
             consensus::{
-                proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote
+                proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork,
+                ProtoForkValidation, ProtoQuorumCertificate, ProtoSignatureArrayEntry,
+                ProtoViewChange, ProtoVote,
             },
             rpc::{self, proto_payload, ProtoPayload},
         },
@@ -37,10 +53,7 @@ pub fn get_leader_str(ctx: &PinnedServerContext) -> String {
 
 pub fn get_leader_str_for_view(ctx: &PinnedServerContext, view: u64) -> String {
     ctx.config.consensus_config.node_list
-        [get_current_leader(
-            ctx.config.consensus_config.node_list.len() as u64,
-            view
-        )]
+        [get_current_leader(ctx.config.consensus_config.node_list.len() as u64, view)]
     .clone()
 }
 
@@ -107,7 +120,6 @@ pub async fn create_vote_for_blocks(
             // along with all other blocks for which I have sent signature before,
             // but haven't seen a QC
             byz_qc_pending.insert(n);
-
         }
 
         fork.inc_replication_vote(&ctx.config.net_config.name, n)?;
@@ -115,15 +127,17 @@ pub async fn create_vote_for_blocks(
 
     // Resend signatures for QCs I did not get yet.
     // This is safer than creating QCs with votes to higher blocks.
-    if atleast_one_sig_block { // Invariant: Only signature blocks get signature votes.
+    if atleast_one_sig_block {
+        // Invariant: Only signature blocks get signature votes.
         for n in byz_qc_pending.iter() {
             if let Some(sig) = fork.get(*n)?.qc_sigs.get(&ctx.config.net_config.name) {
-                vote_sigs.push(ProtoSignatureArrayEntry{ n: *n, sig: sig.to_vec() });
+                vote_sigs.push(ProtoSignatureArrayEntry {
+                    n: *n,
+                    sig: sig.to_vec(),
+                });
             }
         }
     }
-
-
 
     Ok(ProtoVote {
         sig_array: vote_sigs,
@@ -148,14 +162,14 @@ pub fn do_commit(
     let mut del_list = Vec::new();
     for i in (ci + 1)..(n + 1) {
         let num_txs = match fork.get(i) {
-            Ok(entry) => {
-                entry.block.tx.len()
-            },
+            Ok(entry) => entry.block.tx.len(),
             Err(_) => {
                 break;
             }
         };
-        ctx.state.num_committed_txs.fetch_add(num_txs, Ordering::SeqCst);
+        ctx.state
+            .num_committed_txs
+            .fetch_add(num_txs, Ordering::SeqCst);
     }
 
     for ((bn, txn), chan) in lack_pend.iter() {
@@ -163,14 +177,15 @@ pub fn do_commit(
             let h = hash(&fork.get(*bn).unwrap().block.tx[*txn]);
 
             let response = ProtoClientReply {
-                reply: Some(consensus::proto::client::proto_client_reply::Reply::Receipt(
-                    ProtoTransactionReceipt {
-                        req_digest: h,
-                        block_n: (*bn) as u64,
-                        tx_n: (*txn) as u64,
-
-                    }
-                ))
+                reply: Some(
+                    consensus::proto::client::proto_client_reply::Reply::Receipt(
+                        ProtoTransactionReceipt {
+                            req_digest: h,
+                            block_n: (*bn) as u64,
+                            tx_n: (*txn) as u64,
+                        },
+                    ),
+                ),
             };
 
             let v = response.encode_to_vec();
@@ -215,13 +230,18 @@ pub fn do_commit(
         "New Commit Index: {}, Fork Digest: {} Tx: {}, num_txs: {}",
         ctx.state.commit_index.load(Ordering::SeqCst),
         fork.last_hash().encode_hex::<String>(),
-        String::from_utf8(fork.last_hash())
-            .unwrap(),
+        String::from_utf8(fork.last_hash()).unwrap(),
         ctx.state.num_committed_txs.load(Ordering::SeqCst)
     );
 }
 
-pub fn do_create_qcs(_ctx: &PinnedServerContext, fork: &mut MutexGuard<Log>, next_qc_list: &mut MutexGuard<Vec<ProtoQuorumCertificate>>, byz_qc_pending: &mut MutexGuard<HashSet<u64>>, qcs: &Vec<u64>) {    
+pub fn do_create_qcs(
+    _ctx: &PinnedServerContext,
+    fork: &mut MutexGuard<Log>,
+    next_qc_list: &mut MutexGuard<Vec<ProtoQuorumCertificate>>,
+    byz_qc_pending: &mut MutexGuard<HashSet<u64>>,
+    qcs: &Vec<u64>,
+) {
     for n in qcs {
         // It is already done.
         if *n <= fork.last_qc() {
@@ -232,7 +252,7 @@ pub fn do_create_qcs(_ctx: &PinnedServerContext, fork: &mut MutexGuard<Log>, nex
             Ok(qc) => qc,
             Err(_) => {
                 continue;
-            },
+            }
         };
 
         next_qc_list.push(qc);
@@ -253,11 +273,21 @@ pub async fn do_process_vote(
     majority: u64,
     super_majority: u64,
 ) -> Result<(), Error> {
+    
     let mut fork = ctx.state.fork.lock().await;
     if !cmp_hash(&fork.hash_at_n(vote.n).unwrap(), &vote.fork_digest) {
         warn!("Wrong digest, skipping vote");
-        return Ok(())
+        return Ok(());
     }
+
+    let majority = if ctx.view_is_stable.load(Ordering::SeqCst) {
+        majority
+    }else {
+        super_majority
+    };
+
+    debug!("Processing vote: {:?} {} {}", vote, majority, super_majority);
+
 
     let mut qcs = Vec::new();
 
@@ -270,6 +300,15 @@ pub async fn do_process_vote(
             Ok(total_sigs) => {
                 if total_sigs >= super_majority {
                     qcs.push(vote_sig.n);
+                    info!("Creating QC for {}", vote_sig.n);
+                    if vote_sig.n == fork.last() && !ctx.view_is_stable.load(Ordering::SeqCst)
+                        && fork.get(vote_sig.n).unwrap().block.fork_validation.len() >= super_majority as usize
+                    {
+                        // This was a view change message for which we got QC.
+                        // View is stabilised hence.
+                        ctx.view_is_stable.store(true, Ordering::SeqCst);
+                        info!("View stabilised!");
+                    }
                 }
             }
             Err(e) => {
@@ -281,7 +320,13 @@ pub async fn do_process_vote(
     {
         let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
         let mut next_qc_list = ctx.state.next_qc_list.lock().await;
-        do_create_qcs(&ctx, &mut fork, &mut next_qc_list, &mut byz_qc_pending, &qcs);
+        do_create_qcs(
+            &ctx,
+            &mut fork,
+            &mut next_qc_list,
+            &mut byz_qc_pending,
+            &qcs,
+        );
     }
 
     let ci = ctx.state.commit_index.load(Ordering::SeqCst);
@@ -296,8 +341,7 @@ pub async fn do_process_vote(
     // This is a monotonic condition.
     // The first signed block I encounter that is in byz_qc_pending and |byz_qc_pending| >= k
     // I flip this to true. This should hold the crash commit for all block (signed or unsigned) after this block.
-    // Once this signed block has supermajority, the other unsigned blocks will be committed back because they already got majority.  
-
+    // Once this signed block has supermajority, the other unsigned blocks will be committed back because they already got majority.
 
     // A vote at n is considered a vote at 1..n
     // So we should increase replication count for anything >= ci
@@ -311,36 +355,38 @@ pub async fn do_process_vote(
         let mut __byz_qc_pending_len = 0;
         if fork.get(i).unwrap().has_signature() {
             let byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
-            if byz_qc_pending.contains(&i) && byz_qc_pending.len() >= ctx.config.consensus_config.quorum_diversity_k {
+            if byz_qc_pending.contains(&i)
+                && byz_qc_pending.len() >= ctx.config.consensus_config.quorum_diversity_k
+            {
                 qd_should_wait_supermajority = true;
                 __flipped = true;
                 __byz_qc_pending_len = byz_qc_pending.len();
             }
         }
 
-        if __flipped { // Trying to avoid printing stuff while holding a lock (although I am holding a lock on fork :-))
-            warn!("Waiting for super_majority due to quorum diversity. |byz_qc_pending| = {}", __byz_qc_pending_len);
+        if __flipped {
+            // Trying to avoid printing stuff while holding a lock (although I am holding a lock on fork :-))
+            warn!(
+                "Waiting for super_majority due to quorum diversity. |byz_qc_pending| = {}",
+                __byz_qc_pending_len
+            );
         }
 
         if qd_should_wait_supermajority {
             if fork.inc_replication_vote(sender, i)? >= super_majority {
                 updated_ci = i;
             }
-        }else{
+        } else {
             if fork.inc_replication_vote(sender, i)? >= majority {
                 updated_ci = i;
             }
         }
-
     }
-
 
     {
         let mut lack_pend = ctx.client_ack_pending.lock().await;
         do_commit(&ctx, &mut fork, &mut lack_pend, updated_ci, ci);
     }
-
-
 
     Ok(())
 }
@@ -364,19 +410,106 @@ pub fn maybe_byzantine_commit(ctx: &PinnedServerContext, fork: &MutexGuard<Log>)
         }
     }
 
-    ctx.state.byz_commit_index.store(updated_bci, Ordering::SeqCst);
+    ctx.state
+        .byz_commit_index
+        .store(updated_bci, Ordering::SeqCst);
+}
+
+/// Split the given fork into two sequences: [..last New Leader msg] [Last new leader msg + 1..]
+/// Verify all previous NewLeader messages wrt the proposer and fork choice rule.
+/// If it is verified, fork.overwrite(ret.0) will not violate GlobalLock()
+/// Once overwrite is done, it is safe to push/verify_and_push the blocks in ret.1.
+pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &ProtoFork, super_majority: u64) -> Result<(ProtoFork, ProtoFork), Error> {
+    let mut i = (f.blocks.len() - 1) as i64;
+    let mut split_point = None;
+
+    while i >= 0 {
+        if !f.blocks[i as usize].view_is_stable {
+            // This the signal that it is a New Leader message
+            let mut valid_forks = 0;
+            for fork_validation in &f.blocks[i as usize].fork_validation {
+                // Is this a valid fork?
+                // Check the signature on the fork.
+                let mut buf_last = Vec::new();
+                let vc = &fork_validation.view_change_message;
+                if vc.is_none() {
+                    continue;
+                }
+                let vc = vc.as_ref().unwrap();
+                if vc.fork.is_some() && vc.fork.as_ref().unwrap().blocks.len() > 0 {
+                    let block = vc.fork.as_ref().unwrap().blocks.len();
+                    let block = &vc.fork.as_ref().unwrap().blocks[block-1];
+                    if let Err(e) = block.encode(&mut buf_last) {
+                        error!("{}", e);
+                        continue;
+                    }
+                }
+                // This is the last_hash() logic.
+                let hash_last = hash(&buf_last);
+                let sig = match vc.fork_sig.as_slice().try_into() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("Invalid fork signature: {}", e);
+                        continue;
+                    }
+                };
+                if !ctx.keys.verify(&fork_validation.name, &sig, &hash_last) {
+                    warn!("Invalid fork signature from {}", fork_validation.name);
+                    continue;
+                }
+
+                valid_forks += 1;
+            }
+
+            if valid_forks < super_majority {
+                return Err(Error::new(ErrorKind::InvalidData, "New Leader message with invalid fork information"))
+            }
+
+            if split_point.is_none() {
+                split_point = Some((i + 1) as usize);
+            }
+        }
+
+        i -= 1;
+    }
+
+    if split_point.is_none() {
+        // There were no NewLeader messages
+        return Ok((ProtoFork { blocks: Vec::new() }, f.clone()));
+    }
+
+    if split_point.unwrap() == f.blocks.len() {
+        return Ok((f.clone(), ProtoFork { blocks: Vec::new() }));
+    }
+
+    let (overwrite_blocks, view_lock_blocks) = f.blocks.split_at(split_point.unwrap());
+    Ok((ProtoFork { blocks: overwrite_blocks.to_vec() }, ProtoFork { blocks: view_lock_blocks.to_vec() }))
 }
 
 pub async fn do_push_append_entries_to_fork(
     ctx: PinnedServerContext,
     ae: &ProtoAppendEntries,
     sender: &String,
-) -> (u64 /* last_n */, u64 /* updated_last_n */, Vec<u64> /* Sequence numbers */) {
+    super_majority: u64
+) -> (
+    u64,      /* last_n */
+    u64,      /* updated_last_n */
+    Vec<u64>, /* Sequence numbers */
+) {
     let mut fork = ctx.state.fork.lock().await;
     let last_n = fork.last();
     let last_qc = fork.last_qc();
     let mut updated_last_n = last_n;
     let mut seq_nums = Vec::new();
+
+    if ae.view < ctx.state.view.load(Ordering::SeqCst) {
+        warn!("Message from older view! Rejected");
+        return (last_n, last_n, seq_nums);
+    }else if ae.view > ctx.state.view.load(Ordering::SeqCst) {
+        ctx.state.view.store(ae.view, Ordering::SeqCst);
+        info!("View fast forwarded!");
+    }
+    // @todo: Backfilling!
 
     if !sender.eq(&get_leader_str(&ctx)) {
         // Can't accept blocks from non-leader.
@@ -384,21 +517,40 @@ pub async fn do_push_append_entries_to_fork(
         return (last_n, updated_last_n, seq_nums);
     }
 
-
     if let Some(f) = &ae.fork {
-        for b in &f.blocks {
+        let res = maybe_verify_view_change_sequence(&ctx, f, super_majority).await;
+        if let Err(e) = res {
+            warn!("Verification error: {}", e);
+            return (last_n, updated_last_n, seq_nums);
+        }
+        let (overwrite_blocks, view_lock_blocks) = res.unwrap();
+
+        if overwrite_blocks.blocks.len() > 0 {
+            let overwrite_res = fork.overwrite(&overwrite_blocks);
+            match overwrite_res {
+                Ok(n) => {
+                    info!("Overwritten to n = {}. Digest = {}", n, fork.last_hash().encode_hex::<String>());
+                    seq_nums.push(n);
+                },
+                Err(e) => {
+                    error!("{}", e);
+                },
+            }
+        }
+        
+        for b in view_lock_blocks.blocks {
             debug!("Inserting block {} with {} txs", b.n, b.tx.len());
             let entry = LogEntry::new(b.clone());
 
             let res = if entry.has_signature() {
-                fork.verify_and_push(entry, &ctx.keys, &get_leader_str(&ctx))
+                fork.verify_and_push(entry, &ctx.keys, &get_leader_str_for_view(&ctx, b.view))
             } else {
                 fork.push(entry)
             };
             match res {
                 Ok(_n) => {
                     seq_nums.push(_n);
-                },
+                }
                 Err(e) => {
                     warn!("Error appending block: {} seq_num: {}", e, b.n);
                     continue;
@@ -409,13 +561,20 @@ pub async fn do_push_append_entries_to_fork(
         updated_last_n = fork.last();
     }
 
+    let old_stable = ctx.view_is_stable.load(Ordering::SeqCst);
+    ctx.view_is_stable.store(ae.view_is_stable, Ordering::SeqCst);
+    let new_stable = ctx.view_is_stable.load(Ordering::SeqCst);
+    if new_stable && !old_stable {
+        info!("View stabilised.");
+    }
+
+
+
     if fork.last_qc() > last_qc {
         // If the last_qc progressed forward, need to clean up byz_qc_pending
         let last_qc = fork.last_qc();
         let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
-        byz_qc_pending.retain(|&n| {
-            n > last_qc
-        });
+        byz_qc_pending.retain(|&n| n > last_qc);
 
         // Also the byzantine commit index may move
         maybe_byzantine_commit(&ctx, &fork);
@@ -424,14 +583,16 @@ pub async fn do_push_append_entries_to_fork(
     (last_n, updated_last_n, seq_nums)
 }
 
-pub async fn do_reply_vote(ctx: PinnedServerContext, client: PinnedClient, vote: ProtoVote, reply_to: &String) -> Result<(), Error> {
+pub async fn do_reply_vote(
+    ctx: PinnedServerContext,
+    client: PinnedClient,
+    vote: ProtoVote,
+    reply_to: &String,
+) -> Result<(), Error> {
     let vote_n = vote.n;
     let rpc_msg_body = ProtoPayload {
-        message: Some(consensus::proto::rpc::proto_payload::Message::Vote(
-            vote,
-        )),
+        message: Some(consensus::proto::rpc::proto_payload::Message::Vote(vote)),
     };
-
 
     let mut buf = Vec::new();
     if let Ok(_) = rpc_msg_body.encode(&mut buf) {
@@ -441,34 +602,37 @@ pub async fn do_reply_vote(ctx: PinnedServerContext, client: PinnedClient, vote:
         let mut profile = LatencyProfile::new();
         if vote_n % 1000 == 0 {
             profile.should_print = true;
-            profile.prefix =
-                String::from(format!("Vote for block {}", vote_n));
+            profile.prefix = String::from(format!("Vote for block {}", vote_n));
         }
-        let _ = PinnedClient::broadcast(
-            &client,
-            &vec![reply_to.clone()],
-            &reply,
-            &mut profile,
-        )
-        .await;
+        let _ =
+            PinnedClient::broadcast(&client, &vec![reply_to.clone()], &reply, &mut profile).await;
     }
     debug!("Sent vote");
 
     Ok(())
 }
 
-pub async fn do_process_view_change(ctx: PinnedServerContext, vc: &ProtoViewChange, sender: &String, super_majority: u64) {
+pub async fn do_process_view_change(
+    ctx: PinnedServerContext,
+    client: PinnedClient,
+    vc: &ProtoViewChange,
+    sender: &String,
+    super_majority: u64,
+) {
     if vc.view < ctx.state.view.load(Ordering::SeqCst)
-       || (vc.view == ctx.state.view.load(Ordering::SeqCst) && ctx.view_is_stable.load(Ordering::SeqCst))
+        || (vc.view == ctx.state.view.load(Ordering::SeqCst)
+            && ctx.view_is_stable.load(Ordering::SeqCst))
     {
-        return;         // View Change for older views.
+        return; // View Change for older views.
     }
 
     if vc.fork.is_none() {
         return;
     }
 
-    if !ctx.config.net_config.name.eq(&get_leader_str_for_view(&ctx, vc.view)) {
+    if !ctx.config.net_config.name
+        .eq(&get_leader_str_for_view(&ctx, vc.view))
+    {
         // I am not the leader for this message's intended view
         // @todo: Pacemaker: Use this as a signal to do view change
         return;
@@ -478,7 +642,7 @@ pub async fn do_process_view_change(ctx: PinnedServerContext, vc: &ProtoViewChan
     let mut buf_last = Vec::new();
     if vc.fork.is_some() && vc.fork.as_ref().unwrap().blocks.len() > 0 {
         let block = vc.fork.as_ref().unwrap().blocks.len();
-        let block = &vc.fork.as_ref().unwrap().blocks[block];
+        let block = &vc.fork.as_ref().unwrap().blocks[block-1];
         if let Err(e) = block.encode(&mut buf_last) {
             error!("{}", e);
             return;
@@ -491,7 +655,7 @@ pub async fn do_process_view_change(ctx: PinnedServerContext, vc: &ProtoViewChan
         Err(e) => {
             warn!("Invalid fork signature: {}", e);
             return;
-        },
+        }
     };
     if !ctx.keys.verify(sender, &sig, &hash_last) {
         warn!("Invalid fork signature from {}", sender);
@@ -502,8 +666,10 @@ pub async fn do_process_view_change(ctx: PinnedServerContext, vc: &ProtoViewChan
     if !fork_buf.contains_key(&vc.view) {
         fork_buf.insert(vc.view, HashMap::new());
     }
-    fork_buf.get_mut(&vc.view).unwrap()
-        .insert(sender.clone(), vc.fork.as_ref().unwrap().clone());
+    fork_buf
+        .get_mut(&vc.view)
+        .unwrap()
+        .insert(sender.clone(), vc.clone());
 
     let total_forks = fork_buf.get(&vc.view).unwrap().len();
 
@@ -514,22 +680,26 @@ pub async fn do_process_view_change(ctx: PinnedServerContext, vc: &ProtoViewChan
         // Get the set of forks, `F` (as in pseudocode)
         let fork_set = fork_buf.get(&vc.view).unwrap().clone();
         // Delete all buffers up till this view.
-        fork_buf.retain(|&n, _| {
-            n > vc.view
-        });
+        fork_buf.retain(|&n, _| n > vc.view);
 
         drop(fork_buf);
 
-        do_init_new_leader(ctx, vc.view, fork_set, super_majority).await;
-
+        do_init_new_leader(ctx, client, vc.view, fork_set, super_majority).await;
     }
 }
 
-pub async fn do_init_new_leader(ctx: PinnedServerContext, view: u64, fork_set: HashMap<String, ProtoFork>, super_majority: u64) {
-    if ctx.state.view.load(Ordering::SeqCst) > view ||
-       (ctx.state.view.load(Ordering::SeqCst) == view && ctx.view_is_stable.load(Ordering::SeqCst)) ||
-       fork_set.len() < super_majority as usize ||
-       ctx.config.net_config.name != get_leader_str_for_view(&ctx, view)
+pub async fn do_init_new_leader(
+    ctx: PinnedServerContext,
+    client: PinnedClient,
+    view: u64,
+    fork_set: HashMap<String, ProtoViewChange>,
+    super_majority: u64,
+) {
+    if ctx.state.view.load(Ordering::SeqCst) > view
+        || (ctx.state.view.load(Ordering::SeqCst) == view
+            && ctx.view_is_stable.load(Ordering::SeqCst))
+        || fork_set.len() < super_majority as usize
+        || ctx.config.net_config.name != get_leader_str_for_view(&ctx, view)
     {
         // Precondition check
         return;
@@ -537,25 +707,196 @@ pub async fn do_init_new_leader(ctx: PinnedServerContext, view: u64, fork_set: H
 
     // Stop accepting client messages
     ctx.view_is_stable.store(false, Ordering::SeqCst);
-    
+
     // Increase view
     ctx.state.view.store(view, Ordering::SeqCst);
     ctx.i_am_leader.store(true, Ordering::SeqCst);
 
     info!("Trying to gain stable leadership for view {}", view);
 
-    // @todo
-
     // Choose fork
+    let chosen_fork = fork_choice_rule_get(&fork_set, &ctx.config.net_config.name);
 
     // Overwrite local fork with chosen fork
+    let mut fork = ctx.state.fork.lock().await;
+    let (last_n, last_hash) = {
+        let last_n = fork.overwrite(&chosen_fork).expect("Overwrite failed");
+        let last_hash = fork.last_hash();
+        (last_n, last_hash)
+    };
+    {
+        let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
+        byz_qc_pending.clear();
+        // We'll cause the next two blocks to be 2f + 1 voted anyway.
+    }
 
+    info!("Fork Overwritten, new last_n = {}, last_hash = {}", last_n, last_hash.encode_hex::<String>());
     // Broadcast fork and wait for responses.
+    let block = ProtoBlock {
+        tx: Vec::new(),
+        n: last_n + 1,
+        parent: last_hash,
+        view,
+        qc: Vec::new(),
+        fork_validation: fork_set
+            .iter()
+            .map(|(k, v)| ProtoForkValidation {
+                view_change_message: Some(v.clone()),
+                name: k.clone(),
+            })
+            .collect(),
+        view_is_stable: false,
+        sig: Some(consensus::proto::consensus::proto_block::Sig::NoSig(
+            DefferedSignature {},
+        )),
+    };
 
-    // If I get AppendEntries or NewLeader from higher view during this time, 
+    let entry = LogEntry::new(block);
+
+    fork
+        .push_and_sign(entry, &ctx.keys)
+        .expect("Should be able to push fork");
+    let ae = ProtoAppendEntries {
+        fork: Some(ProtoFork {
+            blocks: vec![fork.get(fork.last()).unwrap().block.clone()],
+        }),
+        commit_index: ctx.state.commit_index.load(Ordering::SeqCst),
+        view: ctx.state.view.load(Ordering::SeqCst),
+        view_is_stable: ctx.view_is_stable.load(Ordering::SeqCst)
+    };
+    info!("AE has signed block? {}", fork.get(fork.last()).unwrap().has_signature());
+    let send_list = get_everyone_except_me(
+        &ctx.config.net_config.name,
+        &ctx.config.consensus_config.node_list,
+    );
+
+    let profile = LatencyProfile::new();
+    let block_n = ae.fork.as_ref().unwrap().blocks.len();
+    let block_n = ae.fork.as_ref().unwrap().blocks[block_n - 1].n;
+
+    drop(fork); // create_vote_for_blocks takes lock on fork
+    let my_vote = create_vote_for_blocks(ctx.clone(), &vec![block_n])
+        .await
+        .unwrap();
+
+    broadcast_append_entries(ctx.clone(), client.clone(), ae, &send_list, profile)
+    .await
+    .unwrap();
+    
+    do_process_vote(
+        ctx.clone(),
+        &my_vote,
+        &ctx.config.net_config.name,
+        super_majority, // Forcing to wait for 2f + 1
+        super_majority,
+    )
+    .await
+    .unwrap();
+
+    // If I get AppendEntries or NewLeader from higher view during this time,
     // need to update view again and become a follower.
 }
 
+pub fn fork_choice_rule_get(
+    fork_set: &HashMap<String, ProtoViewChange>,
+    my_name: &String,
+) -> ProtoFork {
+    struct ForkStat {
+        last_view: u64,
+        last_n: u64,
+        last_qc: u64,
+    }
+
+    let mut chk_stats = HashMap::<String, ForkStat>::new();
+    for (name, fork) in fork_set {
+        let fork = fork.fork.as_ref().unwrap();
+        let fork_len = fork.blocks.len();
+        if fork_len == 0 {
+            chk_stats.insert(
+                name.clone(),
+                ForkStat {
+                    last_n: 0,
+                    last_qc: 0,
+                    last_view: 0,
+                },
+            );
+            continue;
+        }
+        let last_view = fork.blocks[fork_len - 1].view;
+        let last_n = fork.blocks[fork_len - 1].n;
+
+        let mut last_qc = 0;
+        let mut i = (fork_len - 1) as i64;
+        while i >= 0 {
+            for qc in &fork.blocks[i as usize].qc {
+                if qc.n > last_qc {
+                    last_qc = qc.n;
+                }
+            }
+
+            i -= 1;
+        }
+
+        chk_stats.insert(
+            name.clone(),
+            ForkStat {
+                last_n,
+                last_qc,
+                last_view,
+            },
+        );
+    }
+
+    // SubRule1: last_qc.n as high as possible.
+    let mut max_last_qc = 0;
+    for (_name, fork) in &chk_stats {
+        if fork.last_qc > max_last_qc {
+            max_last_qc = fork.last_qc;
+        }
+    }
+
+    chk_stats.retain(|_k, v| v.last_qc == max_last_qc);
+
+    // SubRule 2: last_view as high as possible
+    let mut max_last_view = 0;
+    for (_name, fork) in &chk_stats {
+        if fork.last_view > max_last_view {
+            max_last_view = fork.last_view;
+        }
+    }
+
+    chk_stats.retain(|_k, v| v.last_view == max_last_view);
+
+    // SubRule 3: last_n as high as possible
+    let mut max_last_n = 0;
+    for (_name, fork) in &chk_stats {
+        if fork.last_n > max_last_n {
+            max_last_n = fork.last_n;
+        }
+    }
+
+    chk_stats.retain(|_k, v| v.last_n == max_last_n);
+
+    // Now I'm free to choose whichever fork is remaining.
+    // Prefer my fork over others.
+    if chk_stats.contains_key(my_name) {
+        return fork_set
+            .get(my_name)
+            .unwrap()
+            .fork
+            .as_ref()
+            .unwrap()
+            .clone();
+    }
+
+    // If not, choose any.
+    let mut chosen_fork = None;
+    for (name, _fork) in &chk_stats {
+        chosen_fork = Some(fork_set.get(name).unwrap().fork.as_ref().unwrap().clone());
+    }
+
+    chosen_fork.unwrap()
+}
 pub async fn process_node_request(
     ctx: &PinnedServerContext,
     client: &PinnedClient,
@@ -568,7 +909,8 @@ pub async fn process_node_request(
     match &msg {
         crate::consensus::proto::rpc::proto_payload::Message::AppendEntries(ae) => {
             profile.register("AE chan wait");
-            let (last_n, updated_last_n, seq_nums) = do_push_append_entries_to_fork(ctx.clone(), ae, sender).await;
+            let (last_n, updated_last_n, seq_nums) =
+                do_push_append_entries_to_fork(ctx.clone(), ae, sender, super_majority).await;
             profile.register("Fork push");
 
             if updated_last_n > last_n {
@@ -582,7 +924,7 @@ pub async fn process_node_request(
                     profile.should_print = true;
                     profile.prefix = String::from(format!("Block: {}", updated_last_n));
                     profile.print();
-                }             
+                }
             }
 
             {
@@ -592,19 +934,19 @@ pub async fn process_node_request(
                 let mut lack_pend = ctx.client_ack_pending.lock().await;
                 // Followers should not have pending client requests.
                 // But this same interface is good for refactoring.
-                
+
                 do_commit(ctx, &mut fork, &mut lack_pend, new_ci, ci);
             }
-                
         }
         crate::consensus::proto::rpc::proto_payload::Message::Vote(v) => {
             profile.register("Vote chan wait");
             let _ = do_process_vote(ctx.clone(), v, sender, majority, super_majority).await;
             profile.register("Vote process");
-        },
+        }
         crate::consensus::proto::rpc::proto_payload::Message::ViewChange(vc) => {
             profile.register("View Change chan wait");
-            let _ = do_process_view_change(ctx.clone(), vc, sender, super_majority).await;
+            let _ = do_process_view_change(ctx.clone(), client.clone(), vc, sender, super_majority)
+                .await;
             profile.register("View change process");
         }
         _ => {}
@@ -613,14 +955,17 @@ pub async fn process_node_request(
     Ok(())
 }
 
-async fn do_init_view_change(ctx: &PinnedServerContext, client: &PinnedClient, super_majority: u64) -> Result<(), Error> {
+async fn do_init_view_change(
+    ctx: &PinnedServerContext,
+    client: &PinnedClient,
+    super_majority: u64,
+) -> Result<(), Error> {
     // Stop accepting new client requests, immediately.
     ctx.view_is_stable.store(false, Ordering::SeqCst);
     ctx.i_am_leader.store(false, Ordering::SeqCst);
 
     // Increase view
-    let view = ctx.state.view.fetch_add(1, Ordering::SeqCst)
-        + 1; // Fetch_add returns the old val
+    let view = ctx.state.view.fetch_add(1, Ordering::SeqCst) + 1; // Fetch_add returns the old val
     let leader = get_leader_str(ctx);
 
     warn!("Moved to new view {} with leader {}", view, leader);
@@ -639,24 +984,35 @@ async fn do_init_view_change(ctx: &PinnedServerContext, client: &PinnedClient, s
     if leader == ctx.config.net_config.name {
         // I won't send the message to myself.
         // @todo: Pacemaker: broadcast this
-        do_process_view_change(ctx.clone(), &vc_msg, &ctx.config.net_config.name, super_majority).await;
+        do_process_view_change(
+            ctx.clone(),
+            client.clone(),
+            &vc_msg,
+            &ctx.config.net_config.name,
+            super_majority,
+        )
+        .await;
         return Ok(());
     }
 
     let mut buf = Vec::new();
 
     let rpc_msg_body = ProtoPayload {
-        message: Some(consensus::proto::rpc::proto_payload::Message::ViewChange(vc_msg)),
+        message: Some(consensus::proto::rpc::proto_payload::Message::ViewChange(
+            vc_msg,
+        )),
     };
 
     rpc_msg_body.encode(&mut buf)?;
     let sz = buf.len();
     let bcast_msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
-    
+    info!("View Change msg size: {}", sz);
     let mut profile = LatencyProfile::new();
     profile.prefix = String::from(format!("View change to {}", leader));
     profile.should_print = true;
-    if let Err(e) = PinnedClient::broadcast(client, &vec![leader.clone()], &bcast_msg, &mut profile).await {
+    if let Err(e) =
+        PinnedClient::broadcast(client, &vec![leader.clone()], &bcast_msg, &mut profile).await
+    {
         error!("Could not broadcast ViewChange: {}", e);
     }
 
@@ -686,7 +1042,6 @@ pub async fn report_stats(ctx: &PinnedServerContext) -> Result<(), Error> {
         }
     }
 }
-
 
 pub async fn create_and_push_block(
     ctx: PinnedServerContext,
@@ -718,6 +1073,8 @@ pub async fn create_and_push_block(
         view: ctx.state.view.load(Ordering::SeqCst),
         qc: Vec::new(),
         sig: Some(Sig::NoSig(DefferedSignature {})),
+        fork_validation: Vec::new(),
+        view_is_stable: true,
     };
 
     if should_sign {
@@ -756,8 +1113,8 @@ pub async fn create_and_push_block(
             blocks: vec![fork.get(fork.last()).unwrap().block.clone()],
         }),
         commit_index: ctx.state.commit_index.load(Ordering::SeqCst),
-        byz_commit_index: 0,
         view: ctx.state.view.load(Ordering::SeqCst),
+        view_is_stable: ctx.view_is_stable.load(Ordering::SeqCst)
     };
 
     Ok((ae, profile))
@@ -802,7 +1159,10 @@ pub async fn broadcast_append_entries(
     Ok(())
 }
 
-pub fn do_add_block_to_byz_qc_pending(byz_qc_pending: &mut MutexGuard<HashSet<u64>>, ae: &ProtoAppendEntries) {
+pub fn do_add_block_to_byz_qc_pending(
+    byz_qc_pending: &mut MutexGuard<HashSet<u64>>,
+    ae: &ProtoAppendEntries,
+) {
     let blocks: &Vec<ProtoBlock> = ae.fork.as_ref().unwrap().blocks.as_ref();
     for b in blocks {
         byz_qc_pending.insert(b.n);
@@ -846,7 +1206,6 @@ pub async fn do_append_entries(
     Ok(())
 }
 
-
 pub async fn bulk_reply_to_client(reqs: &Vec<ForwardedMessageWithAckChan>, msg: PinnedMessage) {
     for (_, _, chan, profile) in reqs {
         chan.send((msg.clone(), profile.clone())).unwrap();
@@ -855,9 +1214,9 @@ pub async fn bulk_reply_to_client(reqs: &Vec<ForwardedMessageWithAckChan>, msg: 
 
 pub async fn do_respond_with_try_again(reqs: &Vec<ForwardedMessageWithAckChan>) {
     let try_again = ProtoClientReply {
-        reply: Some(consensus::proto::client::proto_client_reply::Reply::TryAgain( 
-            ProtoTryAgain {}
-        ))
+        reply: Some(
+            consensus::proto::client::proto_client_reply::Reply::TryAgain(ProtoTryAgain {}),
+        ),
     };
 
     let mut buf = Vec::new();
@@ -868,13 +1227,16 @@ pub async fn do_respond_with_try_again(reqs: &Vec<ForwardedMessageWithAckChan>) 
     bulk_reply_to_client(reqs, msg).await;
 }
 
-pub async fn do_respond_with_current_leader(ctx: &PinnedServerContext, reqs: &Vec<ForwardedMessageWithAckChan>) {
+pub async fn do_respond_with_current_leader(
+    ctx: &PinnedServerContext,
+    reqs: &Vec<ForwardedMessageWithAckChan>,
+) {
     let leader = ProtoClientReply {
         reply: Some(consensus::proto::client::proto_client_reply::Reply::Leader(
             ProtoCurrentLeader {
-                name: get_leader_str(ctx)
-            }
-        ))
+                name: get_leader_str(ctx),
+            },
+        )),
     };
 
     let mut buf = Vec::new();
@@ -883,7 +1245,6 @@ pub async fn do_respond_with_current_leader(ctx: &PinnedServerContext, reqs: &Ve
     let msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
     bulk_reply_to_client(reqs, msg).await;
-
 }
 
 pub async fn handle_client_messages(
@@ -923,23 +1284,31 @@ pub async fn handle_client_messages(
                 signature_timer_tick = tick;
             }
         }
-        
+
         if curr_client_req_num == 0 && signature_timer_tick == false {
             // Channels are all closed.
             break;
+        }    
+        
+
+        if !ctx.i_am_leader.load(Ordering::SeqCst) {
+            do_respond_with_current_leader(&ctx, &curr_client_req).await;
+            // Reset for next iteration
+            curr_client_req.clear();
+            curr_client_req_num = 0;
+            signature_timer_tick = false;
+            continue;
         }
+
 
         if !ctx.view_is_stable.load(Ordering::SeqCst) {
             do_respond_with_try_again(&curr_client_req).await;
             curr_client_req.clear();
-
             // @todo: Backoff here.
-            continue;
-        }
-
-        if !ctx.i_am_leader.load(Ordering::SeqCst) {
-            do_respond_with_current_leader(&ctx, &curr_client_req).await;
+            // Reset for next iteration
             curr_client_req.clear();
+            curr_client_req_num = 0;
+            signature_timer_tick = false;
             continue;
         }
 
@@ -948,7 +1317,6 @@ pub async fn handle_client_messages(
         let should_sig = signature_timer_tick    // Either I am running this body because of signature timeout.
             || (pending_signatures >= ctx.config.consensus_config.signature_max_delay_blocks);
         // Or I actually got some transactions and I really need to sign
-
 
         do_append_entries(
             ctx.clone(),
@@ -972,6 +1340,8 @@ pub async fn handle_client_messages(
         signature_timer_tick = false;
     }
 
+    warn!("Client handler dying!");
+
     let _ = join!(signature_timer_handle);
     Ok(())
 }
@@ -980,9 +1350,9 @@ pub async fn handle_node_messages(
     ctx: PinnedServerContext,
     client: PinnedClient,
 ) -> Result<(), Error> {
-    let mut view_timer = ResettableTimer::new(
-        Duration::from_millis(ctx.config.consensus_config.view_timeout_ms)
-    );
+    let mut view_timer = ResettableTimer::new(Duration::from_millis(
+        ctx.config.consensus_config.view_timeout_ms,
+    ));
     let view_timer_handle = view_timer.run().await;
     let majority = get_majority_num(&ctx);
     let super_majority = get_super_majority_num(&ctx);
@@ -1004,14 +1374,8 @@ pub async fn handle_node_messages(
                     break;
                 }
                 let mut msg = msg.unwrap();
-                let _ = process_node_request(
-                    &ctx,
-                    &client,
-                    majority,
-                    super_majority,
-                    &mut msg,
-                )
-                .await;
+                let _ =
+                    process_node_request(&ctx, &client, majority, super_majority, &mut msg).await;
             }
         });
     }
@@ -1060,21 +1424,18 @@ pub async fn handle_node_messages(
             // AppendEntries should be processed by a single thread.
             // Only votes can be safely processed by multiple threads.
             if let crate::consensus::proto::rpc::proto_payload::Message::Vote(_) = req.0 {
-                let rr_cnt = vote_worker_rr_cnt % ctx.config.consensus_config.vote_processing_workers;
+                let rr_cnt =
+                    vote_worker_rr_cnt % ctx.config.consensus_config.vote_processing_workers;
                 vote_worker_rr_cnt += 1;
                 if rr_cnt == 0 {
                     // Let this thread process it.
-                    process_node_request(
-                        &ctx, &client, majority, super_majority, &mut req
-                    ).await?;    
-                }else{
+                    process_node_request(&ctx, &client, majority, super_majority, &mut req).await?;
+                } else {
                     // Push it to a worker
                     let _ = vote_worker_chans[(rr_cnt - 1) as usize].send(req);
                 }
-            }else{
-                process_node_request(
-                    &ctx, &client, majority, super_majority, &mut req
-                ).await?;
+            } else {
+                process_node_request(&ctx, &client, majority, super_majority, &mut req).await?;
             }
         }
 

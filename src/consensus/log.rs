@@ -1,4 +1,7 @@
-use std::{collections::{HashMap, HashSet}, io::{Error, ErrorKind}};
+use std::{
+    collections::{HashMap, HashSet},
+    io::{Error, ErrorKind},
+};
 
 use ed25519_dalek::SIGNATURE_LENGTH;
 use log::info;
@@ -6,7 +9,10 @@ use prost::Message;
 
 use crate::crypto::{cmp_hash, hash, KeyStore};
 
-use super::proto::consensus::{proto_block::Sig, DefferedSignature, ProtoBlock, ProtoFork, ProtoNameWithSignature, ProtoQuorumCertificate};
+use super::proto::consensus::{
+    proto_block::Sig, DefferedSignature, ProtoBlock, ProtoFork, ProtoNameWithSignature,
+    ProtoQuorumCertificate,
+};
 
 #[derive(Clone, Debug)]
 pub struct LogEntry {
@@ -15,7 +21,7 @@ pub struct LogEntry {
 
     /// Accumulate signatures in the leader.
     /// Used as signature cache in the followers.
-    pub qc_sigs: HashMap<String, [u8; SIGNATURE_LENGTH]>
+    pub qc_sigs: HashMap<String, [u8; SIGNATURE_LENGTH]>,
 }
 
 impl LogEntry {
@@ -23,7 +29,7 @@ impl LogEntry {
         LogEntry {
             block,
             replication_votes: HashSet::new(),
-            qc_sigs: HashMap::new()
+            qc_sigs: HashMap::new(),
         }
     }
 
@@ -42,7 +48,7 @@ impl LogEntry {
 #[derive(Clone, Debug)]
 pub struct Log {
     entries: Vec<LogEntry>,
-    
+
     /// Highest QC.n seen so far
     last_qc: u64,
 }
@@ -108,7 +114,12 @@ impl Log {
         Ok(entry.replication_votes.len() as u64)
     }
 
-    pub fn inc_qc_sig_unverified(&mut self, name: &String, sig: &Vec<u8>, n: u64) -> Result<u64, Error> {
+    pub fn inc_qc_sig_unverified(
+        &mut self,
+        name: &String,
+        sig: &Vec<u8>,
+        n: u64,
+    ) -> Result<u64, Error> {
         if n > self.last() {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
@@ -118,31 +129,38 @@ impl Log {
 
         let idx = n - 1; // Index is 1-based
         let entry = self.entries.get_mut(idx as usize).unwrap();
-        entry.qc_sigs.insert(name.clone(), sig.as_slice().try_into().unwrap());
+        entry
+            .qc_sigs
+            .insert(name.clone(), sig.as_slice().try_into().unwrap());
 
         Ok(entry.qc_sigs.len() as u64)
     }
-    
+
     /// Increase the signature for these entry.
     /// Checks the correctness against current fork
-    pub fn inc_qc_sig(&mut self, name: &String, sig: &Vec<u8>, n: u64, keys: &KeyStore) -> Result<u64, Error> {
+    pub fn inc_qc_sig(
+        &mut self,
+        name: &String,
+        sig: &Vec<u8>,
+        n: u64,
+        keys: &KeyStore,
+    ) -> Result<u64, Error> {
         if n > self.last() {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
                 "Vote for missing block!",
             ));
         }
-        
+
         if !self.verify_signature_at_n(n, sig, name, keys) {
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
-                "Invalid signature",
-            ));
+            return Err(Error::new(ErrorKind::InvalidInput, "Invalid signature"));
         }
 
         let idx = n - 1; // Index is 1-based
         let entry = self.entries.get_mut(idx as usize).unwrap();
-        entry.qc_sigs.insert(name.clone(), sig.as_slice().try_into().unwrap());
+        entry
+            .qc_sigs
+            .insert(name.clone(), sig.as_slice().try_into().unwrap());
 
         Ok(entry.qc_sigs.len() as u64)
     }
@@ -152,17 +170,24 @@ impl Log {
         Ok(ProtoQuorumCertificate {
             digest: self.hash_at_n(n).unwrap(),
             n,
-            sig: sig_map.into_iter().map(|(k, v)| {
-                ProtoNameWithSignature {
+            sig: sig_map
+                .into_iter()
+                .map(|(k, v)| ProtoNameWithSignature {
                     name: k,
-                    sig: v.to_vec()
-                }
-            }).collect()
+                    sig: v.to_vec(),
+                })
+                .collect(),
         })
     }
 
-    pub fn verify_qc_at_n(&self, n: u64, qc: &ProtoQuorumCertificate, supermajority: u64, keys: &KeyStore) -> Result<(), Error> {
-        if n > self.last() || n == 0{
+    pub fn verify_qc_at_n(
+        &self,
+        n: u64,
+        qc: &ProtoQuorumCertificate,
+        supermajority: u64,
+        keys: &KeyStore,
+    ) -> Result<(), Error> {
+        if n > self.last() || n == 0 {
             return Err(Error::new(ErrorKind::InvalidData, "Wrong index"));
         }
         if !cmp_hash(&self.hash_at_n(n).unwrap(), &qc.digest) {
@@ -171,7 +196,7 @@ impl Log {
 
         let mut matching_sigs = 0;
 
-        for ProtoNameWithSignature{name, sig} in &qc.sig {
+        for ProtoNameWithSignature { name, sig } in &qc.sig {
             let sig: [u8; SIGNATURE_LENGTH] = match sig.as_slice().try_into() {
                 Ok(s) => s,
                 Err(_) => {
@@ -184,9 +209,12 @@ impl Log {
             // @todo: Not implementing the mechanism of having signature on a later block,
             // with witnesses to that block
         }
-        
+
         if matching_sigs < supermajority {
-            return Err(Error::new(ErrorKind::InvalidData, "Not enough matching signatures"));
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "Not enough matching signatures",
+            ));
         }
 
         Ok(())
@@ -196,9 +224,9 @@ impl Log {
         if n > self.last() {
             return None;
         }
-        
+
         let mut buf = Vec::new();
-        
+
         if n > 0 {
             self.entries[(n - 1) as usize]
                 .block
@@ -207,7 +235,6 @@ impl Log {
         }
 
         Some(hash(&buf))
-
     }
 
     pub fn last_hash(&self) -> Vec<u8> {
@@ -233,7 +260,12 @@ impl Log {
     /// This the counterpart of push_and_sign
     /// Verify the signature the same way it was created.
     /// Again, use this in favor of push, if block is signed.
-    pub fn verify_and_push(&mut self, entry: LogEntry, keys: &KeyStore, proposer: &String) -> Result<u64, Error> {
+    pub fn verify_and_push(
+        &mut self,
+        entry: LogEntry,
+        keys: &KeyStore,
+        proposer: &String,
+    ) -> Result<u64, Error> {
         let mut entry = entry;
         let sig_opt = entry.block.sig.clone();
         if sig_opt.is_none() {
@@ -242,16 +274,16 @@ impl Log {
         let sig = match sig_opt.clone().unwrap() {
             Sig::NoSig(_) => {
                 return Err(Error::new(ErrorKind::InvalidData, "Blank signature"));
-            },
+            }
             Sig::ProposerSig(psig) => {
                 let _sig: &[u8; SIGNATURE_LENGTH] = match psig.as_slice().try_into() {
                     Ok(_s) => _s,
                     Err(_) => {
                         return Err(Error::new(ErrorKind::InvalidData, "Malformed signature"));
-                    },
+                    }
                 };
                 _sig.clone()
-            },  
+            }
         };
 
         // This is how the signature was created.
@@ -268,7 +300,7 @@ impl Log {
 
         entry.block.sig = sig_opt;
 
-        self.push(entry)     // Push the ORIGINAL entry
+        self.push(entry) // Push the ORIGINAL entry
     }
 
     /// Signature on the hash of the nth block.
@@ -286,19 +318,26 @@ impl Log {
         self.signature_at_n(self.last(), keys)
     }
 
-    pub fn verify_signature_at_n(&self, n: u64, sig: &Vec<u8>, name: &String, keys: &KeyStore) -> bool {
+    pub fn verify_signature_at_n(
+        &self,
+        n: u64,
+        sig: &Vec<u8>,
+        name: &String,
+        keys: &KeyStore,
+    ) -> bool {
         if sig.len() != SIGNATURE_LENGTH {
-            return false
+            return false;
         }
-        
-        keys.verify(name, sig.as_slice().try_into().unwrap(), &self.hash_at_n(n).unwrap())
+
+        keys.verify(
+            name,
+            sig.as_slice().try_into().unwrap(),
+            &self.hash_at_n(n).unwrap(),
+        )
     }
 
-
     pub fn serialize_from_n(&self, n: u64) -> ProtoFork {
-        let mut fork = ProtoFork {
-            blocks: Vec::new(),
-        };
+        let mut fork = ProtoFork { blocks: Vec::new() };
 
         for i in n..(self.last() + 1) {
             if i == 0 {
@@ -311,6 +350,83 @@ impl Log {
         fork
     }
 
+    /// Truncate log such that `last() == n`
+    pub fn truncate(&mut self, n: u64) {
+        self.entries.truncate(n as usize);
+        // Reset last_qc.
+        let mut i = (self.last() - 1) as i64;
+        while i >= 0 {
+            if self.entries[i as usize].block.qc.len() > 0 {
+                let mut last_qc = 0;
+                for qc in &self.entries[i as usize].block.qc {
+                    if qc.n > last_qc {
+                        last_qc = qc.n;
+                    }
+                }
+
+                self.last_qc = last_qc;
+                break;
+            }
+            i -= 1;
+        }
+    }
+
+    /// Overwrites local fork with the given `fork`.
+    /// `fork` must be continuous and must extend a prefix of the local fork.
+    /// Doesn't check signatures, make sure yiu validate the signatures first.
+    pub fn overwrite(&mut self, fork: &ProtoFork) -> Result<u64, Error> {
+        if fork.blocks.len() == 0 {
+            return Ok(self.last());
+        }
+
+        // Assume fork.block is sorted by n
+
+        // Only overwrite if:
+        // First block extends a prefix of me.
+
+        let ok = if fork.blocks[0].n <= self.last() + 1 {
+            if fork.blocks[0].n == 1 {
+                true
+            } else if fork.blocks[0].n == 0 {
+                false // This is just for sanity check, n == 0 is an invalid block
+            } else {
+                let n = fork.blocks[0].n;
+                let desired_parent_hash = self.hash_at_n(n - 1).unwrap();
+
+                cmp_hash(&desired_parent_hash, &fork.blocks[0].parent)
+            }
+        } else {
+            false
+        };
+
+        if !ok {
+            return Err(Error::new(ErrorKind::InvalidData, "Fork violates hash chain"))
+        }
+
+        // Only overwrite if:
+        // fork is continuous.
+        let mut i = 0;
+        while i < fork.blocks.len() - 1 {
+            if fork.blocks[i].n + 1 != fork.blocks[i + 1].n {
+                return Err(Error::new(ErrorKind::InvalidData, "Fork has holes"))
+            }
+            i += 1;
+        }
+
+        // Truncate local fork.
+        self.truncate(fork.blocks[0].n - 1);
+        for block in &fork.blocks {
+            let entry = LogEntry {
+                block: block.clone(),
+                replication_votes: HashSet::new(),
+                qc_sigs: HashMap::new()
+            };
+            
+            self.push(entry).unwrap();      // This should all pass after the truncation. 
+        }
 
 
+
+        Ok(self.last())
+    }
 }

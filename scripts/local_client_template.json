@@ -10,7 +10,7 @@
         "signing_priv_key_path": "tests/configs/"    
     },
     "workload_config": {
-        "num_clients": 350,
+        "num_clients": 1,
         "num_requests": 10000000
     }
 }

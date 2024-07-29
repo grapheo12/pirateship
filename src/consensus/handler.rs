@@ -26,7 +26,7 @@ use crate::{
 use super::{
     log::Log,
     proto::{
-        consensus::{ProtoFork, ProtoQuorumCertificate},
+        consensus::{ProtoFork, ProtoQuorumCertificate, ProtoViewChange},
         rpc::{self, ProtoPayload},
     },
 };
@@ -42,7 +42,7 @@ pub struct ConsensusState {
     pub byz_commit_index: AtomicU64,
     pub byz_qc_pending: Mutex<HashSet<u64>>,
     pub next_qc_list: Mutex<Vec<ProtoQuorumCertificate>>,
-    pub fork_buffer: Mutex<BTreeMap<u64, HashMap<String, ProtoFork>>>
+    pub fork_buffer: Mutex<BTreeMap<u64, HashMap<String, ProtoViewChange>>>
 }
 
 impl ConsensusState {
