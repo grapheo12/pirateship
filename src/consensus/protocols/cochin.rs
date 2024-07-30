@@ -1,22 +1,15 @@
 use hex::ToHex;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
-use rustls::crypto::hash::Hash;
 use std::{
-    borrow::Borrow,
-    clone,
-    collections::{HashMap, HashSet, VecDeque},
-    fmt::format,
+    collections::{HashMap, HashSet},
     io::{Error, ErrorKind},
     sync::atomic::Ordering,
     time::{Duration, Instant},
 };
 use tokio::{
     join,
-    sync::{
-        mpsc::{self, Sender},
-        MutexGuard,
-    },
+    sync::{mpsc, MutexGuard},
     time::sleep,
 };
 
@@ -35,7 +28,7 @@ use crate::{
                 ProtoForkValidation, ProtoQuorumCertificate, ProtoSignatureArrayEntry,
                 ProtoViewChange, ProtoVote,
             },
-            rpc::{self, proto_payload, ProtoPayload},
+            rpc::ProtoPayload,
         },
         timer::ResettableTimer,
     },
@@ -43,7 +36,7 @@ use crate::{
     rpc::{
         client::PinnedClient,
         server::{LatencyProfile, MsgAckChan},
-        MessageRef, PinnedMessage,
+        PinnedMessage,
     },
 };
 
@@ -174,18 +167,29 @@ pub fn do_commit(
 
     for ((bn, txn), chan) in lack_pend.iter() {
         if *bn <= n {
-            let h = hash(&fork.get(*bn).unwrap().block.tx[*txn]);
-
-            let response = ProtoClientReply {
-                reply: Some(
-                    consensus::proto::client::proto_client_reply::Reply::Receipt(
-                        ProtoTransactionReceipt {
-                            req_digest: h,
-                            block_n: (*bn) as u64,
-                            tx_n: (*txn) as u64,
-                        },
+            let entry = fork.get(*bn).unwrap();
+            let response = if entry.block.tx.len() <= *txn {
+                warn!("Missing transaction!");
+                ProtoClientReply {
+                    reply: Some(
+                        consensus::proto::client::proto_client_reply::Reply::TryAgain(
+                            ProtoTryAgain{ }
+                    )),
+                }
+            }else {
+                let h = hash(&entry.block.tx[*txn]);
+    
+                ProtoClientReply {
+                    reply: Some(
+                        consensus::proto::client::proto_client_reply::Reply::Receipt(
+                            ProtoTransactionReceipt {
+                                req_digest: h,
+                                block_n: (*bn) as u64,
+                                tx_n: (*txn) as u64,
+                            },
+                        ),
                     ),
-                ),
+                }
             };
 
             let v = response.encode_to_vec();
@@ -236,7 +240,7 @@ pub fn do_commit(
 }
 
 pub fn do_create_qcs(
-    _ctx: &PinnedServerContext,
+    ctx: &PinnedServerContext,
     fork: &mut MutexGuard<Log>,
     next_qc_list: &mut MutexGuard<Vec<ProtoQuorumCertificate>>,
     byz_qc_pending: &mut MutexGuard<HashSet<u64>>,
@@ -247,8 +251,9 @@ pub fn do_create_qcs(
         if *n <= fork.last_qc() {
             continue;
         }
+        let view = ctx.state.view.load(Ordering::SeqCst);
 
-        let qc = match fork.get_qc_at_n(*n) {
+        let qc = match fork.get_qc_at_n(*n, view) {
             Ok(qc) => qc,
             Err(_) => {
                 continue;
@@ -393,10 +398,19 @@ pub async fn do_process_vote(
 
 pub fn maybe_byzantine_commit(ctx: &PinnedServerContext, fork: &MutexGuard<Log>) {
     // 2-chain commit rule.
+
+    // The first block of a view gets a QC immediately.
+    // But that QC doesn't byzantine commit the last qc of old view.
+    // The 2-chain rule only pertains to QCs proposed in the same view.
+    // Old view blocks are indirectly byz committed.
+
     let last_qc = fork.last_qc();
     if last_qc == 0 {
         return;
     }
+
+    let last_qc_view = fork.last_qc_view();
+
     // Get the highest qc included in the block with last_qc.
     let block_qcs = &fork.get(last_qc).unwrap().block.qc;
     let mut updated_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
@@ -405,14 +419,12 @@ pub fn maybe_byzantine_commit(ctx: &PinnedServerContext, fork: &MutexGuard<Log>)
         return;
     }
     for qc in block_qcs {
-        if qc.n > updated_bci {
+        if qc.n > updated_bci && qc.view == last_qc_view {
             updated_bci = qc.n;
         }
     }
 
-    ctx.state
-        .byz_commit_index
-        .store(updated_bci, Ordering::SeqCst);
+    ctx.state.byz_commit_index.store(updated_bci, Ordering::SeqCst);
 }
 
 /// Split the given fork into two sequences: [..last New Leader msg] [Last new leader msg + 1..]

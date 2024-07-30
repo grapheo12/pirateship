@@ -23,7 +23,7 @@
         "signature_max_delay_blocks": 1,
         "signature_max_delay_ms": 1200000,
         "vote_processing_workers": 8,
-        "view_timeout_ms": 30000
+        "view_timeout_ms": 5000
 
     }
 }

@@ -11,6 +11,7 @@ message ProtoQuorumCertificate {
     uint64 n = 2;                            // Sequence number of certifying block
     repeated ProtoNameWithSignature sig = 3; // signer node --> Signature mapping;
                                              // but represented as array of tuples, so that protobuf doesn't reorder them
+    uint64 view = 4;
 }
 
 // Empty type
@@ -57,20 +58,6 @@ message ProtoAppendEntries {
     uint64 view = 4;
     bool view_is_stable = 5;
 }
-
-// message ProtoNewLeader {
-//     map<string, ProtoFork> forks = 1;           // node --> fork mapping
-//     map<string, bytes> fork_sigs = 2;           // node --> fork signature mapping
-//     string chosen_fork_node = 3;                // node whose fork is chosen; logically: a pointer to the chosen fork
-//     uint64 view = 4;
-// }
-
-// message ProtoNewLeaderOk {
-//     bytes fork_digest = 1;                       // Hash of the last block of the chosen fork
-//     bytes list_digest = 2;                       // Hash of the ProtoNewLeader message
-//     uint64 view = 3;
-//     bytes sig = 4;                               // Signature on fields 1, 2, 3.       
-// }
 
 message ProtoSignatureArrayEntry {
     uint64 n = 1;                                // Sequence number

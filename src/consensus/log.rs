@@ -51,6 +51,10 @@ pub struct Log {
 
     /// Highest QC.n seen so far
     last_qc: u64,
+    /// View of the qc with qc.n == last_qc.
+    /// This is strictly not neccessary to track,
+    /// but helps in quickly checking the 2-chain rule.
+    last_qc_view: u64
 }
 
 impl Log {
@@ -58,6 +62,7 @@ impl Log {
         Log {
             entries: Vec::new(),
             last_qc: 0,
+            last_qc_view: 0
         }
     }
 
@@ -69,6 +74,10 @@ impl Log {
 
     pub fn last_qc(&self) -> u64 {
         self.last_qc
+    }
+
+    pub fn last_qc_view(&self) -> u64 {
+        self.last_qc_view
     }
 
     /// Returns last() on success.
@@ -84,7 +93,8 @@ impl Log {
         }
         for qc in &entry.block.qc {
             if qc.n > self.last_qc && qc.n <= self.last() {
-                self.last_qc = qc.n
+                self.last_qc = qc.n;
+                self.last_qc_view = qc.view;
             }
         }
         self.entries.push(entry);
@@ -165,7 +175,7 @@ impl Log {
         Ok(entry.qc_sigs.len() as u64)
     }
 
-    pub fn get_qc_at_n(&self, n: u64) -> Result<ProtoQuorumCertificate, Error> {
+    pub fn get_qc_at_n(&self, n: u64, curr_view: u64) -> Result<ProtoQuorumCertificate, Error> {
         let sig_map = self.get(n)?.qc_sigs.clone();
         Ok(ProtoQuorumCertificate {
             digest: self.hash_at_n(n).unwrap(),
@@ -177,6 +187,7 @@ impl Log {
                     sig: v.to_vec(),
                 })
                 .collect(),
+            view: curr_view
         })
     }
 
@@ -358,13 +369,16 @@ impl Log {
         while i >= 0 {
             if self.entries[i as usize].block.qc.len() > 0 {
                 let mut last_qc = 0;
+                let mut last_qc_view = 0;
                 for qc in &self.entries[i as usize].block.qc {
                     if qc.n > last_qc {
                         last_qc = qc.n;
+                        last_qc_view = qc.view;
                     }
                 }
 
                 self.last_qc = last_qc;
+                self.last_qc_view = last_qc_view;
                 break;
             }
             i -= 1;
