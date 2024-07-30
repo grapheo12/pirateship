@@ -28,7 +28,7 @@ use crate::{
         log::{Log, LogEntry},
         proto::{
             client::{
-                ProtoClientReply, ProtoCurrentLeader, ProtoTransactionReceipt, ProtoTryAgain,
+                ProtoClientReply, ProtoCurrentLeader, ProtoTentativeReceipt, ProtoTransactionReceipt, ProtoTryAgain
             },
             consensus::{
                 proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork,
@@ -503,7 +503,8 @@ pub async fn do_push_append_entries_to_fork(
     let mut seq_nums = Vec::new();
 
     if ae.view < ctx.state.view.load(Ordering::SeqCst) {
-        warn!("Message from older view! Rejected");
+        warn!("Message from older view! Rejected; Sent by: {} Is New leader? {} Msg view: {} Current View {}",
+            sender, !ae.fork.as_ref().unwrap().blocks[0].view_is_stable, ae.view, ctx.state.view.load(Ordering::SeqCst));
         return (last_n, last_n, seq_nums);
     }else if ae.view > ctx.state.view.load(Ordering::SeqCst) {
         ctx.state.view.store(ae.view, Ordering::SeqCst);
@@ -713,9 +714,12 @@ pub async fn do_init_new_leader(
     ctx.i_am_leader.store(true, Ordering::SeqCst);
 
     info!("Trying to gain stable leadership for view {}", view);
+    let mut profile = LatencyProfile::new();
 
     // Choose fork
-    let chosen_fork = fork_choice_rule_get(&fork_set, &ctx.config.net_config.name);
+    let (mut chosen_fork, chosen_fork_stat) = fork_choice_rule_get(&fork_set, &ctx.config.net_config.name);
+
+    profile.register("Fork Choice Rule done");
 
     // Overwrite local fork with chosen fork
     let mut fork = ctx.state.fork.lock().await;
@@ -731,8 +735,9 @@ pub async fn do_init_new_leader(
     }
 
     info!("Fork Overwritten, new last_n = {}, last_hash = {}", last_n, last_hash.encode_hex::<String>());
+    profile.register("Fork Overwrite done");
     // Broadcast fork and wait for responses.
-    let block = ProtoBlock {
+    let mut block = ProtoBlock {
         tx: Vec::new(),
         n: last_n + 1,
         parent: last_hash,
@@ -750,27 +755,31 @@ pub async fn do_init_new_leader(
             DefferedSignature {},
         )),
     };
-
+    if chosen_fork_stat.last_qc > 0 {
+        block.qc = chosen_fork.blocks[chosen_fork_stat.last_signed_block as usize].qc.clone();
+    }
+    profile.register("Block creation done!");
     let entry = LogEntry::new(block);
-
-    fork
-        .push_and_sign(entry, &ctx.keys)
+    fork.push_and_sign(entry, &ctx.keys)
         .expect("Should be able to push fork");
+    profile.register("Block push done");
+
+    chosen_fork.blocks.push(fork.get(fork.last()).unwrap().block.clone());
+
     let ae = ProtoAppendEntries {
-        fork: Some(ProtoFork {
-            blocks: vec![fork.get(fork.last()).unwrap().block.clone()],
-        }),
+        fork: Some(chosen_fork),
         commit_index: ctx.state.commit_index.load(Ordering::SeqCst),
         view: ctx.state.view.load(Ordering::SeqCst),
         view_is_stable: ctx.view_is_stable.load(Ordering::SeqCst)
     };
     info!("AE has signed block? {}", fork.get(fork.last()).unwrap().has_signature());
+    profile.register("AE creation done");
+
     let send_list = get_everyone_except_me(
         &ctx.config.net_config.name,
         &ctx.config.consensus_config.node_list,
     );
 
-    let profile = LatencyProfile::new();
     let block_n = ae.fork.as_ref().unwrap().blocks.len();
     let block_n = ae.fork.as_ref().unwrap().blocks[block_n - 1].n;
 
@@ -779,10 +788,10 @@ pub async fn do_init_new_leader(
         .await
         .unwrap();
 
-    broadcast_append_entries(ctx.clone(), client.clone(), ae, &send_list, profile)
+    broadcast_append_entries(ctx.clone(), client.clone(), ae, &send_list, profile.clone())
     .await
     .unwrap();
-    
+    profile.register("Broadcast done");
     do_process_vote(
         ctx.clone(),
         &my_vote,
@@ -792,20 +801,29 @@ pub async fn do_init_new_leader(
     )
     .await
     .unwrap();
+    profile.register("Self processing done");
+
+    profile.should_print = true;
+    profile.prefix = String::from("New leader message");
+
+    profile.force_print();
 
     // If I get AppendEntries or NewLeader from higher view during this time,
     // need to update view again and become a follower.
 }
 
+#[derive(Clone, Debug)]
+struct ForkStat {
+    last_view: u64,
+    last_n: u64,
+    last_qc: u64,
+    last_signed_block: u64
+}
+
 pub fn fork_choice_rule_get(
     fork_set: &HashMap<String, ProtoViewChange>,
     my_name: &String,
-) -> ProtoFork {
-    struct ForkStat {
-        last_view: u64,
-        last_n: u64,
-        last_qc: u64,
-    }
+) -> (ProtoFork, ForkStat) {
 
     let mut chk_stats = HashMap::<String, ForkStat>::new();
     for (name, fork) in fork_set {
@@ -818,6 +836,7 @@ pub fn fork_choice_rule_get(
                     last_n: 0,
                     last_qc: 0,
                     last_view: 0,
+                    last_signed_block: 0
                 },
             );
             continue;
@@ -826,11 +845,13 @@ pub fn fork_choice_rule_get(
         let last_n = fork.blocks[fork_len - 1].n;
 
         let mut last_qc = 0;
+        let mut last_signed_block = 0;
         let mut i = (fork_len - 1) as i64;
         while i >= 0 {
             for qc in &fork.blocks[i as usize].qc {
                 if qc.n > last_qc {
                     last_qc = qc.n;
+                    last_signed_block = i as u64;
                 }
             }
 
@@ -843,6 +864,7 @@ pub fn fork_choice_rule_get(
                 last_n,
                 last_qc,
                 last_view,
+                last_signed_block
             },
         );
     }
@@ -880,22 +902,21 @@ pub fn fork_choice_rule_get(
     // Now I'm free to choose whichever fork is remaining.
     // Prefer my fork over others.
     if chk_stats.contains_key(my_name) {
-        return fork_set
-            .get(my_name)
-            .unwrap()
-            .fork
-            .as_ref()
-            .unwrap()
-            .clone();
+        return (
+            fork_set.get(my_name).unwrap().fork.as_ref().unwrap().clone(),
+            chk_stats.get(my_name).unwrap().clone()
+        );
     }
 
     // If not, choose any.
     let mut chosen_fork = None;
+    let mut chosen_fork_stat = None;
     for (name, _fork) in &chk_stats {
         chosen_fork = Some(fork_set.get(name).unwrap().fork.as_ref().unwrap().clone());
+        chosen_fork_stat = Some(_fork.clone());
     }
 
-    chosen_fork.unwrap()
+    (chosen_fork.unwrap(), chosen_fork_stat.unwrap())
 }
 pub async fn process_node_request(
     ctx: &PinnedServerContext,
@@ -955,6 +976,34 @@ pub async fn process_node_request(
     Ok(())
 }
 
+async fn do_reply_all_with_tentative_receipt(ctx: &PinnedServerContext) {
+    let mut lack_pend = ctx.client_ack_pending.lock().await;
+
+    for ((bn, txn), (chan, profile)) in lack_pend.iter_mut() {
+        profile.register("Tentative chan wait");
+        let response = ProtoClientReply {
+            reply: Some(
+                consensus::proto::client::proto_client_reply::Reply::TentativeReceipt(
+                    ProtoTentativeReceipt {
+                        block_n: (*bn) as u64,
+                        tx_n: (*txn) as u64,
+                    },
+                ),
+            ),
+        };
+
+        let v = response.encode_to_vec();
+        let vlen = v.len();
+
+        let msg = PinnedMessage::from(v, vlen, crate::rpc::SenderType::Anon);
+
+        profile.register("Init Sending Client Response");
+        let _ = chan.send((msg, profile.to_owned()));
+    }
+
+    lack_pend.clear();
+}
+
 async fn do_init_view_change(
     ctx: &PinnedServerContext,
     client: &PinnedClient,
@@ -963,6 +1012,9 @@ async fn do_init_view_change(
     // Stop accepting new client requests, immediately.
     ctx.view_is_stable.store(false, Ordering::SeqCst);
     ctx.i_am_leader.store(false, Ordering::SeqCst);
+
+    // Send tentative replies to all inflight client requests.
+    do_reply_all_with_tentative_receipt(ctx).await;
 
     // Increase view
     let view = ctx.state.view.fetch_add(1, Ordering::SeqCst) + 1; // Fetch_add returns the old val
@@ -973,7 +1025,9 @@ async fn do_init_view_change(
     // Send everything from bci onwards.
     // This is equivalent to sending the sending all preprepare and prepare messages in PBFT
     let fork = ctx.state.fork.lock().await;
-    let fork_from_bci = fork.serialize_from_n(ctx.state.byz_commit_index.load(Ordering::SeqCst));
+    let bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+    info!("Sending everything from {} to {}", bci, fork.last());
+    let fork_from_bci = fork.serialize_from_n(bci);
 
     let vc_msg = ProtoViewChange {
         view,

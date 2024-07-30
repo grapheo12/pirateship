@@ -50,6 +50,14 @@ impl LatencyProfile {
 
         trace!("{}, {}", self.prefix, str_list.join(", "));
     }
+
+    pub fn force_print(&self) {
+        let str_list: Vec<String> = self.durations.iter().map(|(k, v)| {
+            format!("{}: {} us", k, v.as_micros())
+        }).collect();
+
+        info!("{}, {}", self.prefix, str_list.join(", "));
+    }
 }
 
 

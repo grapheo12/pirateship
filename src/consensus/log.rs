@@ -4,7 +4,7 @@ use std::{
 };
 
 use ed25519_dalek::SIGNATURE_LENGTH;
-use log::info;
+use log::{info, warn};
 use prost::Message;
 
 use crate::crypto::{cmp_hash, hash, KeyStore};
@@ -383,19 +383,21 @@ impl Log {
 
         // Only overwrite if:
         // First block extends a prefix of me.
+        info!("Overwriting fork starts at {}. Local fork ends at {}", fork.blocks[0].n, self.last());
 
         let ok = if fork.blocks[0].n <= self.last() + 1 {
             if fork.blocks[0].n == 1 {
                 true
             } else if fork.blocks[0].n == 0 {
+                warn!("Faulty fork");
                 false // This is just for sanity check, n == 0 is an invalid block
             } else {
                 let n = fork.blocks[0].n;
                 let desired_parent_hash = self.hash_at_n(n - 1).unwrap();
-
                 cmp_hash(&desired_parent_hash, &fork.blocks[0].parent)
             }
         } else {
+            warn!("Fork missing blocks");
             false
         };
 

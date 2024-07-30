@@ -1,5 +1,5 @@
 use hex::ToHex;
-use log::{debug, info};
+use log::{debug, info, warn};
 use pft::{
     config::{default_log4rs_config, ClientConfig},
     consensus::proto::{
@@ -78,9 +78,16 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -
                 continue;
             },
             pft::consensus::proto::client::proto_client_reply::Reply::Leader(l) => {
+                if curr_leader != l.name {
+                    info!("Switching leader: {} --> {}", curr_leader, l.name);
+                }
                 curr_leader = l.name.clone();
-                info!("New leader: {}", curr_leader);
                 continue;
+            },
+            pft::consensus::proto::client::proto_client_reply::Reply::TentativeReceipt(r) => {
+                warn!("Got tentative receipt: {:?}", r);
+                continue;
+                // @todo: Wait to see if my txn gets committed in the tentative block.
             },
         };
 
@@ -102,6 +109,8 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -
 
         i += 1;
     }
+
+    info!("All transactions done");
 
     Ok(())
 }

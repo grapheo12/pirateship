@@ -14,6 +14,11 @@ message ProtoTransactionReceipt {
     uint64 tx_n = 3;
 }
 
+message ProtoTentativeReceipt {
+    uint64 block_n = 1;
+    uint64 tx_n = 2;
+}
+
 message ProtoTryAgain { }
 
 message ProtoCurrentLeader {
@@ -24,7 +29,8 @@ message ProtoClientReply {
     oneof reply {
         ProtoTransactionReceipt receipt = 1;
         ProtoTryAgain try_again = 2;
-        ProtoCurrentLeader leader = 3; 
+        ProtoCurrentLeader leader = 3;
+        ProtoTentativeReceipt tentative_receipt = 4; 
     }
 }
 
