@@ -347,12 +347,15 @@ impl Log {
         )
     }
 
-    pub fn serialize_from_n(&self, n: u64) -> ProtoFork {
+    pub fn serialize_range(&self, start: u64, end: u64) -> ProtoFork {
         let mut fork = ProtoFork { blocks: Vec::new() };
 
-        for i in n..(self.last() + 1) {
+        for i in start..(end + 1) {
             if i == 0 {
                 continue;
+            }
+            if i > self.last() {
+                break;
             }
             let block = self.get(i).unwrap().block.clone();
             fork.blocks.push(block);
@@ -361,12 +364,17 @@ impl Log {
         fork
     }
 
+    pub fn serialize_from_n(&self, n: u64) -> ProtoFork {
+        self.serialize_range(n, self.last())
+    }
+
     /// Truncate log such that `last() == n`
     pub fn truncate(&mut self, n: u64) {
         self.entries.truncate(n as usize);
         // Reset last_qc.
         let mut i = (self.last() - 1) as i64;
         while i >= 0 {
+            info!("loop1");
             if self.entries[i as usize].block.qc.len() > 0 {
                 let mut last_qc = 0;
                 let mut last_qc_view = 0;
@@ -382,6 +390,11 @@ impl Log {
                 break;
             }
             i -= 1;
+        }
+
+        if i < 0 {
+            self.last_qc = 0;
+            self.last_qc_view = 0;
         }
     }
 
@@ -423,6 +436,7 @@ impl Log {
         // fork is continuous.
         let mut i = 0;
         while i < fork.blocks.len() - 1 {
+            info!("loop2");
             if fork.blocks[i].n + 1 != fork.blocks[i + 1].n {
                 return Err(Error::new(ErrorKind::InvalidData, "Fork has holes"))
             }

@@ -50,3 +50,7 @@ jolteon = ["round_robin_leader"]
 cochin = ["round_robin_leader"]
 diverse_raft = ["round_robin_leader"]
 default = ["cochin"]
+
+
+[profile.release]
+panic = "abort"

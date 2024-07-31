@@ -20,7 +20,7 @@ use crate::{
     crypto::KeyStore,
     rpc::{
         server::{LatencyProfile, MsgAckChan, RespType},
-        MessageRef,
+        MessageRef, PinnedMessage,
     },
 };
 
@@ -74,8 +74,8 @@ pub struct ServerContext {
     pub i_am_leader: AtomicBool,
     pub view_is_stable: AtomicBool,
     pub node_queue: (
-        mpsc::UnboundedSender<ForwardedMessage>,
-        Mutex<mpsc::UnboundedReceiver<ForwardedMessage>>,
+        mpsc::UnboundedSender<ForwardedMessageWithAckChan>,
+        Mutex<mpsc::UnboundedReceiver<ForwardedMessageWithAckChan>>,
     ),
     pub client_queue: (
         mpsc::UnboundedSender<ForwardedMessageWithAckChan>,
@@ -90,6 +90,11 @@ pub struct ServerContext {
     >,
     pub ping_counters: std::sync::Mutex<HashMap<u64, Instant>>,
     pub keys: KeyStore,
+
+    pub __client_black_hole_channel: (
+        mpsc::UnboundedSender<(PinnedMessage, LatencyProfile)>,
+        Mutex<mpsc::UnboundedReceiver<(PinnedMessage, LatencyProfile)>>,
+    )
 }
 
 #[derive(Clone)]
@@ -99,6 +104,7 @@ impl PinnedServerContext {
     pub fn new(cfg: &Config, keys: &KeyStore) -> PinnedServerContext {
         let node_ch = mpsc::unbounded_channel();
         let client_ch = mpsc::unbounded_channel();
+        let black_hole_ch = mpsc::unbounded_channel();
         PinnedServerContext(Arc::new(Box::pin(ServerContext {
             config: cfg.clone(),
             i_am_leader: AtomicBool::new(false),
@@ -109,6 +115,7 @@ impl PinnedServerContext {
             client_ack_pending: Mutex::new(HashMap::new()),
             ping_counters: std::sync::Mutex::new(HashMap::new()),
             keys: keys.clone(),
+            __client_black_hole_channel: (black_hole_ch.0, Mutex::new(black_hole_ch.1)),
         })))
     }
 }
@@ -165,8 +172,16 @@ pub fn consensus_rpc_handler<'a>(
             }
             return Ok(RespType::RespAndTrack);
         }
+        rpc::proto_payload::Message::BackfillRequest(_) => {
+            let msg = (body.message.unwrap(), sender, ack_tx, profile);
+            if let Err(_) = ctx.node_queue.0.send(msg) {
+                return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
+            }
+
+            return Ok(RespType::RespAndTrack);
+        }
         _ => {
-            let msg = (body.message.unwrap(), sender, profile);
+            let msg = (body.message.unwrap(), sender, ack_tx, profile);
             if let Err(_) = ctx.node_queue.0.send(msg) {
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }

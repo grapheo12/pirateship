@@ -10,7 +10,7 @@ use std::{
 };
 use tokio::{
     join,
-    sync::{mpsc, MutexGuard},
+    sync::{mpsc::{self, UnboundedSender}, MutexGuard},
     time::sleep,
 };
 
@@ -21,8 +21,8 @@ use crate::{
         leader_rotation::get_current_leader,
         log::{Log, LogEntry},
         proto::{
-            checkpoint::ProtoBackFillRequest, client::{
-                ProtoClientReply, ProtoCurrentLeader, ProtoTentativeReceipt, ProtoTransactionReceipt, ProtoTryAgain
+            checkpoint::{ProtoBackFillRequest, ProtoBackFillResponse}, client::{
+                ProtoClientReply, ProtoClientRequest, ProtoCurrentLeader, ProtoTentativeReceipt, ProtoTransactionReceipt, ProtoTryAgain
             }, consensus::{
                 proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork,
                 ProtoForkValidation, ProtoQuorumCertificate, ProtoSignatureArrayEntry,
@@ -83,7 +83,17 @@ pub async fn create_vote_for_blocks(
     ctx: PinnedServerContext,
     seq_nums: &Vec<u64>,
 ) -> Result<ProtoVote, Error> {
-    let mut fork = ctx.state.fork.lock().await;
+    // let mut fork = ctx.state.fork.lock().await;
+    let fork = ctx.state.fork.try_lock();
+    let mut fork = if let Err(e) = fork {
+        info!("create_vote_for_blocks: Fork is locked, waiting for it to be unlocked: {}", e);
+        let fork = ctx.state.fork.lock().await;
+        info!("create_vote_for_blocks: Fork locked");
+        fork  
+    }else{
+        info!("create_vote_for_blocks: Fork locked");
+        fork.unwrap()
+    };
     let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
 
     let mut vote_sigs = Vec::new();
@@ -277,8 +287,17 @@ pub async fn do_process_vote(
     majority: u64,
     super_majority: u64,
 ) -> Result<(), Error> {
-    
-    let mut fork = ctx.state.fork.lock().await;
+    // let mut fork = ctx.state.fork.lock().await;
+    let fork = ctx.state.fork.try_lock();
+    let mut fork = if let Err(e) = fork {
+        info!("do_process_vote: Fork is locked, waiting for it to be unlocked: {}", e);
+        let fork = ctx.state.fork.lock().await;
+        info!("do_process_vote: Fork locked");
+        fork  
+    }else{
+        info!("do_process_vote: Fork locked");
+        fork.unwrap()
+    };
     if !cmp_hash(&fork.hash_at_n(vote.n).unwrap(), &vote.fork_digest) {
         warn!("Wrong digest, skipping vote");
         return Ok(());
@@ -525,9 +544,14 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
 
 pub async fn maybe_backfill_fork<'a>(ctx: &PinnedServerContext, client: &PinnedClient, f: &ProtoFork, fork: &MutexGuard<'a, Log>, sender: &String) -> ProtoFork {
     // Currently, just backfill if the current log is lagging behind.
-    if fork.last() >= f.blocks[0].n {
+    if f.blocks.len() == 0 {
         return f.clone();
     }
+    if f.blocks[0].n <= fork.last() + 1{
+        return f.clone();
+    }
+
+    info!("Backfilling fork from {}", sender);
 
     let backfill_req = ProtoBackFillRequest {
         block_start: fork.last() + 1,
@@ -576,9 +600,10 @@ pub async fn maybe_backfill_fork<'a>(ctx: &PinnedServerContext, client: &PinnedC
     if let None = backfill_resp.fork {
         return f.clone();
     }
-
+    
     let mut res_fork = backfill_resp.fork.unwrap();
     res_fork.blocks.extend(f.blocks.clone());
+    info!("Backfilled fork range from {} to {}", f.blocks[0].n, f.blocks[f.blocks.len()-1].n);
 
     res_fork
 
@@ -596,7 +621,17 @@ pub async fn do_push_append_entries_to_fork(
     u64,      /* updated_last_n */
     Vec<u64>, /* Sequence numbers */
 ) {
-    let mut fork = ctx.state.fork.lock().await;
+    // let mut fork = ctx.state.fork.lock().await;
+    let fork = ctx.state.fork.try_lock();
+    let mut fork = if let Err(e) = fork {
+        info!("do_push_append_entries_to_fork: Fork is locked, waiting for it to be unlocked: {}", e);
+        let fork = ctx.state.fork.lock().await;
+        info!("do_push_append_entries_to_fork: Fork locked");
+        fork  
+    }else{
+        info!("do_push_append_entries_to_fork: Fork locked");
+        fork.unwrap()
+    };
     let last_n = fork.last();
     let last_qc = fork.last_qc();
     let mut updated_last_n = last_n;
@@ -608,7 +643,15 @@ pub async fn do_push_append_entries_to_fork(
         return (last_n, last_n, seq_nums);
     }else if ae.view > ctx.state.view.load(Ordering::SeqCst) {
         ctx.state.view.store(ae.view, Ordering::SeqCst);
-        info!("View fast forwarded!");
+        if get_leader_str(&ctx) == ctx.config.net_config.name {
+            ctx.i_am_leader.store(true, Ordering::SeqCst);
+            // Don't think this can happen again.
+        }else{
+            ctx.i_am_leader.store(false, Ordering::SeqCst);
+        }
+        info!("View fast forwarded to {}!", ae.view);
+    }else{
+        info!("AppendEntries for view {} stable? {} sender {}", ae.view, ae.view_is_stable, sender);
     }
     // @todo: Backfilling!
 
@@ -641,7 +684,7 @@ pub async fn do_push_append_entries_to_fork(
         }
         
         for b in view_lock_blocks.blocks {
-            debug!("Inserting block {} with {} txs", b.n, b.tx.len());
+            info!("Inserting block {} with {} txs", b.n, b.tx.len());
             let entry = LogEntry::new(b.clone());
 
             let res = if entry.has_signature() {
@@ -790,6 +833,23 @@ pub async fn do_process_view_change(
     }
 }
 
+async fn force_noop(ctx: &PinnedServerContext) {
+    let client_tx = ctx.client_queue.0.clone();
+    
+    let client_req = ProtoClientRequest {
+        tx: format!("view_start_noop:{}", ctx.state.view.load(Ordering::SeqCst)).into_bytes(),
+        // sig: vec![0u8; SIGNATURE_LENGTH],
+        sig: vec![0u8; 1]
+    };
+
+    let request = crate::consensus::proto::rpc::proto_payload::Message::ClientRequest(client_req);
+    let profile = LatencyProfile::new();
+
+    let _ = client_tx.send((request, ctx.config.net_config.name.clone(), ctx.__client_black_hole_channel.0.clone(), profile));
+
+    
+}
+
 pub async fn do_init_new_leader(
     ctx: PinnedServerContext,
     client: PinnedClient,
@@ -821,19 +881,43 @@ pub async fn do_init_new_leader(
     let (mut chosen_fork, chosen_fork_stat) = fork_choice_rule_get(&fork_set, &ctx.config.net_config.name);
 
     profile.register("Fork Choice Rule done");
+    info!("yo 1");
+
 
     // Overwrite local fork with chosen fork
-    let mut fork = ctx.state.fork.lock().await;
+    let fork = ctx.state.fork.try_lock();
+    let mut fork = if let Err(e) = fork {
+        info!("do_init_new_leader: Fork is locked, waiting for it to be unlocked: {}", e);
+        let fork = ctx.state.fork.lock().await;
+        info!("do_init_new_leader: Fork locked");
+        fork  
+    }else{
+        info!("do_init_new_leader: Fork locked");
+        fork.unwrap()
+    };
+        
+    
+    
     let (last_n, last_hash) = {
-        let last_n = fork.overwrite(&chosen_fork).expect("Overwrite failed");
+        let last_n = match fork.overwrite(&chosen_fork){
+            Ok(n) => n,
+            Err(e) => {
+                error!("Error overwriting fork: {}", e);
+                return;
+            }
+        };
         let last_hash = fork.last_hash();
         (last_n, last_hash)
     };
+    info!("yo 2");
+
     {
         let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
         byz_qc_pending.clear();
         // We'll cause the next two blocks to be 2f + 1 voted anyway.
     }
+    info!("yo 3");
+
 
     info!("Fork Overwritten, new last_n = {}, last_hash = {}", last_n, last_hash.encode_hex::<String>());
     profile.register("Fork Overwrite done");
@@ -864,8 +948,11 @@ pub async fn do_init_new_leader(
     fork.push_and_sign(entry, &ctx.keys)
         .expect("Should be able to push fork");
     profile.register("Block push done");
+    info!("yo 4");
 
     chosen_fork.blocks.push(fork.get(fork.last()).unwrap().block.clone());
+    info!("yo 5");
+
 
     let ae = ProtoAppendEntries {
         fork: Some(chosen_fork),
@@ -885,10 +972,11 @@ pub async fn do_init_new_leader(
     let block_n = ae.fork.as_ref().unwrap().blocks[block_n - 1].n;
 
     drop(fork); // create_vote_for_blocks takes lock on fork
+    info!("yo 6");
     let my_vote = create_vote_for_blocks(ctx.clone(), &vec![block_n])
         .await
         .unwrap();
-
+    info!("yo 7");
     broadcast_append_entries(ctx.clone(), client.clone(), ae, &send_list, profile.clone())
     .await
     .unwrap();
@@ -903,12 +991,16 @@ pub async fn do_init_new_leader(
     .await
     .unwrap();
     profile.register("Self processing done");
+    info!("yo 8");
 
     profile.should_print = true;
     profile.prefix = String::from("New leader message");
 
     profile.force_print();
 
+    // Force a dummy message to be sequenced.
+    force_noop(&ctx).await;
+    info!("yo 9");
     // If I get AppendEntries or NewLeader from higher view during this time,
     // need to update view again and become a follower.
 }
@@ -921,7 +1013,7 @@ struct ForkStat {
     last_signed_block: u64
 }
 
-pub fn fork_choice_rule_get(
+fn fork_choice_rule_get(
     fork_set: &HashMap<String, ProtoViewChange>,
     my_name: &String,
 ) -> (ProtoFork, ForkStat) {
@@ -1019,14 +1111,53 @@ pub fn fork_choice_rule_get(
 
     (chosen_fork.unwrap(), chosen_fork_stat.unwrap())
 }
+
+pub async fn do_process_backfill_request(ctx: PinnedServerContext, ack_tx: &mut UnboundedSender<(PinnedMessage, LatencyProfile)>, bfr: &ProtoBackFillRequest, sender: &String) {
+    let block_start = bfr.block_start;
+    let block_end = bfr.block_end;
+
+    let mut profile = LatencyProfile::new();
+    let fork = ctx.state.fork.try_lock();
+    let fork = match fork {
+        Ok(f) => {
+            info!("do_process_backfill_request: Fork locked");
+            f
+        },
+        Err(e) => {
+            info!("do_process_backfill_request: Fork is locked, waiting for it to be unlocked: {}", e);
+            let fork = ctx.state.fork.lock().await;
+            info!("do_process_backfill_request: Fork locked");
+            fork  
+        }
+    };
+    let resp_fork = fork.serialize_range(block_start, block_end);
+    profile.register("Backfill done");
+
+    let response = ProtoBackFillResponse {
+        fork: Some(resp_fork),
+    };
+    let rpc_msg_body = ProtoPayload {
+        message: Some(consensus::proto::rpc::proto_payload::Message::BackfillResponse(response)),
+    };
+    let mut buf = Vec::new();
+    rpc_msg_body.encode(&mut buf).unwrap();
+    let sz = buf.len();
+    let reply = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
+    ack_tx.send((reply, profile)).unwrap();
+
+
+
+
+}
+
 pub async fn process_node_request(
     ctx: &PinnedServerContext,
     client: &PinnedClient,
     majority: u64,
     super_majority: u64,
-    ms: &mut ForwardedMessage,
+    ms: &mut ForwardedMessageWithAckChan,
 ) -> Result<(), Error> {
-    let (msg, sender, profile) = ms;
+    let (msg, sender, ack_tx, profile) = ms;
     let _sender = sender.clone();
     match &msg {
         crate::consensus::proto::rpc::proto_payload::Message::AppendEntries(ae) => {
@@ -1049,11 +1180,22 @@ pub async fn process_node_request(
                 }
             }
 
-            {
-                let ci = ctx.state.commit_index.load(Ordering::SeqCst);
-                let new_ci = ae.commit_index;
-                let mut fork = ctx.state.fork.lock().await;
+            let ci = ctx.state.commit_index.load(Ordering::SeqCst);
+            let new_ci = ae.commit_index;
+            if new_ci > ci {
+                // let mut fork = ctx.state.fork.lock().await;
+                let fork = ctx.state.fork.try_lock();
+                let mut fork = if let Err(e) = fork {
+                    info!("process_node_request: Fork is locked, waiting for it to be unlocked: {}", e);
+                    let fork = ctx.state.fork.lock().await;
+                    info!("process_node_request: Fork locked");
+                    fork  
+                }else{
+                    info!("process_node_request: Fork locked");
+                    fork.unwrap()
+                };
                 let mut lack_pend = ctx.client_ack_pending.lock().await;
+                info!("lack_pend locked");
                 // Followers should not have pending client requests.
                 // But this same interface is good for refactoring.
 
@@ -1070,7 +1212,12 @@ pub async fn process_node_request(
             let _ = do_process_view_change(ctx.clone(), client.clone(), vc, sender, super_majority)
                 .await;
             profile.register("View change process");
-        }
+        },
+        crate::consensus::proto::rpc::proto_payload::Message::BackfillRequest(bfr) => {
+            profile.register("Backfill Request chan wait");
+            do_process_backfill_request(ctx.clone(), ack_tx, bfr, sender).await;
+            profile.register("Backfill Request process");
+        },
         _ => {}
     }
 
@@ -1120,6 +1267,12 @@ async fn do_init_view_change(
     // Increase view
     let view = ctx.state.view.fetch_add(1, Ordering::SeqCst) + 1; // Fetch_add returns the old val
     let leader = get_leader_str(ctx);
+    if leader == ctx.config.net_config.name {
+        // I am the leader
+        ctx.i_am_leader.store(true, Ordering::SeqCst);
+    }else{
+        ctx.i_am_leader.store(false, Ordering::SeqCst);
+    }
 
     warn!("Moved to new view {} with leader {}", view, leader);
 
@@ -1139,6 +1292,7 @@ async fn do_init_view_change(
     if leader == ctx.config.net_config.name {
         // I won't send the message to myself.
         // @todo: Pacemaker: broadcast this
+        drop(fork);
         do_process_view_change(
             ctx.clone(),
             client.clone(),
@@ -1185,14 +1339,17 @@ pub async fn report_stats(ctx: &PinnedServerContext) -> Result<(), Error> {
             let lack_pend = ctx.client_ack_pending.lock().await;
             let byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
 
-            info!("fork.last = {}, fork.last_qc = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, pending_qcs = {} num_txs = {}, fork.last_hash = {}",
+            info!("fork.last = {}, fork.last_qc = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, pending_qcs = {} num_txs = {}, fork.last_hash = {} view = {}, view_is_stable = {}, i_am_leader: {}",
                 fork.last(), fork.last_qc(),
                 ctx.state.commit_index.load(Ordering::SeqCst),
                 ctx.state.byz_commit_index.load(Ordering::SeqCst),
                 lack_pend.len(),
                 byz_qc_pending.len(),
                 ctx.state.num_committed_txs.load(Ordering::SeqCst),
-                fork.last_hash().encode_hex::<String>()
+                fork.last_hash().encode_hex::<String>(),
+                ctx.state.view.load(Ordering::SeqCst),
+                ctx.view_is_stable.load(Ordering::SeqCst),
+                ctx.i_am_leader.load(Ordering::SeqCst)
             );
         }
     }
@@ -1203,7 +1360,17 @@ pub async fn create_and_push_block(
     reqs: &mut Vec<ForwardedMessageWithAckChan>,
     should_sign: bool,
 ) -> Result<(ProtoAppendEntries, LatencyProfile), Error> {
-    let mut fork = ctx.state.fork.lock().await;
+    let fork = ctx.state.fork.try_lock();
+    let mut fork = match fork {
+        Ok(f) => {
+            info!("create_and_push_block: Fork locked");
+            f
+        },
+        Err(e) => {
+            error!("create_and_push_block: Fork is locked, waiting for it to be unlocked: {}", e);
+            ctx.state.fork.lock().await
+        }
+    };
 
     let mut tx = Vec::new();
     let block_n = fork.last() + 1;
@@ -1432,6 +1599,8 @@ pub async fn handle_client_messages(
 
     let mut pending_signatures = 0;
 
+    let mut num_client_reqs = 0;
+
     loop {
         tokio::select! {
             biased;
@@ -1446,7 +1615,10 @@ pub async fn handle_client_messages(
         if curr_client_req_num == 0 && signature_timer_tick == false {
             // Channels are all closed.
             break;
-        }    
+        }
+
+        num_client_reqs += curr_client_req_num;
+        info!("Client handler: {} client requests", num_client_reqs);
         
 
         if !ctx.i_am_leader.load(Ordering::SeqCst) {
@@ -1459,15 +1631,15 @@ pub async fn handle_client_messages(
         }
 
 
-        if !ctx.view_is_stable.load(Ordering::SeqCst) {
-            do_respond_with_try_again(&curr_client_req).await;
-            curr_client_req.clear();
-            // @todo: Backoff here.
-            // Reset for next iteration
-            curr_client_req.clear();
-            curr_client_req_num = 0;
-            signature_timer_tick = false;
-            continue;
+        while !ctx.view_is_stable.load(Ordering::SeqCst) {
+            // do_respond_with_try_again(&curr_client_req).await;
+            // curr_client_req.clear();
+            // // @todo: Backoff here.
+            // // Reset for next iteration
+            // curr_client_req.clear();
+            // curr_client_req_num = 0;
+            // signature_timer_tick = false;
+            // continue;
         }
 
         // Ok I am the leader.
