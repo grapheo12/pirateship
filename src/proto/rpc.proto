@@ -3,6 +3,7 @@ syntax = "proto3";
 package proto.rpc;
 import "consensus.proto";
 import "client.proto";
+import "checkpoint.proto";
 
 
 message ProtoPayload {
@@ -10,6 +11,8 @@ message ProtoPayload {
         proto.consensus.ProtoViewChange view_change = 1;
         proto.consensus.ProtoAppendEntries append_entries = 2;
         proto.consensus.ProtoVote vote = 3;
-        proto.client.ProtoClientRequest client_request = 4;     
+        proto.client.ProtoClientRequest client_request = 4;
+        proto.checkpoint.ProtoBackFillRequest backfill_request = 5;   
+        proto.checkpoint.ProtoBackFillResponse backfill_response = 6;   
     }
 }

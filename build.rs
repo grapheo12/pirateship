@@ -6,6 +6,7 @@ fn main() -> Result<()> {
             "src/proto/consensus.proto",
             "src/proto/client.proto",
             "src/proto/rpc.proto",
+            "src/proto/checkpoint.proto",
         ],
         &["src/proto"],
     )?;

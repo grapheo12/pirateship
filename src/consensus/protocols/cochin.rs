@@ -21,15 +21,13 @@ use crate::{
         leader_rotation::get_current_leader,
         log::{Log, LogEntry},
         proto::{
-            client::{
+            checkpoint::ProtoBackFillRequest, client::{
                 ProtoClientReply, ProtoCurrentLeader, ProtoTentativeReceipt, ProtoTransactionReceipt, ProtoTryAgain
-            },
-            consensus::{
+            }, consensus::{
                 proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork,
                 ProtoForkValidation, ProtoQuorumCertificate, ProtoSignatureArrayEntry,
                 ProtoViewChange, ProtoVote,
-            },
-            rpc::ProtoPayload,
+            }, rpc::{self, ProtoPayload}
         },
         timer::ResettableTimer,
     },
@@ -372,7 +370,7 @@ pub async fn do_process_vote(
 
         if __flipped {
             // Trying to avoid printing stuff while holding a lock (although I am holding a lock on fork :-))
-            warn!(
+            trace!(
                 "Waiting for super_majority due to quorum diversity. |byz_qc_pending| = {}",
                 __byz_qc_pending_len
             );
@@ -414,7 +412,7 @@ fn maybe_byzantine_commit_with_n_and_view(ctx: &PinnedServerContext, fork: &Mute
     let block_qcs = &fork.get(n).unwrap().block.qc;
     let mut updated_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
     if block_qcs.len() == 0 && updated_bci > 0 {
-        warn!("Invariant violation: No QC found!");
+        trace!("Invariant violation: No QC found!");
         return false;
     }
     for qc in block_qcs {
@@ -424,7 +422,7 @@ fn maybe_byzantine_commit_with_n_and_view(ctx: &PinnedServerContext, fork: &Mute
     }
 
     if updated_bci > ctx.state.byz_commit_index.load(Ordering::SeqCst) {
-        info!(
+        trace!(
             "Updating byzantine_commit_index {} --> {}",
             ctx.state.byz_commit_index.load(Ordering::SeqCst),
             updated_bci
@@ -448,7 +446,7 @@ pub fn maybe_byzantine_commit(ctx: &PinnedServerContext, fork: &MutexGuard<Log>)
             break;
         }
         check_qc -= 1;
-        info!("Checking lower QCs: {}", check_qc);
+        trace!("Checking lower QCs: {}", check_qc);
         // view doesn't change from last_qc_view due to commit condition.
     }
 
@@ -525,8 +523,71 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
     Ok((ProtoFork { blocks: overwrite_blocks.to_vec() }, ProtoFork { blocks: view_lock_blocks.to_vec() }))
 }
 
+pub async fn maybe_backfill_fork<'a>(ctx: &PinnedServerContext, client: &PinnedClient, f: &ProtoFork, fork: &MutexGuard<'a, Log>, sender: &String) -> ProtoFork {
+    // Currently, just backfill if the current log is lagging behind.
+    if fork.last() >= f.blocks[0].n {
+        return f.clone();
+    }
+
+    let backfill_req = ProtoBackFillRequest {
+        block_start: fork.last() + 1,
+        block_end: f.blocks[0].n - 1
+    };
+
+    let mut buf = Vec::new();
+    let rpc_msg_body = ProtoPayload {
+        message: Some(consensus::proto::rpc::proto_payload::Message::BackfillRequest(backfill_req)),
+    };
+    let backfill_resp = if let Ok(_) = rpc_msg_body.encode(&mut buf) {
+        let sz = buf.len();
+        let request = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
+        let resp = PinnedClient::send_and_await_reply(client, sender, request.as_ref()).await;
+        if let Err(e) = resp {
+            warn!("Error backfilling: {}", e);
+            return f.clone();
+        }
+
+        let resp = resp.unwrap();
+        let resp = resp.as_ref();
+        let body = match ProtoPayload::decode(&resp.0.as_slice()[0..resp.1]) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!("Parsing problem: {}", e.to_string());
+                debug!("Original message: {:?} {:?}", &resp.0, &resp.1);
+                return f.clone();
+            }
+        };
+
+        let backfill_resp = if let Some(consensus::proto::rpc::proto_payload::Message::BackfillResponse(r)) = body.message {
+            r
+        }else{
+            warn!("Invalid backfill response");
+            return f.clone();
+        };
+
+        backfill_resp
+    } else {
+        error!("Error encoding backfill request");
+        return f.clone();
+    };
+
+    // No sanity checking here. The log push/overwrite will fail if the fork is bad.
+
+    if let None = backfill_resp.fork {
+        return f.clone();
+    }
+
+    let mut res_fork = backfill_resp.fork.unwrap();
+    res_fork.blocks.extend(f.blocks.clone());
+
+    res_fork
+
+}
+
+
 pub async fn do_push_append_entries_to_fork(
     ctx: PinnedServerContext,
+    client: PinnedClient,
     ae: &ProtoAppendEntries,
     sender: &String,
     super_majority: u64
@@ -558,7 +619,8 @@ pub async fn do_push_append_entries_to_fork(
     }
 
     if let Some(f) = &ae.fork {
-        let res = maybe_verify_view_change_sequence(&ctx, f, super_majority).await;
+        let f = maybe_backfill_fork(&ctx, &client, f, &fork, sender).await;
+        let res = maybe_verify_view_change_sequence(&ctx, &f, super_majority).await;
         if let Err(e) = res {
             warn!("Verification error: {}", e);
             return (last_n, updated_last_n, seq_nums);
@@ -970,7 +1032,7 @@ pub async fn process_node_request(
         crate::consensus::proto::rpc::proto_payload::Message::AppendEntries(ae) => {
             profile.register("AE chan wait");
             let (last_n, updated_last_n, seq_nums) =
-                do_push_append_entries_to_fork(ctx.clone(), ae, sender, super_majority).await;
+                do_push_append_entries_to_fork(ctx.clone(), client.clone(), ae, sender, super_majority).await;
             profile.register("Fork push");
 
             if updated_last_n > last_n {
@@ -1196,7 +1258,7 @@ pub async fn create_and_push_block(
 
             maybe_byzantine_commit(&ctx, &fork);
 
-            info!("QC link: {} --> {:?}", n, __qc_trace);
+            trace!("QC link: {} --> {:?}", n, __qc_trace);
         }
         Err(e) => {
             warn!("Error processing client request: {}", e);

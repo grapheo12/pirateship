@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package proto.checkpoint;
+import "consensus.proto";
+
+message ProtoBackFillRequest {
+    uint64 block_start = 1;
+    uint64 block_end = 2;
+}
+
+message ProtoBackFillResponse {
+    proto.consensus.ProtoFork fork = 1;
+}

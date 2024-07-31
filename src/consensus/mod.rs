@@ -29,6 +29,9 @@ pub mod proto {
     pub mod rpc {
         include!(concat!(env!("OUT_DIR"), "/proto.rpc.rs"));
     }
+    pub mod checkpoint {
+        include!(concat!(env!("OUT_DIR"), "/proto.checkpoint.rs"));
+    }
 }
 
 /// Wrapper around rpc::{Server, Client} with this PinnedServerContext and consensus_rpc_handler
