@@ -1,4 +1,5 @@
 use hex::ToHex;
+use indexmap::IndexMap;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
 use std::{
@@ -242,7 +243,7 @@ pub fn do_commit(
 pub fn do_create_qcs(
     ctx: &PinnedServerContext,
     fork: &mut MutexGuard<Log>,
-    next_qc_list: &mut MutexGuard<Vec<ProtoQuorumCertificate>>,
+    next_qc_list: &mut MutexGuard<IndexMap<(u64, u64), ProtoQuorumCertificate>>,
     byz_qc_pending: &mut MutexGuard<HashSet<u64>>,
     qcs: &Vec<u64>,
 ) {
@@ -260,7 +261,7 @@ pub fn do_create_qcs(
             }
         };
 
-        next_qc_list.push(qc);
+        next_qc_list.insert((qc.n, qc.view), qc);
         byz_qc_pending.remove(n);
 
         if *n % 1000 == 0 {
@@ -305,7 +306,7 @@ pub async fn do_process_vote(
             Ok(total_sigs) => {
                 if total_sigs >= super_majority {
                     qcs.push(vote_sig.n);
-                    info!("Creating QC for {}", vote_sig.n);
+                    debug!("Creating QC for {}", vote_sig.n);
                     if vote_sig.n == fork.last() && !ctx.view_is_stable.load(Ordering::SeqCst)
                         && fork.get(vote_sig.n).unwrap().block.fork_validation.len() >= super_majority as usize
                     {
@@ -396,7 +397,9 @@ pub async fn do_process_vote(
     Ok(())
 }
 
-pub fn maybe_byzantine_commit(ctx: &PinnedServerContext, fork: &MutexGuard<Log>) {
+/// Only returns false if there is an invariant violation.
+/// There was no 2-chain QC found.
+fn maybe_byzantine_commit_with_n_and_view(ctx: &PinnedServerContext, fork: &MutexGuard<Log>, n: u64, view: u64) -> bool {
     // 2-chain commit rule.
 
     // The first block of a view gets a QC immediately.
@@ -404,27 +407,51 @@ pub fn maybe_byzantine_commit(ctx: &PinnedServerContext, fork: &MutexGuard<Log>)
     // The 2-chain rule only pertains to QCs proposed in the same view.
     // Old view blocks are indirectly byz committed.
 
-    let last_qc = fork.last_qc();
-    if last_qc == 0 {
-        return;
+    if n == 0 {
+        return true;
     }
 
-    let last_qc_view = fork.last_qc_view();
-
-    // Get the highest qc included in the block with last_qc.
-    let block_qcs = &fork.get(last_qc).unwrap().block.qc;
+    let block_qcs = &fork.get(n).unwrap().block.qc;
     let mut updated_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
     if block_qcs.len() == 0 && updated_bci > 0 {
         warn!("Invariant violation: No QC found!");
-        return;
+        return false;
     }
     for qc in block_qcs {
-        if qc.n > updated_bci && qc.view == last_qc_view {
+        if qc.n > updated_bci && qc.view == view {
             updated_bci = qc.n;
         }
     }
 
+    if updated_bci > ctx.state.byz_commit_index.load(Ordering::SeqCst) {
+        info!(
+            "Updating byzantine_commit_index {} --> {}",
+            ctx.state.byz_commit_index.load(Ordering::SeqCst),
+            updated_bci
+        );
+    }
+
     ctx.state.byz_commit_index.store(updated_bci, Ordering::SeqCst);
+    true
+}
+
+pub fn maybe_byzantine_commit(ctx: &PinnedServerContext, fork: &MutexGuard<Log>) {
+    // Check all QCs formed during this view.
+    // Since the last_qc need not have link to another qc,
+    // due pipelined proposals.
+
+    let last_qc_view = fork.last_qc_view();
+    let mut check_qc = fork.last_qc();
+
+    while !maybe_byzantine_commit_with_n_and_view(ctx, fork, check_qc, last_qc_view) {
+        if check_qc == 0 {
+            break;
+        }
+        check_qc -= 1;
+        info!("Checking lower QCs: {}", check_qc);
+        // view doesn't change from last_qc_view due to commit condition.
+    }
+
 }
 
 /// Split the given fork into two sequences: [..last New Leader msg] [Last new leader msg + 1..]
@@ -1146,11 +1173,12 @@ pub async fn create_and_push_block(
     if should_sign {
         // Include the next qc list.
         let mut next_qc_list = ctx.state.next_qc_list.lock().await;
-        block.qc = next_qc_list.clone();
+        block.qc = next_qc_list.iter().map(|(_, v)| v.clone()).collect();
         next_qc_list.clear();
     }
 
     let entry = LogEntry::new(block);
+    let __qc_trace: Vec<(u64, u64)> = entry.block.qc.iter().map(|x| (x.n, x.view)).collect();
 
     let res = match should_sign {
         true => fork.push_and_sign(entry, &ctx.keys),
@@ -1167,6 +1195,8 @@ pub async fn create_and_push_block(
             profile.register("Block create");
 
             maybe_byzantine_commit(&ctx, &fork);
+
+            info!("QC link: {} --> {:?}", n, __qc_trace);
         }
         Err(e) => {
             warn!("Error processing client request: {}", e);

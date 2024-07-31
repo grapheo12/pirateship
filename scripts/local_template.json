@@ -17,7 +17,7 @@
     },
     "consensus_config": {
         "node_list": [],
-        "quorum_diversity_k": 3,
+        "quorum_diversity_k": 0,
         "stats_report_secs": 1,
         "max_backlog_batch_size": 200,
         "signature_max_delay_blocks": 1,

@@ -9,6 +9,7 @@ use std::{
     },
 };
 
+use indexmap::IndexMap;
 use log::{debug, warn};
 use prost::Message;
 use std::time::Instant;
@@ -41,7 +42,7 @@ pub struct ConsensusState {
     pub num_committed_txs: AtomicUsize,
     pub byz_commit_index: AtomicU64,
     pub byz_qc_pending: Mutex<HashSet<u64>>,
-    pub next_qc_list: Mutex<Vec<ProtoQuorumCertificate>>,
+    pub next_qc_list: Mutex<IndexMap<(u64, u64), ProtoQuorumCertificate>>,
     pub fork_buffer: Mutex<BTreeMap<u64, HashMap<String, ProtoViewChange>>>
 }
 
@@ -54,7 +55,7 @@ impl ConsensusState {
             num_committed_txs: AtomicUsize::new(0),
             byz_commit_index: AtomicU64::new(0),
             byz_qc_pending: Mutex::new(HashSet::new()),
-            next_qc_list: Mutex::new(Vec::new()),
+            next_qc_list: Mutex::new(IndexMap::new()),
             fork_buffer: Mutex::new(BTreeMap::new())
         }
     }
