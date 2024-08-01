@@ -86,12 +86,12 @@ pub async fn create_vote_for_blocks(
     // let mut fork = ctx.state.fork.lock().await;
     let fork = ctx.state.fork.try_lock();
     let mut fork = if let Err(e) = fork {
-        info!("create_vote_for_blocks: Fork is locked, waiting for it to be unlocked: {}", e);
+        debug!("create_vote_for_blocks: Fork is locked, waiting for it to be unlocked: {}", e);
         let fork = ctx.state.fork.lock().await;
-        info!("create_vote_for_blocks: Fork locked");
+        debug!("create_vote_for_blocks: Fork locked");
         fork  
     }else{
-        info!("create_vote_for_blocks: Fork locked");
+        debug!("create_vote_for_blocks: Fork locked");
         fork.unwrap()
     };
     let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
@@ -290,12 +290,12 @@ pub async fn do_process_vote(
     // let mut fork = ctx.state.fork.lock().await;
     let fork = ctx.state.fork.try_lock();
     let mut fork = if let Err(e) = fork {
-        info!("do_process_vote: Fork is locked, waiting for it to be unlocked: {}", e);
+        debug!("do_process_vote: Fork is locked, waiting for it to be unlocked: {}", e);
         let fork = ctx.state.fork.lock().await;
-        info!("do_process_vote: Fork locked");
+        debug!("do_process_vote: Fork locked");
         fork  
     }else{
-        info!("do_process_vote: Fork locked");
+        debug!("do_process_vote: Fork locked");
         fork.unwrap()
     };
     if !cmp_hash(&fork.hash_at_n(vote.n).unwrap(), &vote.fork_digest) {
@@ -547,16 +547,17 @@ pub async fn maybe_backfill_fork<'a>(ctx: &PinnedServerContext, client: &PinnedC
     if f.blocks.len() == 0 {
         return f.clone();
     }
+
     if f.blocks[0].n <= fork.last() + 1{
         return f.clone();
     }
 
-    info!("Backfilling fork from {}", sender);
-
+    
     let backfill_req = ProtoBackFillRequest {
         block_start: fork.last() + 1,
         block_end: f.blocks[0].n - 1
     };
+    info!("Backfilling fork from {} {:?}", sender, backfill_req);
 
     let mut buf = Vec::new();
     let rpc_msg_body = ProtoPayload {
@@ -624,12 +625,12 @@ pub async fn do_push_append_entries_to_fork(
     // let mut fork = ctx.state.fork.lock().await;
     let fork = ctx.state.fork.try_lock();
     let mut fork = if let Err(e) = fork {
-        info!("do_push_append_entries_to_fork: Fork is locked, waiting for it to be unlocked: {}", e);
+        debug!("do_push_append_entries_to_fork: Fork is locked, waiting for it to be unlocked: {}", e);
         let fork = ctx.state.fork.lock().await;
-        info!("do_push_append_entries_to_fork: Fork locked");
+        debug!("do_push_append_entries_to_fork: Fork locked");
         fork  
     }else{
-        info!("do_push_append_entries_to_fork: Fork locked");
+        debug!("do_push_append_entries_to_fork: Fork locked");
         fork.unwrap()
     };
     let last_n = fork.last();
@@ -651,7 +652,7 @@ pub async fn do_push_append_entries_to_fork(
         }
         info!("View fast forwarded to {}!", ae.view);
     }else{
-        info!("AppendEntries for view {} stable? {} sender {}", ae.view, ae.view_is_stable, sender);
+        trace!("AppendEntries for view {} stable? {} sender {}", ae.view, ae.view_is_stable, sender);
     }
     // @todo: Backfilling!
 
@@ -684,7 +685,7 @@ pub async fn do_push_append_entries_to_fork(
         }
         
         for b in view_lock_blocks.blocks {
-            info!("Inserting block {} with {} txs", b.n, b.tx.len());
+            trace!("Inserting block {} with {} txs", b.n, b.tx.len());
             let entry = LogEntry::new(b.clone());
 
             let res = if entry.has_signature() {
@@ -879,26 +880,27 @@ pub async fn do_init_new_leader(
 
     // Choose fork
     let (mut chosen_fork, chosen_fork_stat) = fork_choice_rule_get(&fork_set, &ctx.config.net_config.name);
-
+    // Backfill the fork, such that the overwrite doesn't fail.
     profile.register("Fork Choice Rule done");
-    info!("yo 1");
-
-
+    
+    
     // Overwrite local fork with chosen fork
     let fork = ctx.state.fork.try_lock();
     let mut fork = if let Err(e) = fork {
-        info!("do_init_new_leader: Fork is locked, waiting for it to be unlocked: {}", e);
+        debug!("do_init_new_leader: Fork is locked, waiting for it to be unlocked: {}", e);
         let fork = ctx.state.fork.lock().await;
-        info!("do_init_new_leader: Fork locked");
+        debug!("do_init_new_leader: Fork locked");
         fork  
     }else{
-        info!("do_init_new_leader: Fork locked");
+        debug!("do_init_new_leader: Fork locked");
         fork.unwrap()
     };
-        
     
+    if chosen_fork_stat.name != ctx.config.net_config.name {
+        chosen_fork = maybe_backfill_fork(&ctx, &client, &chosen_fork, &fork, &chosen_fork_stat.name).await;
+    }
     
-    let (last_n, last_hash) = {
+    let (last_n, last_hash) = if chosen_fork_stat.name != ctx.config.net_config.name {
         let last_n = match fork.overwrite(&chosen_fork){
             Ok(n) => n,
             Err(e) => {
@@ -908,16 +910,19 @@ pub async fn do_init_new_leader(
         };
         let last_hash = fork.last_hash();
         (last_n, last_hash)
+    } else {
+        // Don't need to overwrite if I chose my own fork.
+        info!("I chose my own fork!");
+        let last_n = fork.last();
+        let last_hash = fork.last_hash();
+        (last_n, last_hash)
     };
-    info!("yo 2");
 
     {
         let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
         byz_qc_pending.clear();
         // We'll cause the next two blocks to be 2f + 1 voted anyway.
     }
-    info!("yo 3");
-
 
     info!("Fork Overwritten, new last_n = {}, last_hash = {}", last_n, last_hash.encode_hex::<String>());
     profile.register("Fork Overwrite done");
@@ -948,10 +953,8 @@ pub async fn do_init_new_leader(
     fork.push_and_sign(entry, &ctx.keys)
         .expect("Should be able to push fork");
     profile.register("Block push done");
-    info!("yo 4");
 
     chosen_fork.blocks.push(fork.get(fork.last()).unwrap().block.clone());
-    info!("yo 5");
 
 
     let ae = ProtoAppendEntries {
@@ -960,7 +963,7 @@ pub async fn do_init_new_leader(
         view: ctx.state.view.load(Ordering::SeqCst),
         view_is_stable: ctx.view_is_stable.load(Ordering::SeqCst)
     };
-    info!("AE has signed block? {}", fork.get(fork.last()).unwrap().has_signature());
+    debug!("AE has signed block? {}", fork.get(fork.last()).unwrap().has_signature());
     profile.register("AE creation done");
 
     let send_list = get_everyone_except_me(
@@ -972,11 +975,10 @@ pub async fn do_init_new_leader(
     let block_n = ae.fork.as_ref().unwrap().blocks[block_n - 1].n;
 
     drop(fork); // create_vote_for_blocks takes lock on fork
-    info!("yo 6");
     let my_vote = create_vote_for_blocks(ctx.clone(), &vec![block_n])
         .await
         .unwrap();
-    info!("yo 7");
+
     broadcast_append_entries(ctx.clone(), client.clone(), ae, &send_list, profile.clone())
     .await
     .unwrap();
@@ -991,7 +993,7 @@ pub async fn do_init_new_leader(
     .await
     .unwrap();
     profile.register("Self processing done");
-    info!("yo 8");
+
 
     profile.should_print = true;
     profile.prefix = String::from("New leader message");
@@ -1000,7 +1002,7 @@ pub async fn do_init_new_leader(
 
     // Force a dummy message to be sequenced.
     force_noop(&ctx).await;
-    info!("yo 9");
+
     // If I get AppendEntries or NewLeader from higher view during this time,
     // need to update view again and become a follower.
 }
@@ -1010,7 +1012,8 @@ struct ForkStat {
     last_view: u64,
     last_n: u64,
     last_qc: u64,
-    last_signed_block: u64
+    last_signed_block: u64,
+    name: String
 }
 
 fn fork_choice_rule_get(
@@ -1029,7 +1032,8 @@ fn fork_choice_rule_get(
                     last_n: 0,
                     last_qc: 0,
                     last_view: 0,
-                    last_signed_block: 0
+                    last_signed_block: 0,
+                    name: name.clone()
                 },
             );
             continue;
@@ -1057,7 +1061,8 @@ fn fork_choice_rule_get(
                 last_n,
                 last_qc,
                 last_view,
-                last_signed_block
+                last_signed_block,
+                name: name.clone()
             },
         );
     }
@@ -1120,13 +1125,13 @@ pub async fn do_process_backfill_request(ctx: PinnedServerContext, ack_tx: &mut 
     let fork = ctx.state.fork.try_lock();
     let fork = match fork {
         Ok(f) => {
-            info!("do_process_backfill_request: Fork locked");
+            debug!("do_process_backfill_request: Fork locked");
             f
         },
         Err(e) => {
-            info!("do_process_backfill_request: Fork is locked, waiting for it to be unlocked: {}", e);
+            debug!("do_process_backfill_request: Fork is locked, waiting for it to be unlocked: {}", e);
             let fork = ctx.state.fork.lock().await;
-            info!("do_process_backfill_request: Fork locked");
+            debug!("do_process_backfill_request: Fork locked");
             fork  
         }
     };
@@ -1186,16 +1191,15 @@ pub async fn process_node_request(
                 // let mut fork = ctx.state.fork.lock().await;
                 let fork = ctx.state.fork.try_lock();
                 let mut fork = if let Err(e) = fork {
-                    info!("process_node_request: Fork is locked, waiting for it to be unlocked: {}", e);
+                    debug!("process_node_request: Fork is locked, waiting for it to be unlocked: {}", e);
                     let fork = ctx.state.fork.lock().await;
-                    info!("process_node_request: Fork locked");
+                    debug!("process_node_request: Fork locked");
                     fork  
                 }else{
-                    info!("process_node_request: Fork locked");
+                    debug!("process_node_request: Fork locked");
                     fork.unwrap()
                 };
                 let mut lack_pend = ctx.client_ack_pending.lock().await;
-                info!("lack_pend locked");
                 // Followers should not have pending client requests.
                 // But this same interface is good for refactoring.
 
@@ -1363,11 +1367,11 @@ pub async fn create_and_push_block(
     let fork = ctx.state.fork.try_lock();
     let mut fork = match fork {
         Ok(f) => {
-            info!("create_and_push_block: Fork locked");
+            debug!("create_and_push_block: Fork locked");
             f
         },
         Err(e) => {
-            error!("create_and_push_block: Fork is locked, waiting for it to be unlocked: {}", e);
+            debug!("create_and_push_block: Fork is locked, waiting for it to be unlocked: {}", e);
             ctx.state.fork.lock().await
         }
     };
@@ -1618,9 +1622,8 @@ pub async fn handle_client_messages(
         }
 
         num_client_reqs += curr_client_req_num;
-        info!("Client handler: {} client requests", num_client_reqs);
+        trace!("Client handler: {} client requests", num_client_reqs);
         
-
         if !ctx.i_am_leader.load(Ordering::SeqCst) {
             do_respond_with_current_leader(&ctx, &curr_client_req).await;
             // Reset for next iteration
@@ -1629,19 +1632,17 @@ pub async fn handle_client_messages(
             signature_timer_tick = false;
             continue;
         }
-
-
-        while !ctx.view_is_stable.load(Ordering::SeqCst) {
-            // do_respond_with_try_again(&curr_client_req).await;
-            // curr_client_req.clear();
-            // // @todo: Backoff here.
-            // // Reset for next iteration
-            // curr_client_req.clear();
-            // curr_client_req_num = 0;
-            // signature_timer_tick = false;
-            // continue;
+                
+        if !ctx.view_is_stable.load(Ordering::SeqCst) {
+            do_respond_with_try_again(&curr_client_req).await;
+            // @todo: Backoff here.
+            // Reset for next iteration
+            curr_client_req.clear();
+            curr_client_req_num = 0;
+            signature_timer_tick = false;
+            continue;
         }
-
+        
         // Ok I am the leader.
         pending_signatures += 1;
         let should_sig = signature_timer_tick    // Either I am running this body because of signature timeout.

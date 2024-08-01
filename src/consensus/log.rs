@@ -374,7 +374,6 @@ impl Log {
         // Reset last_qc.
         let mut i = (self.last() - 1) as i64;
         while i >= 0 {
-            info!("loop1");
             if self.entries[i as usize].block.qc.len() > 0 {
                 let mut last_qc = 0;
                 let mut last_qc_view = 0;
@@ -436,7 +435,6 @@ impl Log {
         // fork is continuous.
         let mut i = 0;
         while i < fork.blocks.len() - 1 {
-            info!("loop2");
             if fork.blocks[i].n + 1 != fork.blocks[i + 1].n {
                 return Err(Error::new(ErrorKind::InvalidData, "Fork has holes"))
             }

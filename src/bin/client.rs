@@ -60,9 +60,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -
         rpc_msg_body.encode(&mut buf).expect("Protobuf error");
 
         let start = Instant::now();
-        if i == 0 {
-            info!("Sending msg");
-        }
+        
         let msg = PinnedClient::send_and_await_reply(
             &client,
             &curr_leader,
@@ -70,9 +68,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -
         )
         .await
         .unwrap();
-        if i == 0 {
-            info!("Got reply");
-        }
+        
         let sz = msg.as_ref().1;
         let resp = ProtoClientReply::decode(&msg.as_ref().0.as_slice()[..sz]).unwrap();
         if let None = resp.reply {
@@ -86,9 +82,8 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -
             pft::consensus::proto::client::proto_client_reply::Reply::Leader(l) => {
                 if curr_leader != l.name {
                     info!("Switching leader: {} --> {}", curr_leader, l.name);
+                    curr_leader = l.name.clone();
                 }
-                curr_leader = l.name.clone();
-                i = 0;
                 continue;
             },
             pft::consensus::proto::client::proto_client_reply::Reply::TentativeReceipt(r) => {
