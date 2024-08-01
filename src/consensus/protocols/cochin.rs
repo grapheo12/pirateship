@@ -146,6 +146,7 @@ pub async fn create_vote_for_blocks(
         fork_digest: fork.hash_at_n(max_n).unwrap_or(vec![0u8; DIGEST_LENGTH]),
         n: max_n,
         view: ctx.state.view.load(Ordering::SeqCst),
+        is_nack: false,
     })
 }
 
@@ -650,7 +651,11 @@ pub async fn do_push_append_entries_to_fork(
         }else{
             ctx.i_am_leader.store(false, Ordering::SeqCst);
         }
-        info!("View fast forwarded to {}!", ae.view);
+        info!("View fast forwarded to {}! stable? {}", ae.view, ae.view_is_stable);
+        // Since moving to new view, I can no longer send proper commit responses to clients.
+        // Send tentative replies to everyone.
+        do_reply_all_with_tentative_receipt(&ctx).await;
+        // ctx.view_timer.reset();
     }else{
         trace!("AppendEntries for view {} stable? {} sender {}", ae.view, ae.view_is_stable, sender);
     }
@@ -658,7 +663,7 @@ pub async fn do_push_append_entries_to_fork(
 
     if !sender.eq(&get_leader_str(&ctx)) {
         // Can't accept blocks from non-leader.
-
+        warn!("Non-leader {} trying to send blocks", sender);
         return (last_n, updated_last_n, seq_nums);
     }
 
@@ -873,6 +878,7 @@ pub async fn do_init_new_leader(
 
     // Increase view
     ctx.state.view.store(view, Ordering::SeqCst);
+    // ctx.view_timer.reset();
     ctx.i_am_leader.store(true, Ordering::SeqCst);
 
     info!("Trying to gain stable leadership for view {}", view);
@@ -1252,7 +1258,7 @@ async fn do_reply_all_with_tentative_receipt(ctx: &PinnedServerContext) {
         profile.register("Init Sending Client Response");
         let _ = chan.send((msg, profile.to_owned()));
     }
-
+    info!("Sent tentative responses for {} requests", lack_pend.len());
     lack_pend.clear();
 }
 
@@ -1343,7 +1349,7 @@ pub async fn report_stats(ctx: &PinnedServerContext) -> Result<(), Error> {
             let lack_pend = ctx.client_ack_pending.lock().await;
             let byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
 
-            info!("fork.last = {}, fork.last_qc = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, pending_qcs = {} num_txs = {}, fork.last_hash = {} view = {}, view_is_stable = {}, i_am_leader: {}",
+            info!("fork.last = {}, fork.last_qc = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, pending_qcs = {} num_txs = {}, fork.last_hash = {}, total_client_request = {}, view = {}, view_is_stable = {}, i_am_leader: {}",
                 fork.last(), fork.last_qc(),
                 ctx.state.commit_index.load(Ordering::SeqCst),
                 ctx.state.byz_commit_index.load(Ordering::SeqCst),
@@ -1351,6 +1357,7 @@ pub async fn report_stats(ctx: &PinnedServerContext) -> Result<(), Error> {
                 byz_qc_pending.len(),
                 ctx.state.num_committed_txs.load(Ordering::SeqCst),
                 fork.last_hash().encode_hex::<String>(),
+                ctx.total_client_requests.load(Ordering::SeqCst),
                 ctx.state.view.load(Ordering::SeqCst),
                 ctx.view_is_stable.load(Ordering::SeqCst),
                 ctx.i_am_leader.load(Ordering::SeqCst)
@@ -1392,11 +1399,19 @@ pub async fn create_and_push_block(
         }
     }
 
+    let __view = ctx.state.view.load(Ordering::SeqCst);
+    let __view_is_stable = ctx.view_is_stable.load(Ordering::SeqCst);
+
+    if get_leader_str_for_view(&ctx, __view) != ctx.config.net_config.name {
+        warn!("I am not the leader for view {}", __view);
+        return Err(Error::new(ErrorKind::Other, "Not the leader"));
+    }
+
     let mut block = ProtoBlock {
         tx,
         n: block_n,
         parent: fork.last_hash(),
-        view: ctx.state.view.load(Ordering::SeqCst),
+        view: __view,
         qc: Vec::new(),
         sig: Some(Sig::NoSig(DefferedSignature {})),
         fork_validation: Vec::new(),
@@ -1442,8 +1457,8 @@ pub async fn create_and_push_block(
             blocks: vec![fork.get(fork.last()).unwrap().block.clone()],
         }),
         commit_index: ctx.state.commit_index.load(Ordering::SeqCst),
-        view: ctx.state.view.load(Ordering::SeqCst),
-        view_is_stable: ctx.view_is_stable.load(Ordering::SeqCst)
+        view: __view,
+        view_is_stable: __view_is_stable,
     };
 
     Ok((ae, profile))
@@ -1595,7 +1610,7 @@ pub async fn handle_client_messages(
     // Signed block logic: Either this timer expires.
     // Or the number of blocks crosses signature_max_delay_blocks.
     // In the later case, reset the timer.
-    let mut signature_timer = ResettableTimer::new(Duration::from_millis(
+    let signature_timer = ResettableTimer::new(Duration::from_millis(
         ctx.config.consensus_config.signature_max_delay_ms,
     ));
 
@@ -1603,7 +1618,6 @@ pub async fn handle_client_messages(
 
     let mut pending_signatures = 0;
 
-    let mut num_client_reqs = 0;
 
     loop {
         tokio::select! {
@@ -1621,8 +1635,8 @@ pub async fn handle_client_messages(
             break;
         }
 
-        num_client_reqs += curr_client_req_num;
-        trace!("Client handler: {} client requests", num_client_reqs);
+        ctx.total_client_requests.fetch_add(curr_client_req_num, Ordering::SeqCst);
+        trace!("Client handler: {} client requests", ctx.total_client_requests.load(Ordering::SeqCst));
         
         if !ctx.i_am_leader.load(Ordering::SeqCst) {
             do_respond_with_current_leader(&ctx, &curr_client_req).await;
@@ -1632,7 +1646,7 @@ pub async fn handle_client_messages(
             signature_timer_tick = false;
             continue;
         }
-                
+
         if !ctx.view_is_stable.load(Ordering::SeqCst) {
             do_respond_with_try_again(&curr_client_req).await;
             // @todo: Backoff here.
@@ -1645,20 +1659,22 @@ pub async fn handle_client_messages(
         
         // Ok I am the leader.
         pending_signatures += 1;
-        let should_sig = signature_timer_tick    // Either I am running this body because of signature timeout.
+        let mut should_sig = signature_timer_tick    // Either I am running this body because of signature timeout.
             || (pending_signatures >= ctx.config.consensus_config.signature_max_delay_blocks);
         // Or I actually got some transactions and I really need to sign
 
-        do_append_entries(
-            ctx.clone(),
-            client.clone(),
-            &mut curr_client_req,
-            should_sig,
-            &send_list,
-            majority,
-            super_majority,
-        )
-        .await?;
+        match do_append_entries(
+            ctx.clone(), client.clone(),
+            &mut curr_client_req, should_sig,
+            &send_list, majority, super_majority,
+        ).await {
+            Ok(_) => {}
+            Err(e) => {
+                warn!("Error doing append entries {}", e);
+                do_respond_with_current_leader(&ctx, &curr_client_req).await;
+                should_sig = false;
+            }
+        };
 
         if should_sig {
             pending_signatures = 0;
@@ -1681,10 +1697,7 @@ pub async fn handle_node_messages(
     ctx: PinnedServerContext,
     client: PinnedClient,
 ) -> Result<(), Error> {
-    let mut view_timer = ResettableTimer::new(Duration::from_millis(
-        ctx.config.consensus_config.view_timeout_ms,
-    ));
-    let view_timer_handle = view_timer.run().await;
+    let view_timer_handle = ctx.view_timer.run().await;
     let majority = get_majority_num(&ctx);
     let super_majority = get_super_majority_num(&ctx);
 
@@ -1727,13 +1740,15 @@ pub async fn handle_node_messages(
     let mut view_timer_tick = false;
     let mut node_req_num = 0;
 
+    let mut intended_view = 0;
+
     // Start with a view change
-    view_timer.fire_now().await;
+    ctx.view_timer.fire_now().await;
 
     loop {
         tokio::select! {
             biased;
-            tick = view_timer.wait() => {
+            tick = ctx.view_timer.wait() => {
                 view_timer_tick = tick;
             }
             node_req_num_ = node_rx.recv_many(&mut curr_node_req, (majority - 1) as usize) => node_req_num = node_req_num_,
@@ -1745,7 +1760,11 @@ pub async fn handle_node_messages(
         }
 
         if view_timer_tick {
-            do_init_view_change(&ctx, &client, super_majority).await?;
+            info!("Timer fired");
+            intended_view += 1;
+            if intended_view > ctx.state.view.load(Ordering::SeqCst) {
+                do_init_view_change(&ctx, &client, super_majority).await?;
+            }
         }
 
         while node_req_num > 0 {

@@ -1,5 +1,6 @@
 use std::{pin::Pin, sync::{atomic::AtomicBool, Arc}, time::Duration};
 
+use log::info;
 use tokio::{sync::{mpsc, Mutex}, task::JoinHandle, time::sleep};
 
 pub struct ResettableTimer {
@@ -61,7 +62,7 @@ impl ResettableTimer {
         })
     }
 
-    pub async fn wait(self: &mut Arc<Pin<Box<Self>>>) -> bool {
+    pub async fn wait(self: &Arc<Pin<Box<Self>>>) -> bool {
         let mut rx = self.rx.lock().await;
         rx.recv().await;
         true

@@ -13,8 +13,8 @@ use pft::{
     },
 };
 use prost::Message;
-use std::{env, fs, io, path};
-use tokio::task::JoinSet;
+use std::{env, fs, io, path, time::Duration};
+use tokio::{task::JoinSet, time::sleep};
 use std::time::Instant;
 
 fn process_args() -> ClientConfig {
@@ -82,6 +82,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -
             pft::consensus::proto::client::proto_client_reply::Reply::Leader(l) => {
                 if curr_leader != l.name {
                     info!("Switching leader: {} --> {}", curr_leader, l.name);
+                    sleep(Duration::from_millis(10)).await;
                     curr_leader = l.name.clone();
                 }
                 continue;
@@ -96,9 +97,9 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -
 
         
         if resp.block_n % 1000 == 0 {
-            info!("Client Id: {}, Msg Id: {}, Block num: {}, Tx num: {}, Latency: {} us",
+            info!("Client Id: {}, Msg Id: {}, Block num: {}, Tx num: {}, Latency: {} us, Current Leader: {}",
                 idx, i, resp.block_n, resp.tx_n,
-                start.elapsed().as_micros()
+                start.elapsed().as_micros(), curr_leader
             );
         }
         // } else {

@@ -1,12 +1,12 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     io::{Error, ErrorKind},
-    ops::Deref,
+    ops::{Deref, DerefMut},
     pin::Pin,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize},
         Arc,
-    },
+    }, time::Duration,
 };
 
 use indexmap::IndexMap;
@@ -29,7 +29,7 @@ use super::{
     proto::{
         consensus::{ProtoFork, ProtoQuorumCertificate, ProtoViewChange},
         rpc::{self, ProtoPayload},
-    },
+    }, timer::ResettableTimer,
 };
 
 /// @todo: This doesn't have to be here. Unncessary Mutexes.
@@ -94,7 +94,10 @@ pub struct ServerContext {
     pub __client_black_hole_channel: (
         mpsc::UnboundedSender<(PinnedMessage, LatencyProfile)>,
         Mutex<mpsc::UnboundedReceiver<(PinnedMessage, LatencyProfile)>>,
-    )
+    ),
+
+    pub view_timer: Arc<Pin<Box<ResettableTimer>>>,
+    pub total_client_requests: AtomicUsize,
 }
 
 #[derive(Clone)]
@@ -116,6 +119,8 @@ impl PinnedServerContext {
             ping_counters: std::sync::Mutex::new(HashMap::new()),
             keys: keys.clone(),
             __client_black_hole_channel: (black_hole_ch.0, Mutex::new(black_hole_ch.1)),
+            view_timer: ResettableTimer::new(Duration::from_millis(cfg.consensus_config.view_timeout_ms)),
+            total_client_requests: AtomicUsize::new(0),
         })))
     }
 }
@@ -127,6 +132,7 @@ impl Deref for PinnedServerContext {
         &self.0
     }
 }
+
 
 /// This should be a very short running function.
 /// No blocking and/or locking allowed.
