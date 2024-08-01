@@ -457,4 +457,47 @@ impl Log {
 
         Ok(self.last())
     }
+
+    pub fn trim_matching_prefix(&self, f: ProtoFork) -> ProtoFork {
+        // Find how far I match with given fork
+        let idx = f.blocks.binary_search_by(|b| {
+            if b.n > self.last() {
+                std::cmp::Ordering::Greater
+            } else {
+                let h = self.hash_at_n(b.n).unwrap();
+                let h2 = hash(&b.encode_to_vec());
+                if cmp_hash(&h, &h2) {
+                    std::cmp::Ordering::Less        // Need upper_bound like behavior
+                }else{
+                    std::cmp::Ordering::Greater
+                }
+            }
+        }).unwrap_err();
+
+        if idx > 0 && idx < f.blocks.len() {
+            let b = f.blocks.get(idx).unwrap();
+            if b.n <= self.last() {
+                let h = self.hash_at_n(b.n).unwrap();
+                let h2 = hash(&b.encode_to_vec());
+                assert!(!cmp_hash(&h, &h2));
+            }
+        }
+
+        let idx = idx - 1;
+        if idx > 0 && idx < f.blocks.len() {
+            let b = f.blocks.get(idx).unwrap();
+            if b.n <= self.last() {
+                let h = self.hash_at_n(b.n).unwrap();
+                let h2 = hash(&b.encode_to_vec());
+                assert!(cmp_hash(&h, &h2));
+            }
+            ProtoFork {
+                blocks: f.blocks.into_iter().skip(idx).collect()
+            }
+        }else{
+            f
+        }
+
+
+    }
 }

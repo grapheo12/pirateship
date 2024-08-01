@@ -757,6 +757,7 @@ pub async fn do_push_append_entries_to_fork(
         let (overwrite_blocks, view_lock_blocks) = res.unwrap();
 
         if overwrite_blocks.blocks.len() > 0 {
+            let overwrite_blocks = fork.trim_matching_prefix(overwrite_blocks);
             let overwrite_res = fork.overwrite(&overwrite_blocks);
             match overwrite_res {
                 Ok(n) => {
