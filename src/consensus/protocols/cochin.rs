@@ -155,7 +155,7 @@ pub async fn create_vote_for_blocks(
 
 pub fn do_commit(
     ctx: &PinnedServerContext,
-    fork: &mut MutexGuard<Log>,
+    fork: &MutexGuard<Log>,
     lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>,
     n: u64,
     ci: u64,
@@ -423,7 +423,7 @@ pub async fn do_process_vote(
 
 /// Only returns false if there is an invariant violation.
 /// There was no 2-chain QC found.
-fn maybe_byzantine_commit_with_n_and_view(ctx: &PinnedServerContext, fork: &MutexGuard<Log>, n: u64, view: u64) -> bool {
+fn maybe_byzantine_commit_with_n_and_view(ctx: &PinnedServerContext, fork: &MutexGuard<Log>, n: u64, view: u64, lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>) -> bool {
     // 2-chain commit rule.
 
     // The first block of a view gets a QC immediately.
@@ -448,18 +448,21 @@ fn maybe_byzantine_commit_with_n_and_view(ctx: &PinnedServerContext, fork: &Mute
     }
 
     if updated_bci > ctx.state.byz_commit_index.load(Ordering::SeqCst) {
+        
         trace!(
             "Updating byzantine_commit_index {} --> {}",
             ctx.state.byz_commit_index.load(Ordering::SeqCst),
             updated_bci
         );
+        ctx.state.byz_commit_index.store(updated_bci, Ordering::SeqCst);
+
+        do_commit(ctx, fork, lack_pend, updated_bci, ctx.state.commit_index.load(Ordering::SeqCst));
     }
 
-    ctx.state.byz_commit_index.store(updated_bci, Ordering::SeqCst);
     true
 }
 
-pub fn maybe_byzantine_commit(ctx: &PinnedServerContext, fork: &MutexGuard<Log>) {
+pub fn maybe_byzantine_commit(ctx: &PinnedServerContext, fork: &MutexGuard<Log>, lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>) {
     // Check all QCs formed during this view.
     // Since the last_qc need not have link to another qc,
     // due pipelined proposals.
@@ -467,7 +470,7 @@ pub fn maybe_byzantine_commit(ctx: &PinnedServerContext, fork: &MutexGuard<Log>)
     let last_qc_view = fork.last_qc_view();
     let mut check_qc = fork.last_qc();
 
-    while !maybe_byzantine_commit_with_n_and_view(ctx, fork, check_qc, last_qc_view) {
+    while !maybe_byzantine_commit_with_n_and_view(ctx, fork, check_qc, last_qc_view, lack_pend) {
         if check_qc == 0 {
             break;
         }
@@ -799,7 +802,7 @@ pub async fn do_push_append_entries_to_fork(
         byz_qc_pending.retain(|&n| n > last_qc);
 
         // Also the byzantine commit index may move
-        maybe_byzantine_commit(&ctx, &fork);
+        maybe_byzantine_commit(&ctx, &fork, &mut ctx.client_ack_pending.lock().await);
     }
 
     (last_n, updated_last_n, seq_nums)
@@ -1513,7 +1516,7 @@ pub async fn create_and_push_block(
             }
             profile.register("Block create");
 
-            maybe_byzantine_commit(&ctx, &fork);
+            maybe_byzantine_commit(&ctx, &fork, &mut ctx.client_ack_pending.lock().await);
 
             trace!("QC link: {} --> {:?}", n, __qc_trace);
         }
