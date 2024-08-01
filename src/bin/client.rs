@@ -82,7 +82,23 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -
             pft::consensus::proto::client::proto_client_reply::Reply::Leader(l) => {
                 if curr_leader != l.name {
                     info!("Switching leader: {} --> {}", curr_leader, l.name);
-                    sleep(Duration::from_millis(10)).await;
+                    // sleep(Duration::from_millis(10)).await; // Rachel: You fell A-SLEEP?!
+                    
+                    // Drop the connection from the old leader.
+                    // This is required as one process is generally allowed ~1024 open connections.
+                    // If ~700 threads have open connections to the leader
+                    // and the connections to the old leader are not closed,
+                    // within 2 views, the process will run out of file descriptors.
+                    // The OS will reset connections.
+                    
+                    // However, doing a drop here is not that efficient, why?
+                    // Because sometime node1 changes view where node2 is leader,
+                    // but node1 is still leader for node2 and
+                    // the curr_leader will ping pong until node2 changes view.
+                    
+                    PinnedClient::drop_connection(&client, &curr_leader).await;
+
+
                     curr_leader = l.name.clone();
                 }
                 continue;

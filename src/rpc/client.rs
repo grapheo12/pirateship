@@ -500,4 +500,18 @@ impl PinnedClient {
 
         Ok(())
     }
+
+
+    pub async fn drop_connection(client: &PinnedClient, name: &String) {
+        let sock = {
+            let mut lsock = client.0.sock_map.0.write().unwrap();
+            lsock.remove(name)
+        };
+
+        // if sock.is_some() {
+        //     let sock = sock.unwrap();
+        //     let mut lsock = sock.0.lock().await;
+        //     let _ = lsock.shutdown().await;
+        // }
+    }
 }
