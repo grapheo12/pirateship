@@ -182,7 +182,13 @@ pub fn do_commit(
         if *bn <= n {
             let entry = fork.get(*bn).unwrap();
             let response = if entry.block.tx.len() <= *txn {
-                warn!("Missing transaction!");
+                if ctx.i_am_leader.load(Ordering::SeqCst) {
+                    warn!("Missing transaction as a leader!");
+                }
+                if entry.block.view_is_stable {
+                    warn!("Missing transaction in stable view!");
+                }
+
                 ProtoClientReply {
                     reply: Some(
                         consensus::proto::client::proto_client_reply::Reply::TryAgain(
