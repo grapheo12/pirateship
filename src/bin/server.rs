@@ -1,4 +1,4 @@
-use log::debug;
+use log::{debug, info};
 use pft::{config::{self, Config}, consensus};
 use tokio::runtime;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
@@ -36,8 +36,8 @@ async fn run_main(cfg: Config) -> io::Result<()> {
     let node = Arc::new(consensus::ConsensusNode::new(&cfg));
     let mut handles = consensus::ConsensusNode::run(node);
 
-    while let Some(_) = handles.join_next().await {
-
+    while let Some(res) = handles.join_next().await {
+        info!("Task completed with {:?}", res);
     }
     Ok(())
 }

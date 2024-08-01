@@ -294,8 +294,14 @@ where
                 let mref = ack_rx.recv().await.unwrap();
                 let mref = mref.0.as_ref();
                 tx_buf.write_u32(mref.1 as u32).await?;
-                tx_buf.write_all(&mref.0.split_at(mref.1).0).await?;
-                tx_buf.flush().await?;
+                tx_buf.write_all(&mref.0[..mref.1]).await?;
+                match tx_buf.flush().await {
+                    Ok(_) => {},
+                    Err(e) => {
+                        warn!("Error sending response: {}", e);
+                        break;
+                    }
+                };
 
             }
 
@@ -306,7 +312,13 @@ where
                 let mref = mref.as_ref();
                 tx_buf.write_u32(mref.1 as u32).await?;
                 tx_buf.write_all(&mref.0[..mref.1]).await?;
-                tx_buf.flush().await?;
+                match tx_buf.flush().await {
+                    Ok(_) => {},
+                    Err(e) => {
+                        warn!("Error sending response: {}", e);
+                        break;
+                    }
+                };
 
 
                 profile.register("Ack sent");

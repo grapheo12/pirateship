@@ -103,7 +103,7 @@ impl Log {
 
     pub fn get(&self, n: u64) -> Result<&LogEntry, Error> {
         if n > self.last() || n == 0 {
-            return Err(Error::new(ErrorKind::InvalidInput, "Out of bounds"));
+            return Err(Error::new(ErrorKind::InvalidInput, format!("Out of bounds {}, last() = {}", n, self.last())));
         }
         Ok(self.entries.get((n - 1) as usize).unwrap())
     }

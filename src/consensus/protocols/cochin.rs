@@ -132,6 +132,9 @@ pub async fn create_vote_for_blocks(
     if atleast_one_sig_block {
         // Invariant: Only signature blocks get signature votes.
         for n in byz_qc_pending.iter() {
+            if *n > fork.last() {
+                continue;
+            }
             if let Some(sig) = fork.get(*n)?.qc_sigs.get(&ctx.config.net_config.name) {
                 vote_sigs.push(ProtoSignatureArrayEntry {
                     n: *n,
@@ -197,8 +200,7 @@ pub fn do_commit(
                                 block_n: (*bn) as u64,
                                 tx_n: (*txn) as u64,
                             },
-                        ),
-                    ),
+                    )),
                 }
             };
 
@@ -299,6 +301,10 @@ pub async fn do_process_vote(
         debug!("do_process_vote: Fork locked");
         fork.unwrap()
     };
+    if vote.n > fork.last() {
+        warn!("Vote({}) higher than fork.last() = {}", vote.n, fork.last());
+        return Ok(());
+    }
     if !cmp_hash(&fork.hash_at_n(vote.n).unwrap(), &vote.fork_digest) {
         warn!("Wrong digest, skipping vote");
         return Ok(());
@@ -484,7 +490,11 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
         if !f.blocks[i as usize].view_is_stable {
             // This the signal that it is a New Leader message
             let mut valid_forks = 0;
-            for fork_validation in &f.blocks[i as usize].fork_validation {
+            let mut max_qc_seen = 0;
+
+            let mut subrule1_eligible_forks = HashMap::new();
+
+            for (j, fork_validation) in f.blocks[i as usize].fork_validation.iter().enumerate() {
                 // Is this a valid fork?
                 // Check the signature on the fork.
                 let mut buf_last = Vec::new();
@@ -499,6 +509,30 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
                     if let Err(e) = block.encode(&mut buf_last) {
                         error!("{}", e);
                         continue;
+                    }
+
+                    let last_view = block.view;
+                    let last_n = block.n;
+                    let fork_stat = ForkStat {
+                        last_view,
+                        last_n,
+                        last_qc: 0,         // Doesn't matter here
+                        last_signed_block: 0,   // Doesn't matter here.
+                        name: String::from("")  // Doesn't matter here.
+                    };
+
+                    for b in &vc.fork.as_ref().unwrap().blocks {
+                        if b.qc.len() > 0 {
+                            for qc in &b.qc {
+                                if qc.n > max_qc_seen {
+                                    max_qc_seen = b.qc[0].n;
+                                    subrule1_eligible_forks.clear();
+                                    subrule1_eligible_forks.insert(j, fork_stat.clone());
+                                }else if qc.n == max_qc_seen {
+                                    subrule1_eligible_forks.insert(j, fork_stat.clone());
+                                }
+                            }
+                        }
                     }
                 }
                 // This is the last_hash() logic.
@@ -520,6 +554,43 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
 
             if valid_forks < super_majority {
                 return Err(Error::new(ErrorKind::InvalidData, "New Leader message with invalid fork information"))
+            }
+
+            let mut max_qc_selected = 0;
+            for b in &f.blocks {
+                if b.qc.len() > 0 {
+                    for qc in &b.qc {
+                        if qc.n > max_qc_selected {
+                            max_qc_selected = qc.n;
+                        }
+                    }
+                }
+            }
+
+            // SubRule1
+            if max_qc_selected < max_qc_seen {
+                return Err(Error::new(ErrorKind::InvalidData, "New Leader message with invalid max qc; SubRule1 violated"))
+            }
+
+            let selected_fork_size = f.blocks.len() - 1;
+            let selected_fork_last_view = f.blocks[selected_fork_size].view;
+            let selected_fork_size = f.blocks[selected_fork_size].n;
+            for (_j, fork_stat) in &subrule1_eligible_forks {
+                // Subrule2
+                if selected_fork_last_view < fork_stat.last_view {
+                    return Err(Error::new(ErrorKind::InvalidData, "New Leader message with invalid view; SubRule2 violated"))
+                }
+            }
+
+            let subrule2_eligible_forks: HashMap<usize, ForkStat> = subrule1_eligible_forks.into_iter().filter(|(_j, fork_stat)| {
+                selected_fork_size == fork_stat.last_n
+            }).collect();
+
+            for (_j, fork_stat) in subrule2_eligible_forks {
+                // SubRule3
+                if selected_fork_size < fork_stat.last_n {
+                    return Err(Error::new(ErrorKind::InvalidData, "New Leader message with invalid length; SubRule3 violated"))
+                }
             }
 
             if split_point.is_none() {
@@ -1763,7 +1834,9 @@ pub async fn handle_node_messages(
             info!("Timer fired");
             intended_view += 1;
             if intended_view > ctx.state.view.load(Ordering::SeqCst) {
-                do_init_view_change(&ctx, &client, super_majority).await?;
+                if let Err(e) = do_init_view_change(&ctx, &client, super_majority).await {
+                    error!("Error initiating view change: {}", e);
+                }
             }
         }
 
@@ -1779,13 +1852,17 @@ pub async fn handle_node_messages(
                 vote_worker_rr_cnt += 1;
                 if rr_cnt == 0 {
                     // Let this thread process it.
-                    process_node_request(&ctx, &client, majority, super_majority, &mut req).await?;
+                    if let Err(e) = process_node_request(&ctx, &client, majority, super_majority, &mut req).await {
+                        error!("Error processing vote: {}", e);
+                    }
                 } else {
                     // Push it to a worker
                     let _ = vote_worker_chans[(rr_cnt - 1) as usize].send(req);
                 }
             } else {
-                process_node_request(&ctx, &client, majority, super_majority, &mut req).await?;
+                if let Err(e) = process_node_request(&ctx, &client, majority, super_majority, &mut req).await {
+                    error!("Error processing node request: {}", e);
+                }
             }
         }
 
