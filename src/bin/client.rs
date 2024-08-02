@@ -1,20 +1,17 @@
-use hex::ToHex;
-use log::{debug, info, warn};
+use log::{info, warn};
 use pft::{
-    config::{default_log4rs_config, ClientConfig},
-    consensus::proto::{
+    config::{default_log4rs_config, ClientConfig}, proto::{
         client::{ProtoClientReply, ProtoClientRequest},
-        rpc::{self, ProtoPayload},
-    },
-    crypto::KeyStore,
-    rpc::{
+        rpc::ProtoPayload,
+        execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}
+    }, crypto::KeyStore, rpc::{
         client::{Client, PinnedClient},
         MessageRef,
-    },
+    }
 };
 use prost::Message;
-use std::{env, fs, io, path, time::Duration};
-use tokio::{task::JoinSet, time::sleep};
+use std::{env, fs, io, path};
+use tokio::task::JoinSet;
 use std::time::Instant;
 
 fn process_args() -> ClientConfig {
@@ -40,19 +37,32 @@ fn process_args() -> ClientConfig {
     ClientConfig::deserialize(&cfg_contents)
 }
 
-async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -> io::Result<()> {    
+async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, config: ClientConfig) -> io::Result<()> {    
     let mut curr_leader = String::from("node1");
     let mut i = 0;
     while i < num_requests {
         let client_req = ProtoClientRequest {
-            tx: format!("Tx:{}:{}", idx, i).into_bytes(),
+            tx: Some(ProtoTransaction{
+                on_receive: None,
+                on_crash_commit: Some(ProtoTransactionPhase {
+                    ops: vec![ProtoTransactionOp {
+                        op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
+                        operands: vec![
+                            format!("crash_commit_{}", i).into_bytes(),
+                            format!("Tx:{}:{}", idx, i).into_bytes()
+                        ],
+                    }],
+                }),
+                on_byzantine_commit: None,
+            }),
+            origin: config.net_config.name.clone(),
             // sig: vec![0u8; SIGNATURE_LENGTH],
             sig: vec![0u8; 1]
         };
 
         let rpc_msg_body = ProtoPayload {
             message: Some(
-                pft::consensus::proto::rpc::proto_payload::Message::ClientRequest(client_req),
+                pft::proto::rpc::proto_payload::Message::ClientRequest(client_req),
             ),
         };
 
@@ -75,11 +85,11 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -
             continue;
         }
         let resp = match resp.reply.unwrap() {
-            pft::consensus::proto::client::proto_client_reply::Reply::Receipt(r) => r,
-            pft::consensus::proto::client::proto_client_reply::Reply::TryAgain(_) => {
+            pft::proto::client::proto_client_reply::Reply::Receipt(r) => r,
+            pft::proto::client::proto_client_reply::Reply::TryAgain(_) => {
                 continue;
             },
-            pft::consensus::proto::client::proto_client_reply::Reply::Leader(l) => {
+            pft::proto::client::proto_client_reply::Reply::Leader(l) => {
                 if curr_leader != l.name {
                     info!("Switching leader: {} --> {}", curr_leader, l.name);
                     // sleep(Duration::from_millis(10)).await; // Rachel: You fell A-SLEEP?!
@@ -103,7 +113,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize) -
                 }
                 continue;
             },
-            pft::consensus::proto::client::proto_client_reply::Reply::TentativeReceipt(r) => {
+            pft::proto::client::proto_client_reply::Reply::TentativeReceipt(r) => {
                 warn!("Got tentative receipt: {:?}", r);
                 continue;
                 // @todo: Wait to see if my txn gets committed in the tentative block.
@@ -144,8 +154,10 @@ async fn main() -> io::Result<()> {
 
     let mut client_handles = JoinSet::new();
     for i in 0..config.workload_config.num_clients {
-        let c = Client::new(&config.fill_missing(), &keys).into();
-        client_handles.spawn(async move { client_runner(i, &c, config.workload_config.num_requests).await });
+        let client_config = config.clone();
+        let net_config = client_config.fill_missing();
+        let c = Client::new(&net_config, &keys).into();
+        client_handles.spawn(async move { client_runner(i, &c, config.workload_config.num_requests, client_config.clone()).await });
     }
 
     while let Some(_) = client_handles.join_next().await {}

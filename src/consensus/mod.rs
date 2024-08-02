@@ -19,21 +19,6 @@ pub mod log;
 pub mod protocols;
 pub mod timer;
 
-pub mod proto {
-    pub mod consensus {
-        include!(concat!(env!("OUT_DIR"), "/proto.consensus.rs"));
-    }
-    pub mod client {
-        include!(concat!(env!("OUT_DIR"), "/proto.client.rs"));
-    }
-    pub mod rpc {
-        include!(concat!(env!("OUT_DIR"), "/proto.rpc.rs"));
-    }
-    pub mod checkpoint {
-        include!(concat!(env!("OUT_DIR"), "/proto.checkpoint.rs"));
-    }
-}
-
 /// Wrapper around rpc::{Server, Client} with this PinnedServerContext and consensus_rpc_handler
 /// One should use this to spawn a new node, instead of creating rpc::{Server, Client} separately.
 pub struct ConsensusNode {

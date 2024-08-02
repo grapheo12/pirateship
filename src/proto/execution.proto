@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package proto.execution;
+
+enum ProtoTransactionOpType {
+    // For KV store style operations
+    NOOP = 0;
+    READ = 1;
+    WRITE = 2;
+
+    // For reconfiguration
+    ADD_LEARNER = 3;
+    ADD_FULL_NODE = 4;
+    DEL_LEARNER = 5;
+    DEL_FULL_NODE = 6;
+}
+
+message ProtoTransactionOp {
+    ProtoTransactionOpType op_type = 1;
+    repeated bytes operands = 2;
+}
+
+message ProtoTransactionPhase {
+    repeated ProtoTransactionOp ops = 1;
+}
+
+message ProtoTransaction {
+    ProtoTransactionPhase on_receive = 1;
+    ProtoTransactionPhase on_crash_commit = 2;
+    ProtoTransactionPhase on_byzantine_commit = 3;
+}

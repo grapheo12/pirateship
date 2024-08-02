@@ -1,11 +1,13 @@
 syntax = "proto3";
 
 package proto.client;
+import "execution.proto";
 
 message ProtoClientRequest {
     // This structure is temporary. It MUST change.
-    bytes tx = 1;
-    bytes sig = 2;
+    proto.execution.ProtoTransaction tx = 1;
+    string origin = 2;
+    bytes sig = 3;
 }
 
 message ProtoTransactionReceipt {

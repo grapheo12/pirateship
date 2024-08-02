@@ -26,7 +26,7 @@ use crate::{
 
 use super::{
     log::Log,
-    proto::{
+    super::proto::{
         consensus::{ProtoFork, ProtoQuorumCertificate, ProtoViewChange},
         rpc::{self, ProtoPayload},
     }, timer::ResettableTimer,

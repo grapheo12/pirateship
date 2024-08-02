@@ -9,7 +9,7 @@ use prost::Message;
 
 use crate::crypto::{cmp_hash, hash, KeyStore};
 
-use super::proto::consensus::{
+use super::super::proto::consensus::{
     proto_block::Sig, DefferedSignature, ProtoBlock, ProtoFork, ProtoNameWithSignature,
     ProtoQuorumCertificate,
 };

@@ -15,28 +15,28 @@ use tokio::{
 };
 
 use crate::{
+    proto::{
+        checkpoint::{ProtoBackFillRequest, ProtoBackFillResponse}, client::{
+            ProtoClientReply, ProtoClientRequest, ProtoCurrentLeader, ProtoTentativeReceipt, ProtoTransactionReceipt, ProtoTryAgain
+        }, consensus::{
+            proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork,
+            ProtoForkValidation, ProtoQuorumCertificate, ProtoSignatureArrayEntry,
+            ProtoViewChange, ProtoVote,
+        },
+        rpc::{self, ProtoPayload},
+        execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}
+    },
     consensus::{
         self,
         handler::{ForwardedMessage, ForwardedMessageWithAckChan, PinnedServerContext},
         leader_rotation::get_current_leader,
         log::{Log, LogEntry},
-        proto::{
-            checkpoint::{ProtoBackFillRequest, ProtoBackFillResponse}, client::{
-                ProtoClientReply, ProtoClientRequest, ProtoCurrentLeader, ProtoTentativeReceipt, ProtoTransactionReceipt, ProtoTryAgain
-            }, consensus::{
-                proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork,
-                ProtoForkValidation, ProtoQuorumCertificate, ProtoSignatureArrayEntry,
-                ProtoViewChange, ProtoVote,
-            }, rpc::{self, ProtoPayload}
-        },
         timer::ResettableTimer,
-    },
-    crypto::{cmp_hash, hash, DIGEST_LENGTH},
-    rpc::{
+    }, crypto::{cmp_hash, hash, DIGEST_LENGTH}, rpc::{
         client::PinnedClient,
         server::{LatencyProfile, MsgAckChan},
         PinnedMessage,
-    },
+    }
 };
 
 pub fn get_leader_str(ctx: &PinnedServerContext) -> String {
@@ -196,16 +196,16 @@ pub fn do_commit(
 
                 ProtoClientReply {
                     reply: Some(
-                        consensus::proto::client::proto_client_reply::Reply::TryAgain(
+                        crate::proto::client::proto_client_reply::Reply::TryAgain(
                             ProtoTryAgain{ }
                     )),
                 }
             }else {
-                let h = hash(&entry.block.tx[*txn]);
+                let h = hash(&entry.block.tx[*txn].encode_to_vec());
     
                 ProtoClientReply {
                     reply: Some(
-                        consensus::proto::client::proto_client_reply::Reply::Receipt(
+                        crate::proto::client::proto_client_reply::Reply::Receipt(
                             ProtoTransactionReceipt {
                                 req_digest: h,
                                 block_n: (*bn) as u64,
@@ -262,10 +262,10 @@ pub fn do_commit(
     );
 }
 
-fn __hash_tx_list(tx: &Vec<Vec<u8>>) -> Vec<u8> {
+fn __hash_tx_list(tx: &Vec<ProtoTransaction>) -> Vec<u8> {
     let mut buf = Vec::new();
     for t in tx {
-        buf.extend(t);
+        buf.extend(t.encode_to_vec());
     }
     hash(&buf)
 }
@@ -718,7 +718,7 @@ pub async fn maybe_backfill_fork<'a>(ctx: &PinnedServerContext, client: &PinnedC
 
     let mut buf = Vec::new();
     let rpc_msg_body = ProtoPayload {
-        message: Some(consensus::proto::rpc::proto_payload::Message::BackfillRequest(backfill_req)),
+        message: Some(crate::proto::rpc::proto_payload::Message::BackfillRequest(backfill_req)),
     };
     let backfill_resp = if let Ok(_) = rpc_msg_body.encode(&mut buf) {
         let sz = buf.len();
@@ -740,7 +740,7 @@ pub async fn maybe_backfill_fork<'a>(ctx: &PinnedServerContext, client: &PinnedC
             }
         };
 
-        let backfill_resp = if let Some(consensus::proto::rpc::proto_payload::Message::BackfillResponse(r)) = body.message {
+        let backfill_resp = if let Some(crate::proto::rpc::proto_payload::Message::BackfillResponse(r)) = body.message {
             r
         }else{
             warn!("Invalid backfill response");
@@ -910,7 +910,7 @@ pub async fn do_reply_vote(
 ) -> Result<(), Error> {
     let vote_n = vote.n;
     let rpc_msg_body = ProtoPayload {
-        message: Some(consensus::proto::rpc::proto_payload::Message::Vote(vote)),
+        message: Some(crate::proto::rpc::proto_payload::Message::Vote(vote)),
     };
 
     let mut buf = Vec::new();
@@ -1011,12 +1011,22 @@ async fn force_noop(ctx: &PinnedServerContext) {
     let client_tx = ctx.client_queue.0.clone();
     
     let client_req = ProtoClientRequest {
-        tx: format!("view_start_noop:{}", ctx.state.view.load(Ordering::SeqCst)).into_bytes(),
+        tx: Some(ProtoTransaction {
+            on_receive: None,
+            on_crash_commit: None,
+            on_byzantine_commit: Some(ProtoTransactionPhase {
+                ops: vec![ProtoTransactionOp {
+                    op_type: crate::proto::execution::ProtoTransactionOpType::Noop.into(),
+                    operands: vec![format!("view_start_noop:{}", ctx.state.view.load(Ordering::SeqCst)).into_bytes()]
+                }],
+            }),
+        }),
         // sig: vec![0u8; SIGNATURE_LENGTH],
-        sig: vec![0u8; 1]
+        sig: vec![0u8; 1],
+        origin: ctx.config.net_config.name.clone(),
     };
 
-    let request = crate::consensus::proto::rpc::proto_payload::Message::ClientRequest(client_req);
+    let request = crate::proto::rpc::proto_payload::Message::ClientRequest(client_req);
     let profile = LatencyProfile::new();
 
     let _ = client_tx.send((request, ctx.config.net_config.name.clone(), ctx.__client_black_hole_channel.0.clone(), profile));
@@ -1138,7 +1148,7 @@ pub async fn do_init_new_leader(
             })
             .collect(),
         view_is_stable: false,
-        sig: Some(consensus::proto::consensus::proto_block::Sig::NoSig(
+        sig: Some(crate::proto::consensus::proto_block::Sig::NoSig(
             DefferedSignature {},
         )),
     };
@@ -1339,7 +1349,7 @@ pub async fn do_process_backfill_request(ctx: PinnedServerContext, ack_tx: &mut 
         fork: Some(resp_fork),
     };
     let rpc_msg_body = ProtoPayload {
-        message: Some(consensus::proto::rpc::proto_payload::Message::BackfillResponse(response)),
+        message: Some(crate::proto::rpc::proto_payload::Message::BackfillResponse(response)),
     };
     let mut buf = Vec::new();
     rpc_msg_body.encode(&mut buf).unwrap();
@@ -1362,7 +1372,7 @@ pub async fn process_node_request(
     let (msg, sender, ack_tx, profile) = ms;
     let _sender = sender.clone();
     match &msg {
-        crate::consensus::proto::rpc::proto_payload::Message::AppendEntries(ae) => {
+        crate::proto::rpc::proto_payload::Message::AppendEntries(ae) => {
             profile.register("AE chan wait");
             let (last_n, updated_last_n, seq_nums, should_update_ci) =
                 do_push_append_entries_to_fork(ctx.clone(), client.clone(), ae, sender, super_majority).await;
@@ -1402,18 +1412,18 @@ pub async fn process_node_request(
                 do_commit(ctx, &mut fork, &mut lack_pend, new_ci);
             }
         }
-        crate::consensus::proto::rpc::proto_payload::Message::Vote(v) => {
+        crate::proto::rpc::proto_payload::Message::Vote(v) => {
             profile.register("Vote chan wait");
             let _ = do_process_vote(ctx.clone(), v, sender, majority, super_majority).await;
             profile.register("Vote process");
         }
-        crate::consensus::proto::rpc::proto_payload::Message::ViewChange(vc) => {
+        crate::proto::rpc::proto_payload::Message::ViewChange(vc) => {
             profile.register("View Change chan wait");
             let _ = do_process_view_change(ctx.clone(), client.clone(), vc, sender, super_majority)
                 .await;
             profile.register("View change process");
         },
-        crate::consensus::proto::rpc::proto_payload::Message::BackfillRequest(bfr) => {
+        crate::proto::rpc::proto_payload::Message::BackfillRequest(bfr) => {
             profile.register("Backfill Request chan wait");
             do_process_backfill_request(ctx.clone(), ack_tx, bfr, sender).await;
             profile.register("Backfill Request process");
@@ -1431,7 +1441,7 @@ async fn do_reply_all_with_tentative_receipt(ctx: &PinnedServerContext) {
         profile.register("Tentative chan wait");
         let response = ProtoClientReply {
             reply: Some(
-                consensus::proto::client::proto_client_reply::Reply::TentativeReceipt(
+                crate::proto::client::proto_client_reply::Reply::TentativeReceipt(
                     ProtoTentativeReceipt {
                         block_n: (*bn) as u64,
                         tx_n: (*txn) as u64,
@@ -1507,7 +1517,7 @@ async fn do_init_view_change(
     let mut buf = Vec::new();
 
     let rpc_msg_body = ProtoPayload {
-        message: Some(consensus::proto::rpc::proto_payload::Message::ViewChange(
+        message: Some(crate::proto::rpc::proto_payload::Message::ViewChange(
             vc_msg,
         )),
     };
@@ -1582,9 +1592,12 @@ pub async fn create_and_push_block(
         for (ms, _sender, chan, profile) in reqs {
             profile.register("Client channel recv");
 
-            if let crate::consensus::proto::rpc::proto_payload::Message::ClientRequest(req) = ms {
-                tx.push(req.tx.clone());
-                lack_pend.insert((block_n, tx.len() - 1), (chan.clone(), profile.to_owned()));
+            if let crate::proto::rpc::proto_payload::Message::ClientRequest(req) = ms {
+                if req.tx.is_some() {
+                    tx.push(req.tx.clone().unwrap());
+                    lack_pend.insert((block_n, tx.len() - 1), (chan.clone(), profile.to_owned()));
+                }
+                
             }
         }
     }
@@ -1670,7 +1683,7 @@ pub async fn broadcast_append_entries(
     let block_n = ae.fork.as_ref().unwrap().blocks[block_n - 1].n;
 
     let rpc_msg_body = ProtoPayload {
-        message: Some(consensus::proto::rpc::proto_payload::Message::AppendEntries(ae)),
+        message: Some(crate::proto::rpc::proto_payload::Message::AppendEntries(ae)),
     };
 
     rpc_msg_body.encode(&mut buf)?;
@@ -1749,7 +1762,7 @@ pub async fn bulk_reply_to_client(reqs: &Vec<ForwardedMessageWithAckChan>, msg: 
 pub async fn do_respond_with_try_again(reqs: &Vec<ForwardedMessageWithAckChan>) {
     let try_again = ProtoClientReply {
         reply: Some(
-            consensus::proto::client::proto_client_reply::Reply::TryAgain(ProtoTryAgain {}),
+            crate::proto::client::proto_client_reply::Reply::TryAgain(ProtoTryAgain {}),
         ),
     };
 
@@ -1766,7 +1779,7 @@ pub async fn do_respond_with_current_leader(
     reqs: &Vec<ForwardedMessageWithAckChan>,
 ) {
     let leader = ProtoClientReply {
-        reply: Some(consensus::proto::client::proto_client_reply::Reply::Leader(
+        reply: Some(crate::proto::client::proto_client_reply::Reply::Leader(
             ProtoCurrentLeader {
                 name: get_leader_str(ctx),
             },
@@ -1965,7 +1978,7 @@ pub async fn handle_node_messages(
             node_req_num -= 1;
             // AppendEntries should be processed by a single thread.
             // Only votes can be safely processed by multiple threads.
-            if let crate::consensus::proto::rpc::proto_payload::Message::Vote(_) = req.0 {
+            if let crate::proto::rpc::proto_payload::Message::Vote(_) = req.0 {
                 let rr_cnt =
                     vote_worker_rr_cnt % ctx.config.consensus_config.vote_processing_workers;
                 vote_worker_rr_cnt += 1;
