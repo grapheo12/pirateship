@@ -85,6 +85,7 @@ pub async fn create_vote_for_blocks(
 ) -> Result<ProtoVote, Error> {
     // let mut fork = ctx.state.fork.lock().await;
     let fork = ctx.state.fork.try_lock();
+    let view = ctx.state.view.load(Ordering::SeqCst);
     let mut fork = if let Err(e) = fork {
         debug!("create_vote_for_blocks: Fork is locked, waiting for it to be unlocked: {}", e);
         let fork = ctx.state.fork.lock().await;
@@ -148,7 +149,7 @@ pub async fn create_vote_for_blocks(
         sig_array: vote_sigs,
         fork_digest: fork.hash_at_n(max_n).unwrap_or(vec![0u8; DIGEST_LENGTH]),
         n: max_n,
-        view: ctx.state.view.load(Ordering::SeqCst),
+        view,
         is_nack: false,
     })
 }
@@ -158,8 +159,12 @@ pub fn do_commit(
     fork: &MutexGuard<Log>,
     lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>,
     n: u64,
-    ci: u64,
 ) {
+    let ci = ctx.state.commit_index.load(Ordering::SeqCst);
+    if fork.last() < n {
+        error!("Invariant violation: Committing a block that doesn't exist! new ci {}, fork.last() {}", n, fork.last());
+        return;
+    }
     if n <= ci {
         return;
     }
@@ -257,8 +262,43 @@ pub fn do_commit(
     );
 }
 
+fn __hash_tx_list(tx: &Vec<Vec<u8>>) -> Vec<u8> {
+    let mut buf = Vec::new();
+    for t in tx {
+        buf.extend(t);
+    }
+    hash(&buf)
+}
+
+fn __hash_qc_list(qc: &Vec<ProtoQuorumCertificate>) -> Vec<u8> {
+    let mut buf = Vec::new();
+    for q in qc {
+        buf.extend(q.encode_to_vec());
+    }
+    hash(&buf)
+}
+
+fn __display_protofork(f: &ProtoFork) -> String {
+    let mut s = String::from("ProtoFork { blocks: [ ");
+    for b in &f.blocks {
+        let _s = format!("ProtoBlock {{ View: {} n: {} Tx: {} QC: {} }},",
+            b.view, b.n, __hash_tx_list(&b.tx).encode_hex::<String>(), __hash_qc_list(&b.qc).encode_hex::<String>());
+
+        s += &_s;
+    }
+    s += " ] }";
+
+    s
+
+}
 /// Rollback such that the commit index is at max (n - 1)
-pub fn maybe_rollback(ctx: &PinnedServerContext, n: u64) {
+pub fn maybe_rollback(ctx: &PinnedServerContext, overwriting_fork: &ProtoFork, fork: &MutexGuard<Log>) {
+    if overwriting_fork.blocks.len() == 0 {
+        return;
+    }
+
+    let n = overwriting_fork.blocks[0].n;
+    
     if n == 0 {
         // This is invalid. No block has n == 0
     }
@@ -267,6 +307,8 @@ pub fn maybe_rollback(ctx: &PinnedServerContext, n: u64) {
     if ci <= n - 1 {
         return;
     }
+    // let rollbacked_fork = fork.serialize_range(n - 1, ci);
+    // info!("\nRollbacked fork: {}\nOverwriting fork: {}", __display_protofork(&rollbacked_fork), __display_protofork(&overwriting_fork));
 
     ctx.state.commit_index.store(n - 1, Ordering::SeqCst);
     warn!("Commit index rolled back from {} to {}", ci, n - 1);
@@ -331,6 +373,11 @@ pub async fn do_process_vote(
         debug!("do_process_vote: Fork locked");
         fork.unwrap()
     };
+
+    if vote.view < ctx.state.view.load(Ordering::SeqCst) {
+        trace!("Vote for older view! Rejected");
+        return Ok(());
+    }
     if vote.n > fork.last() {
         warn!("Vote({}) higher than fork.last() = {}", vote.n, fork.last());
         return Ok(());
@@ -445,7 +492,8 @@ pub async fn do_process_vote(
 
     {
         let mut lack_pend = ctx.client_ack_pending.lock().await;
-        do_commit(&ctx, &mut fork, &mut lack_pend, updated_ci, ci);
+
+        do_commit(&ctx, &mut fork, &mut lack_pend, updated_ci);
     }
 
     Ok(())
@@ -484,9 +532,13 @@ fn maybe_byzantine_commit_with_n_and_view(ctx: &PinnedServerContext, fork: &Mute
             ctx.state.byz_commit_index.load(Ordering::SeqCst),
             updated_bci
         );
+
+        if updated_bci > fork.last() {
+            error!("Invariant violation: Byzantine commit index {} higher than fork.last() = {}", updated_bci, fork.last());
+        }
         ctx.state.byz_commit_index.store(updated_bci, Ordering::SeqCst);
 
-        do_commit(ctx, fork, lack_pend, updated_bci, ctx.state.commit_index.load(Ordering::SeqCst));
+        do_commit(ctx, fork, lack_pend, updated_bci);
     }
 
     true
@@ -726,6 +778,7 @@ pub async fn do_push_append_entries_to_fork(
     u64,      /* last_n */
     u64,      /* updated_last_n */
     Vec<u64>, /* Sequence numbers */
+    bool      /* Should update ci */
 ) {
     // let mut fork = ctx.state.fork.lock().await;
     let fork = ctx.state.fork.try_lock();
@@ -744,9 +797,9 @@ pub async fn do_push_append_entries_to_fork(
     let mut seq_nums = Vec::new();
 
     if ae.view < ctx.state.view.load(Ordering::SeqCst) {
-        warn!("Message from older view! Rejected; Sent by: {} Is New leader? {} Msg view: {} Current View {}",
+        trace!("Message from older view! Rejected; Sent by: {} Is New leader? {} Msg view: {} Current View {}",
             sender, !ae.fork.as_ref().unwrap().blocks[0].view_is_stable, ae.view, ctx.state.view.load(Ordering::SeqCst));
-        return (last_n, last_n, seq_nums);
+        return (last_n, last_n, seq_nums, false);
     }else if ae.view > ctx.state.view.load(Ordering::SeqCst) {
         ctx.state.view.store(ae.view, Ordering::SeqCst);
         if get_leader_str(&ctx) == ctx.config.net_config.name {
@@ -768,7 +821,7 @@ pub async fn do_push_append_entries_to_fork(
     if !sender.eq(&get_leader_str(&ctx)) {
         // Can't accept blocks from non-leader.
         warn!("Non-leader {} trying to send blocks", sender);
-        return (last_n, updated_last_n, seq_nums);
+        return (last_n, updated_last_n, seq_nums, false);
     }
 
     if let Some(f) = &ae.fork {
@@ -776,12 +829,12 @@ pub async fn do_push_append_entries_to_fork(
         let res = maybe_verify_view_change_sequence(&ctx, &f, super_majority).await;
         if let Err(e) = res {
             warn!("Verification error: {}", e);
-            return (last_n, updated_last_n, seq_nums);
+            return (last_n, updated_last_n, seq_nums, false);
         }
         let (overwrite_blocks, view_lock_blocks) = res.unwrap();
 
         if overwrite_blocks.blocks.len() > 0 {
-            info!("Untrimmed fork start: {}", overwrite_blocks.blocks[0].n);
+            trace!("Untrimmed fork start: {}", overwrite_blocks.blocks[0].n);
 
             // If there is no equivocation, there will be no need to rollback the fork.
             // However, the view change message comes with a sizeable backlog which will cause unnecessary fork overwrites.
@@ -789,8 +842,8 @@ pub async fn do_push_append_entries_to_fork(
             // After trimming, the only thing that should remain is the last New Leader message.
             let overwrite_blocks = fork.trim_matching_prefix(overwrite_blocks);
             if overwrite_blocks.blocks.len() > 0 {
-                info!("Trimmed fork start: {}", overwrite_blocks.blocks[0].n);
-                maybe_rollback(&ctx, overwrite_blocks.blocks[0].n);
+                trace!("Trimmed fork start: {}", overwrite_blocks.blocks[0].n);
+                maybe_rollback(&ctx, &overwrite_blocks, &fork);
                 let overwrite_res = fork.overwrite(&overwrite_blocks);
                 match overwrite_res {
                     Ok(n) => {
@@ -846,7 +899,7 @@ pub async fn do_push_append_entries_to_fork(
         maybe_byzantine_commit(&ctx, &fork, &mut ctx.client_ack_pending.lock().await);
     }
 
-    (last_n, updated_last_n, seq_nums)
+    (last_n, updated_last_n, seq_nums, true)
 }
 
 pub async fn do_reply_vote(
@@ -1028,29 +1081,35 @@ pub async fn do_init_new_leader(
             let last_hash = fork.last_hash();
             (last_n, last_hash)
         } else {
-            info!("Untrimmed fork start: {}", chosen_fork.blocks[0].n);
+            trace!("Untrimmed fork start: {}", chosen_fork.blocks[0].n);
             let trimmed_fork = fork.trim_matching_prefix(chosen_fork.clone());
-            info!("Trimmed fork start: {}", trimmed_fork.blocks[0].n);
-    
-            let last_n = if trimmed_fork.blocks.len() > 0 {
-                maybe_rollback(&ctx, trimmed_fork.blocks[0].n);
-                match fork.overwrite(&trimmed_fork){
-                    Ok(n) => n,
-                    Err(e) => {
-                        error!("Error overwriting fork: {}", e);
-                        return;
+            if trimmed_fork.blocks.len() > 0 {
+                trace!("Trimmed fork start: {}", trimmed_fork.blocks[0].n);
+        
+                let last_n = if trimmed_fork.blocks.len() > 0 {
+                    maybe_rollback(&ctx, &trimmed_fork, &fork);
+                    match fork.overwrite(&trimmed_fork){
+                        Ok(n) => n,
+                        Err(e) => {
+                            error!("Error overwriting fork: {}", e);
+                            return;
+                        }
                     }
-                }
+                } else {
+                    fork.last()
+                };
+                let last_hash = fork.last_hash();
+                (last_n, last_hash)
             } else {
-                fork.last()
-            };
-            let last_hash = fork.last_hash();
-            (last_n, last_hash)
+                let last_n = fork.last();
+                let last_hash = fork.last_hash();
+                (last_n, last_hash)
+            }
         }
         
     } else {
         // Don't need to overwrite if I chose my own fork.
-        info!("I chose my own fork!");
+        debug!("I chose my own fork!");
         let last_n = fork.last();
         let last_hash = fork.last_hash();
         (last_n, last_hash)
@@ -1305,7 +1364,7 @@ pub async fn process_node_request(
     match &msg {
         crate::consensus::proto::rpc::proto_payload::Message::AppendEntries(ae) => {
             profile.register("AE chan wait");
-            let (last_n, updated_last_n, seq_nums) =
+            let (last_n, updated_last_n, seq_nums, should_update_ci) =
                 do_push_append_entries_to_fork(ctx.clone(), client.clone(), ae, sender, super_majority).await;
             profile.register("Fork push");
 
@@ -1325,7 +1384,7 @@ pub async fn process_node_request(
 
             let ci = ctx.state.commit_index.load(Ordering::SeqCst);
             let new_ci = ae.commit_index;
-            if new_ci > ci {
+            if should_update_ci && new_ci > ci {
                 // let mut fork = ctx.state.fork.lock().await;
                 let fork = ctx.state.fork.try_lock();
                 let mut fork = if let Err(e) = fork {
@@ -1340,8 +1399,7 @@ pub async fn process_node_request(
                 let mut lack_pend = ctx.client_ack_pending.lock().await;
                 // Followers should not have pending client requests.
                 // But this same interface is good for refactoring.
-
-                do_commit(ctx, &mut fork, &mut lack_pend, new_ci, ci);
+                do_commit(ctx, &mut fork, &mut lack_pend, new_ci);
             }
         }
         crate::consensus::proto::rpc::proto_payload::Message::Vote(v) => {
