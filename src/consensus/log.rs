@@ -492,7 +492,7 @@ impl Log {
                 assert!(cmp_hash(&h, &h2));
             }
             ProtoFork {
-                blocks: f.blocks.into_iter().skip(idx).collect()
+                blocks: f.blocks.into_iter().skip(idx+1).collect()
             }
         }else{
             f

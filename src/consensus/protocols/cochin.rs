@@ -257,6 +257,30 @@ pub fn do_commit(
     );
 }
 
+/// Rollback such that the commit index is at max (n - 1)
+pub fn maybe_rollback(ctx: &PinnedServerContext, n: u64) {
+    if n == 0 {
+        // This is invalid. No block has n == 0
+    }
+
+    let ci = ctx.state.commit_index.load(Ordering::SeqCst);
+    if ci <= n - 1 {
+        return;
+    }
+
+    ctx.state.commit_index.store(n - 1, Ordering::SeqCst);
+    warn!("Commit index rolled back from {} to {}", ci, n - 1);
+
+    let bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+    if bci > n - 1 {
+        // This should not be happening, EVER!
+        ctx.state.byz_commit_index.store(n - 1, Ordering::SeqCst);
+        error!("Invariant violation: Byzantine commit index rolled back from {} to {}", bci, n - 1);
+    }
+
+    // @todo: Send rollback signal to the application above.
+}
+
 pub fn do_create_qcs(
     ctx: &PinnedServerContext,
     fork: &mut MutexGuard<Log>,
@@ -757,16 +781,26 @@ pub async fn do_push_append_entries_to_fork(
         let (overwrite_blocks, view_lock_blocks) = res.unwrap();
 
         if overwrite_blocks.blocks.len() > 0 {
+            info!("Untrimmed fork start: {}", overwrite_blocks.blocks[0].n);
+
+            // If there is no equivocation, there will be no need to rollback the fork.
+            // However, the view change message comes with a sizeable backlog which will cause unnecessary fork overwrites.
+            // So, we trim the matching prefix.
+            // After trimming, the only thing that should remain is the last New Leader message.
             let overwrite_blocks = fork.trim_matching_prefix(overwrite_blocks);
-            let overwrite_res = fork.overwrite(&overwrite_blocks);
-            match overwrite_res {
-                Ok(n) => {
-                    info!("Overwritten to n = {}. Digest = {}", n, fork.last_hash().encode_hex::<String>());
-                    seq_nums.push(n);
-                },
-                Err(e) => {
-                    error!("{}", e);
-                },
+            if overwrite_blocks.blocks.len() > 0 {
+                info!("Trimmed fork start: {}", overwrite_blocks.blocks[0].n);
+                maybe_rollback(&ctx, overwrite_blocks.blocks[0].n);
+                let overwrite_res = fork.overwrite(&overwrite_blocks);
+                match overwrite_res {
+                    Ok(n) => {
+                        info!("Overwritten to n = {}. Digest = {}", n, fork.last_hash().encode_hex::<String>());
+                        seq_nums.push(n);
+                    },
+                    Err(e) => {
+                        error!("{}", e);
+                    },
+                }
             }
         }
         
@@ -988,15 +1022,32 @@ pub async fn do_init_new_leader(
     }
     
     let (last_n, last_hash) = if chosen_fork_stat.name != ctx.config.net_config.name {
-        let last_n = match fork.overwrite(&chosen_fork){
-            Ok(n) => n,
-            Err(e) => {
-                error!("Error overwriting fork: {}", e);
-                return;
-            }
-        };
-        let last_hash = fork.last_hash();
-        (last_n, last_hash)
+        if chosen_fork.blocks.len() == 0 {
+            // No blocks in the chosen fork.
+            let last_n = fork.last();
+            let last_hash = fork.last_hash();
+            (last_n, last_hash)
+        } else {
+            info!("Untrimmed fork start: {}", chosen_fork.blocks[0].n);
+            let trimmed_fork = fork.trim_matching_prefix(chosen_fork.clone());
+            info!("Trimmed fork start: {}", trimmed_fork.blocks[0].n);
+    
+            let last_n = if trimmed_fork.blocks.len() > 0 {
+                maybe_rollback(&ctx, trimmed_fork.blocks[0].n);
+                match fork.overwrite(&trimmed_fork){
+                    Ok(n) => n,
+                    Err(e) => {
+                        error!("Error overwriting fork: {}", e);
+                        return;
+                    }
+                }
+            } else {
+                fork.last()
+            };
+            let last_hash = fork.last_hash();
+            (last_n, last_hash)
+        }
+        
     } else {
         // Don't need to overwrite if I chose my own fork.
         info!("I chose my own fork!");
