@@ -357,6 +357,11 @@ where
         
         // Ok I am the leader.
         pending_signatures += 1;
+        #[cfg(feature = "always_sign")]
+        let mut should_sig = true;
+        #[cfg(feature = "never_sign")]
+        let mut should_sig = false;
+        #[cfg(feature = "dynamic_sign")]
         let mut should_sig = signature_timer_tick    // Either I am running this body because of signature timeout.
             || (pending_signatures >= ctx.config.consensus_config.signature_max_delay_blocks);
         // Or I actually got some transactions and I really need to sign
@@ -461,12 +466,15 @@ pub async fn handle_node_messages<Engine>(
             break; // Select failed because both channels were closed!
         }
 
-        if view_timer_tick {
-            info!("Timer fired");
-            intended_view += 1;
-            if intended_view > ctx.state.view.load(Ordering::SeqCst) {
-                if let Err(e) = do_init_view_change(&ctx, &engine, &client, super_majority).await {
-                    error!("Error initiating view change: {}", e);
+        #[cfg(any(feature = "raft_view_change", feature = "cochin_view_change"))]
+        {
+            if view_timer_tick {
+                info!("Timer fired");
+                intended_view += 1;
+                if intended_view > ctx.state.view.load(Ordering::SeqCst) {
+                    if let Err(e) = do_init_view_change(&ctx, &engine, &client, super_majority).await {
+                        error!("Error initiating view change: {}", e);
+                    }
                 }
             }
         }

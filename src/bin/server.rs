@@ -33,6 +33,7 @@ fn process_args() -> Config {
 }
 
 async fn run_main(cfg: Config) -> io::Result<()> {
+    #[cfg(feature = "app_logger")]
     let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
     let mut handles = consensus::ConsensusNode::run(node);
 

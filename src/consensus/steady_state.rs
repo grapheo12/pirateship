@@ -241,8 +241,15 @@ where Engine: crate::execution::Engine
         let mut __byz_qc_pending_len = 0;
         if fork.get(i).unwrap().has_signature() {
             let byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
+
+            #[cfg(not(feature = "quorum_diversity"))]
+            let k = 1;
+
+            #[cfg(feature = "quorum_diversity")]
+            let k = ctx.config.consensus_config.quorum_diversity_k;
+
             if byz_qc_pending.contains(&i)
-                && byz_qc_pending.len() >= ctx.config.consensus_config.quorum_diversity_k
+                && byz_qc_pending.len() >= k
             {
                 qd_should_wait_supermajority = true;
                 __flipped = true;

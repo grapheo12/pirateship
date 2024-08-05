@@ -49,13 +49,21 @@ harness = false
 
 [features]
 round_robin_leader = []
-lucky_raft = ["round_robin_leader"]
-signed_raft = ["round_robin_leader"]
-jolteon = ["round_robin_leader"]
-cochin = ["round_robin_leader"]
-diverse_raft = ["round_robin_leader"]
-default = ["cochin"]
+always_sign = []
+never_sign = []
+dynamic_sign = []
+quorum_diversity = []
+raft_view_change = []
+cochin_view_change = []
+app_logger = []
+lucky_raft = ["round_robin_leader", "never_sign"]
+signed_raft = ["round_robin_leader", "dynamic_sign"]
+jolteon = ["round_robin_leader", "always_sign", "cochin_view_change"]
+diverse_raft = ["round_robin_leader", "dynamic_sign", "quorum_diversity", "raft_view_change"]
+cochin = ["round_robin_leader", "dynamic_sign", "quorum_diversity", "cochin_view_change"]
+default = ["cochin", "app_logger"]
 
-
+# @todo: Change how raft_view_change behaves.
+# @todo: A feature for jolteon to block on a block's qc.
 [profile.release]
 panic = "abort"
