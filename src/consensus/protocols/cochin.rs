@@ -1,12 +1,13 @@
+use byteorder::{BigEndian, WriteBytesExt};
+use ed25519_dalek::SIGNATURE_LENGTH;
 use hex::ToHex;
 use indexmap::IndexMap;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
+use sha2::digest::InvalidBufferSize;
+use core::hash;
 use std::{
-    collections::{HashMap, HashSet},
-    io::{Error, ErrorKind},
-    sync::atomic::Ordering,
-    time::{Duration, Instant},
+    collections::{HashMap, HashSet}, io::{BufWriter, Error, ErrorKind, Write}, ops::Deref, sync::atomic::Ordering, time::{Duration, Instant}
 };
 use tokio::{
     join,
@@ -21,7 +22,7 @@ use crate::{
         leader_rotation::get_current_leader,
         log::{Log, LogEntry},
         timer::ResettableTimer,
-    }, crypto::{cmp_hash, hash, DIGEST_LENGTH}, execution::Engine, proto::{
+    }, crypto::{cmp_hash, hash, KeyStore, DIGEST_LENGTH}, execution::Engine, proto::{
         checkpoint::{ProtoBackFillRequest, ProtoBackFillResponse}, client::{
             ProtoClientReply, ProtoClientRequest, ProtoCurrentLeader, ProtoTentativeReceipt, ProtoTransactionReceipt, ProtoTryAgain
         }, consensus::{
@@ -601,59 +602,36 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
             for (j, fork_validation) in f.blocks[i as usize].fork_validation.iter().enumerate() {
                 // Is this a valid fork?
                 // Check the signature on the fork.
-                let mut buf_last = Vec::new();
-                let vc = &fork_validation.view_change_message;
-                if vc.is_none() {
-                    continue;
-                }
-                let vc = vc.as_ref().unwrap();
-                if vc.fork.is_some() && vc.fork.as_ref().unwrap().blocks.len() > 0 {
-                    let block = vc.fork.as_ref().unwrap().blocks.len();
-                    let block = &vc.fork.as_ref().unwrap().blocks[block-1];
-                    if let Err(e) = block.encode(&mut buf_last) {
-                        error!("{}", e);
-                        continue;
-                    }
-
-                    let last_view = block.view;
-                    let last_n = block.n;
-                    let fork_stat = ForkStat {
-                        last_view,
-                        last_n,
-                        last_qc: 0,         // Doesn't matter here
-                        last_signed_block: 0,   // Doesn't matter here.
-                        name: String::from("")  // Doesn't matter here.
-                    };
-
-                    for b in &vc.fork.as_ref().unwrap().blocks {
-                        if b.qc.len() > 0 {
-                            for qc in &b.qc {
-                                if qc.n > max_qc_seen {
-                                    max_qc_seen = b.qc[0].n;
-                                    subrule1_eligible_forks.clear();
-                                    subrule1_eligible_forks.insert(j, fork_stat.clone());
-                                }else if qc.n == max_qc_seen {
-                                    subrule1_eligible_forks.insert(j, fork_stat.clone());
-                                }
-                            }
-                        }
-                    }
-                }
-                // This is the last_hash() logic.
-                let hash_last = hash(&buf_last);
-                let sig = match vc.fork_sig.as_slice().try_into() {
-                    Ok(s) => s,
-                    Err(e) => {
-                        warn!("Invalid fork signature: {}", e);
-                        continue;
-                    }
+                let last_qc = match &fork_validation.fork_last_qc {
+                    Some(qc) => qc.n,
+                    None => 0
                 };
-                if !ctx.keys.verify(&fork_validation.name, &sig, &hash_last) {
-                    warn!("Invalid fork signature from {}", fork_validation.name);
+                let chk = verify_view_change_msg_raw(
+                    &fork_validation.fork_hash,
+                    fork_validation.view,
+                    fork_validation.fork_len, last_qc,
+                    &fork_validation.fork_sig, &ctx.keys,
+                    &fork_validation.name
+                );
+                if !chk {
                     continue;
                 }
-
                 valid_forks += 1;
+                let fork_stat = ForkStat {
+                    last_view: fork_validation.view,
+                    last_n: fork_validation.fork_len,
+                    last_qc,
+                    name: fork_validation.name.clone(),
+                };
+
+                if last_qc > max_qc_seen {
+                    max_qc_seen = last_qc;
+                    subrule1_eligible_forks.clear();
+                    subrule1_eligible_forks.insert(j, fork_stat);
+                }else if last_qc == max_qc_seen {
+                    subrule1_eligible_forks.insert(j, fork_stat);
+                }
+            
             }
 
             if valid_forks < super_majority {
@@ -718,7 +696,20 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
     Ok((ProtoFork { blocks: overwrite_blocks.to_vec() }, ProtoFork { blocks: view_lock_blocks.to_vec() }))
 }
 
-pub async fn maybe_backfill_fork<'a>(ctx: &PinnedServerContext, client: &PinnedClient, f: &ProtoFork, fork: &MutexGuard<'a, Log>, sender: &String) -> ProtoFork {
+pub async fn maybe_backfill_fork_till_last_match<'a>(ctx: &PinnedServerContext, client: &PinnedClient, f: &ProtoFork, fork: &MutexGuard<'a, Log>, sender: &String) -> ProtoFork {
+    let start = fork.last() + 1;
+    let end = f.blocks[0].n - 1;
+    if start > end {
+        return f.clone();
+    }
+
+    maybe_backfill_fork(ctx, client, f, fork, sender, start, end).await
+
+    
+}
+
+
+pub async fn maybe_backfill_fork<'a>(ctx: &PinnedServerContext, client: &PinnedClient, f: &ProtoFork, fork: &MutexGuard<'a, Log>, sender: &String, block_start: u64, block_end: u64) -> ProtoFork {
     // Currently, just backfill if the current log is lagging behind.
     if f.blocks.len() == 0 {
         return f.clone();
@@ -730,8 +721,8 @@ pub async fn maybe_backfill_fork<'a>(ctx: &PinnedServerContext, client: &PinnedC
 
     
     let backfill_req = ProtoBackFillRequest {
-        block_start: fork.last() + 1,
-        block_end: f.blocks[0].n - 1
+        block_start,
+        block_end
     };
     info!("Backfilling fork from {} {:?}", sender, backfill_req);
 
@@ -848,7 +839,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
         if !ae.view_is_stable {
             info!("Got New leader message for view {}!", ae.view);
         }
-        let f = maybe_backfill_fork(&ctx, &client, f, &fork, sender).await;
+        let f = maybe_backfill_fork_till_last_match(&ctx, &client, f, &fork, sender).await;
         let res = maybe_verify_view_change_sequence(&ctx, &f, super_majority).await;
         
         if let Err(e) = res {
@@ -955,6 +946,44 @@ pub async fn do_reply_vote(
     Ok(())
 }
 
+pub async fn maybe_backfill_fork_till_prefix_match(ctx: PinnedServerContext, client: PinnedClient, vc: &ProtoViewChange, sender: &String) -> Option<ProtoViewChange> {
+    let fork = ctx.state.fork.lock().await;
+    let mut vc_fork = vc.fork.clone().unwrap();
+    vc_fork = maybe_backfill_fork_till_last_match(&ctx, &client, &vc_fork, &fork, sender).await;
+    
+    while vc_fork.blocks[0].n > 0 {
+        let my_parent_hash = match fork.hash_at_n(vc_fork.blocks[0].n - 1) {
+            Some(h) => h,
+            None => {
+                return None; // This is clearly an error!
+            }
+        };
+    
+        if cmp_hash(&vc_fork.blocks[0].parent, &my_parent_hash) {
+            break;
+        }
+
+        let start = if vc_fork.blocks[0].n >= 10 {
+            vc_fork.blocks[0].n - 10
+        }else {
+            0
+        };
+
+    
+        vc_fork = maybe_backfill_fork(&ctx, &client, &vc_fork, &fork, sender,
+            start,   // Fetch 10 blocks at a time. A better approach is to bin search first.
+            vc_fork.blocks[0].n - 1).await;
+    }
+
+    Some(ProtoViewChange {
+        fork: Some(vc_fork),
+        view: vc.view,
+        fork_sig: vc.fork_sig.clone(),
+        fork_len: vc.fork_len,
+        fork_last_qc: vc.fork_last_qc.clone(),
+    })
+}
+
 pub async fn do_process_view_change<Engine>(
     ctx: PinnedServerContext, engine: &Engine,
     client: PinnedClient,
@@ -983,28 +1012,25 @@ pub async fn do_process_view_change<Engine>(
     }
 
     // Check the signature on the fork.
-    let mut buf_last = Vec::new();
-    if vc.fork.is_some() && vc.fork.as_ref().unwrap().blocks.len() > 0 {
-        let block = vc.fork.as_ref().unwrap().blocks.len();
-        let block = &vc.fork.as_ref().unwrap().blocks[block-1];
-        if let Err(e) = block.encode(&mut buf_last) {
-            error!("{}", e);
-            return;
-        }
-    }
-    // This is the last_hash() logic.
-    let hash_last = hash(&buf_last);
-    let sig = match vc.fork_sig.as_slice().try_into() {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("Invalid fork signature: {}", e);
-            return;
-        }
-    };
-    if !ctx.keys.verify(sender, &sig, &hash_last) {
-        warn!("Invalid fork signature from {}", sender);
+    if !verify_view_change_msg(vc, &ctx.keys, sender) {
         return;
-    }
+    } 
+
+    // Check if fork's first block points to a block I already have.
+    let vc = if vc.fork_len > 0 {
+        if vc.fork.is_none() || vc.fork.as_ref().unwrap().blocks.len() == 0 {
+            return;
+        }
+        match maybe_backfill_fork_till_prefix_match(ctx.clone(), client.clone(), vc, sender).await {
+            Some(vc) => vc,
+            None => {
+                return;
+            }
+        }
+    } else {
+        vc.clone()
+    };
+
 
     let mut fork_buf = ctx.state.fork_buffer.lock().await;
     if !fork_buf.contains_key(&vc.view) {
@@ -1106,9 +1132,12 @@ pub async fn do_init_new_leader<Engine>(
         fork.unwrap()
     };
     
-    if chosen_fork_stat.name != ctx.config.net_config.name {
-        chosen_fork = maybe_backfill_fork(&ctx, &client, &chosen_fork, &fork, &chosen_fork_stat.name).await;
-    }
+    // The fork is already backfilled till my fork.last().
+    // This happened in the do_process_view_change function.
+    
+    // if chosen_fork_stat.name != ctx.config.net_config.name {
+    //     chosen_fork = maybe_backfill_fork(&ctx, &client, &chosen_fork, &fork, &chosen_fork_stat.name).await;
+    // }
     
     let (last_n, last_hash) = if chosen_fork_stat.name != ctx.config.net_config.name {
         if chosen_fork.blocks.len() == 0 {
@@ -1159,6 +1188,7 @@ pub async fn do_init_new_leader<Engine>(
 
     info!("Fork Overwritten, new last_n = {}, last_hash = {}", last_n, last_hash.encode_hex::<String>());
     profile.register("Fork Overwrite done");
+    let mut chosen_fork_last_qc = None;
     // Broadcast fork and wait for responses.
     let mut block = ProtoBlock {
         tx: Vec::new(),
@@ -1168,18 +1198,33 @@ pub async fn do_init_new_leader<Engine>(
         qc: Vec::new(),
         fork_validation: fork_set
             .iter()
-            .map(|(k, v)| ProtoForkValidation {
-                view_change_message: Some(v.clone()),
-                name: k.clone(),
-            })
-            .collect(),
+            .map(|(k, v)| {
+                let mut buf = Vec::new();
+                if v.fork.is_some() && v.fork.as_ref().unwrap().blocks.len() > 0 {
+                    let block = v.fork.as_ref().unwrap().blocks.len();
+                    let block = &v.fork.as_ref().unwrap().blocks[block-1];
+                    let _ = block.encode(&mut buf);
+                }
+                let __hash = hash(&buf);
+                if k.eq(&chosen_fork_stat.name) {
+                    chosen_fork_last_qc = v.fork_last_qc.clone();
+                }
+                ProtoForkValidation {
+                    name: k.clone(),
+                    view,
+                    fork_hash: __hash,
+                    fork_sig: v.fork_sig.clone(),
+                    fork_len: v.fork_len,
+                    fork_last_qc: v.fork_last_qc.clone(),
+                }
+            }).collect(),
         view_is_stable: false,
         sig: Some(crate::proto::consensus::proto_block::Sig::NoSig(
             DefferedSignature {},
         )),
     };
-    if chosen_fork_stat.last_qc > 0 {
-        block.qc = chosen_fork.blocks[chosen_fork_stat.last_signed_block as usize].qc.clone();
+    if chosen_fork_stat.last_qc > 0 && chosen_fork_last_qc.is_some() {
+        block.qc = vec![chosen_fork_last_qc.unwrap()];
     }
     profile.register("Block creation done!");
     info!("Block created");
@@ -1258,7 +1303,7 @@ struct ForkStat {
     last_view: u64,
     last_n: u64,
     last_qc: u64,
-    last_signed_block: u64,
+    // last_signed_block: u64,
     name: String
 }
 
@@ -1268,8 +1313,8 @@ fn fork_choice_rule_get(
 ) -> (ProtoFork, ForkStat) {
 
     let mut chk_stats = HashMap::<String, ForkStat>::new();
-    for (name, fork) in fork_set {
-        let fork = fork.fork.as_ref().unwrap();
+    for (name, vc) in fork_set {
+        let fork = vc.fork.as_ref().unwrap();
         let fork_len = fork.blocks.len();
         if fork_len == 0 {
             chk_stats.insert(
@@ -1278,36 +1323,26 @@ fn fork_choice_rule_get(
                     last_n: 0,
                     last_qc: 0,
                     last_view: 0,
-                    last_signed_block: 0,
+                    // last_signed_block: 0,
                     name: name.clone()
                 },
             );
             continue;
         }
-        let last_view = fork.blocks[fork_len - 1].view;
-        let last_n = fork.blocks[fork_len - 1].n;
+        let last_view = vc.view;
+        let last_n = vc.fork_len;
 
-        let mut last_qc = 0;
-        let mut last_signed_block = 0;
-        let mut i = (fork_len - 1) as i64;
-        while i >= 0 {
-            for qc in &fork.blocks[i as usize].qc {
-                if qc.n > last_qc {
-                    last_qc = qc.n;
-                    last_signed_block = i as u64;
-                }
-            }
-
-            i -= 1;
-        }
-
+        let last_qc = match &vc.fork_last_qc {
+            Some(qc) => qc.n,
+            None => 0,
+        };
         chk_stats.insert(
             name.clone(),
             ForkStat {
                 last_n,
                 last_qc,
                 last_view,
-                last_signed_block,
+                // last_signed_block,
                 name: name.clone()
             },
         );
@@ -1503,6 +1538,63 @@ async fn do_reply_all_with_tentative_receipt(ctx: &PinnedServerContext) {
     lack_pend.clear();
 }
 
+fn sign_view_change_msg(vc: &mut ProtoViewChange, keys: &KeyStore, fork: &MutexGuard<Log>) {
+    // Precondition: A correctly generated vc message will have fork.last() in its fork.
+    //              OR have fork_len == 0
+    let mut buf = BufWriter::new(vec![0u8; 32 + 8 + 8 + 8]);
+    // 32 for hash, 8 for view, 8 for last_n, 8 for last_qc
+    buf.write(&fork.last_hash());
+    buf.write_u64::<BigEndian>(vc.view);
+    buf.write_u64::<BigEndian>(vc.fork_len);
+    buf.write_u64::<BigEndian>(match &vc.fork_last_qc {
+        Some(qc) => qc.n,
+        None => 0,
+    });
+
+    let buf = buf.into_inner().unwrap();
+    let sig = keys.sign(&buf);
+
+    vc.fork_sig = sig.to_vec();
+}
+
+fn verify_view_change_msg_raw(last_hash: &Vec<u8>, view: u64, fork_len: u64, last_qc: u64, sig: &Vec<u8>, keys: &KeyStore, sender: &String) -> bool {
+    if sig.len() != SIGNATURE_LENGTH {
+        return false;
+    }
+    
+    let mut buf = BufWriter::new(vec![0u8; 32 + 8 + 8 + 8]);
+    // 32 for hash, 8 for view, 8 for last_n, 8 for last_qc
+    buf.write(last_hash);
+    buf.write_u64::<BigEndian>(view);
+    buf.write_u64::<BigEndian>(fork_len);
+    buf.write_u64::<BigEndian>(last_qc);
+
+    let buf = buf.into_inner().unwrap();
+    keys.verify(sender, &sig.clone().try_into().unwrap(), &buf)
+}
+
+fn verify_view_change_msg(vc: &ProtoViewChange, keys: &KeyStore, sender: &String) -> bool {
+    if vc.fork_len > 0 && 
+    (vc.fork.is_none() || vc.fork.as_ref().unwrap().blocks.len() == 0) {
+        return false;
+    }
+    let mut enc_buf = Vec::new();
+    if vc.fork.is_some() && vc.fork.as_ref().unwrap().blocks.len() > 0 {
+        if let Err(e) = vc.fork.as_ref().unwrap().blocks[vc.fork.as_ref().unwrap().blocks.len() - 1].encode(&mut enc_buf) {
+            warn!("{}", e);
+            return false;
+        }
+    }
+    let hash_last = hash(&enc_buf);
+
+    let last_qc = match &vc.fork_last_qc {
+        Some(qc) => qc.n,
+        None => 0,
+    };
+
+    verify_view_change_msg_raw(&hash_last, vc.view, vc.fork_len, last_qc, &vc.fork_sig, keys, sender)
+}
+
 async fn do_init_view_change<Engine>(
     ctx: &PinnedServerContext, engine: &Engine,
     client: &PinnedClient,
@@ -1532,15 +1624,27 @@ where Engine: crate::execution::Engine
     // Send everything from bci onwards.
     // This is equivalent to sending the sending all preprepare and prepare messages in PBFT
     let fork = ctx.state.fork.lock().await;
-    let bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
-    info!("Sending everything from {} to {}", bci, fork.last());
-    let fork_from_bci = fork.serialize_from_n(bci);
+    let ci = ctx.state.commit_index.load(Ordering::SeqCst);
+    info!("Sending everything from {} to {}", ci, fork.last());
+    let fork_from_ci = fork.serialize_from_n(ci);
+    // These are all the unconfirmed blocks that the next leader may or may not have.
+    // So we must send them otherwise there is a data loss.
+    // It doesn't violate any guarantees, but clients will have to repropose.
+    
 
-    let vc_msg = ProtoViewChange {
+    let mut vc_msg = ProtoViewChange {
         view,
-        fork: Some(fork_from_bci),
-        fork_sig: fork.last_signature(&ctx.keys).to_vec(),
+        fork: Some(fork_from_ci),
+        fork_sig: vec![0u8; SIGNATURE_LENGTH],
+        fork_len: fork.last(),
+        fork_last_qc: match fork.get_last_qc() {
+            Ok(qc) => Some(qc),
+            Err(_) => None,
+        },
     };
+
+    sign_view_change_msg(&mut vc_msg, &ctx.keys, &fork);
+
 
     if leader == ctx.config.net_config.name {
         // I won't send the message to myself.

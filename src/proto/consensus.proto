@@ -21,12 +21,18 @@ message DefferedSignature { }
 message ProtoViewChange {
     uint64 view = 1;
     ProtoFork fork = 2;
-    bytes fork_sig = 3;
+    bytes fork_sig = 3; // Signature over <H(fork.last()), view, fork_len, fork_last_qc>
+    uint64 fork_len = 4;
+    ProtoQuorumCertificate fork_last_qc = 5;
 }
 
 message ProtoForkValidation {
-    ProtoViewChange view_change_message = 1;
-    string name = 2;
+    uint64 view = 1;
+    bytes fork_hash = 2;
+    bytes fork_sig = 3; // Signature over <fork_hash, view, fork_len, fork_last_qc>
+    uint64 fork_len = 4;
+    ProtoQuorumCertificate fork_last_qc = 5;
+    string name = 6;
 }
 
 

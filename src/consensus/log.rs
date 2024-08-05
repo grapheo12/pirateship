@@ -4,7 +4,7 @@ use std::{
 };
 
 use ed25519_dalek::SIGNATURE_LENGTH;
-use log::{info, warn};
+use log::{error, info, warn};
 use prost::Message;
 
 use crate::crypto::{cmp_hash, hash, KeyStore};
@@ -51,6 +51,8 @@ pub struct Log {
 
     /// Highest QC.n seen so far
     last_qc: u64,
+    /// The block that contains the qc for `last_qc`.
+    last_block_with_qc: u64,
     /// View of the qc with qc.n == last_qc.
     /// This is strictly not neccessary to track,
     /// but helps in quickly checking the 2-chain rule.
@@ -62,7 +64,8 @@ impl Log {
         Log {
             entries: Vec::new(),
             last_qc: 0,
-            last_qc_view: 0
+            last_block_with_qc: 0,
+            last_qc_view: 0,
         }
     }
 
@@ -80,7 +83,12 @@ impl Log {
         self.last_qc_view
     }
 
+    pub fn last_block_with_qc(&self) -> u64 {
+        self.last_block_with_qc
+    }
+
     /// Returns last() on success.
+    /// Never overwrites, so always follows ViewLock and GlobalLock.
     pub fn push(&mut self, entry: LogEntry) -> Result<u64, Error> {
         if entry.block.n != self.last() + 1 {
             return Err(Error::new(
@@ -96,6 +104,7 @@ impl Log {
                 self.last_qc = qc.n;
                 self.last_qc_view = qc.view;
             }
+            self.last_block_with_qc = entry.block.n;
         }
         self.entries.push(entry);
         Ok(self.last())
@@ -499,5 +508,18 @@ impl Log {
         }
 
 
+    }
+
+    pub fn get_last_qc(&self) -> Result<ProtoQuorumCertificate, Error> {
+        let block = &self.get(self.last_block_with_qc())?.block;
+
+        for qc in &block.qc {
+            if qc.n == self.last_qc() {
+                return Ok(qc.clone());
+            }
+        }
+
+        error!("Invariant violation: QC not found");
+        Err(Error::new(ErrorKind::InvalidData, "QC not found"))
     }
 }
