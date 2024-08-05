@@ -29,3 +29,12 @@ message ProtoTransaction {
     ProtoTransactionPhase on_crash_commit = 2;
     ProtoTransactionPhase on_byzantine_commit = 3;
 }
+
+message ProtoTransactionOpResult {
+    bool success = 1;
+    repeated bytes values = 2;
+}
+
+message ProtoTransactionResult {
+    repeated ProtoTransactionOpResult result = 1;
+}

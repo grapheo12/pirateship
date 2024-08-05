@@ -15,24 +15,21 @@ use tokio::{
 };
 
 use crate::{
-    proto::{
-        checkpoint::{ProtoBackFillRequest, ProtoBackFillResponse}, client::{
-            ProtoClientReply, ProtoClientRequest, ProtoCurrentLeader, ProtoTentativeReceipt, ProtoTransactionReceipt, ProtoTryAgain
-        }, consensus::{
-            proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork,
-            ProtoForkValidation, ProtoQuorumCertificate, ProtoSignatureArrayEntry,
-            ProtoViewChange, ProtoVote,
-        },
-        rpc::{self, ProtoPayload},
-        execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}
-    },
     consensus::{
         self,
         handler::{ForwardedMessage, ForwardedMessageWithAckChan, PinnedServerContext},
         leader_rotation::get_current_leader,
         log::{Log, LogEntry},
         timer::ResettableTimer,
-    }, crypto::{cmp_hash, hash, DIGEST_LENGTH}, rpc::{
+    }, crypto::{cmp_hash, hash, DIGEST_LENGTH}, execution::Engine, proto::{
+        checkpoint::{ProtoBackFillRequest, ProtoBackFillResponse}, client::{
+            ProtoClientReply, ProtoClientRequest, ProtoCurrentLeader, ProtoTentativeReceipt, ProtoTransactionReceipt, ProtoTryAgain
+        }, consensus::{
+            proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork,
+            ProtoForkValidation, ProtoQuorumCertificate, ProtoSignatureArrayEntry,
+            ProtoViewChange, ProtoVote,
+        }, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase, ProtoTransactionResult}, rpc::{self, ProtoPayload}
+    }, rpc::{
         client::PinnedClient,
         server::{LatencyProfile, MsgAckChan},
         PinnedMessage,
@@ -85,7 +82,6 @@ pub async fn create_vote_for_blocks(
 ) -> Result<ProtoVote, Error> {
     // let mut fork = ctx.state.fork.lock().await;
     let fork = ctx.state.fork.try_lock();
-    let view = ctx.state.view.load(Ordering::SeqCst);
     let mut fork = if let Err(e) = fork {
         debug!("create_vote_for_blocks: Fork is locked, waiting for it to be unlocked: {}", e);
         let fork = ctx.state.fork.lock().await;
@@ -95,6 +91,7 @@ pub async fn create_vote_for_blocks(
         debug!("create_vote_for_blocks: Fork locked");
         fork.unwrap()
     };
+    let view = ctx.state.view.load(Ordering::SeqCst);
     let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
 
     let mut vote_sigs = Vec::new();
@@ -154,12 +151,13 @@ pub async fn create_vote_for_blocks(
     })
 }
 
-pub fn do_commit(
-    ctx: &PinnedServerContext,
+pub fn do_commit<Engine>(
+    ctx: &PinnedServerContext, engine: &Engine,
     fork: &MutexGuard<Log>,
     lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>,
     n: u64,
-) {
+) where Engine: crate::execution::Engine 
+{
     let ci = ctx.state.commit_index.load(Ordering::SeqCst);
     if fork.last() < n {
         error!("Invariant violation: Committing a block that doesn't exist! new ci {}, fork.last() {}", n, fork.last());
@@ -170,6 +168,7 @@ pub fn do_commit(
     }
 
     ctx.state.commit_index.store(n, Ordering::SeqCst);
+    engine.signal_crash_commit(n);
     let mut del_list = Vec::new();
     for i in (ci + 1)..(n + 1) {
         let num_txs = match fork.get(i) {
@@ -210,6 +209,7 @@ pub fn do_commit(
                                 req_digest: h,
                                 block_n: (*bn) as u64,
                                 tx_n: (*txn) as u64,
+                                results: Some(ProtoTransactionResult::default()),
                             },
                     )),
                 }
@@ -292,7 +292,9 @@ fn __display_protofork(f: &ProtoFork) -> String {
 
 }
 /// Rollback such that the commit index is at max (n - 1)
-pub fn maybe_rollback(ctx: &PinnedServerContext, overwriting_fork: &ProtoFork, fork: &MutexGuard<Log>) {
+pub fn maybe_rollback<Engine>(ctx: &PinnedServerContext, engine: &Engine, overwriting_fork: &ProtoFork, fork: &MutexGuard<Log>)
+where Engine: crate::execution::Engine
+{
     if overwriting_fork.blocks.len() == 0 {
         return;
     }
@@ -311,6 +313,7 @@ pub fn maybe_rollback(ctx: &PinnedServerContext, overwriting_fork: &ProtoFork, f
     // info!("\nRollbacked fork: {}\nOverwriting fork: {}", __display_protofork(&rollbacked_fork), __display_protofork(&overwriting_fork));
 
     ctx.state.commit_index.store(n - 1, Ordering::SeqCst);
+    engine.signal_rollback(n - 1);
     warn!("Commit index rolled back from {} to {}", ci, n - 1);
 
     let bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
@@ -355,13 +358,15 @@ pub fn do_create_qcs(
     }
 }
 
-pub async fn do_process_vote(
-    ctx: PinnedServerContext,
+pub async fn do_process_vote<Engine>(
+    ctx: PinnedServerContext, engine: &Engine,
     vote: &ProtoVote,
     sender: &String,
     majority: u64,
     super_majority: u64,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where Engine: crate::execution::Engine
+{
     // let mut fork = ctx.state.fork.lock().await;
     let fork = ctx.state.fork.try_lock();
     let mut fork = if let Err(e) = fork {
@@ -375,7 +380,7 @@ pub async fn do_process_vote(
     };
 
     if vote.view < ctx.state.view.load(Ordering::SeqCst) {
-        trace!("Vote for older view! Rejected");
+        warn!("Vote for older view! Rejected");
         return Ok(());
     }
     if vote.n > fork.last() {
@@ -405,6 +410,9 @@ pub async fn do_process_vote(
         // Try to increase the signature after verifying against my own fork.
         match fork.inc_qc_sig(sender, &vote_sig.sig, vote_sig.n, &ctx.keys) {
             Ok(total_sigs) => {
+                if !ctx.view_is_stable.load(Ordering::SeqCst) {
+                    info!("Vote count: {}", total_sigs);
+                }
                 if total_sigs >= super_majority {
                     qcs.push(vote_sig.n);
                     debug!("Creating QC for {}", vote_sig.n);
@@ -493,7 +501,7 @@ pub async fn do_process_vote(
     {
         let mut lack_pend = ctx.client_ack_pending.lock().await;
 
-        do_commit(&ctx, &mut fork, &mut lack_pend, updated_ci);
+        do_commit(&ctx, engine, &mut fork, &mut lack_pend, updated_ci);
     }
 
     Ok(())
@@ -501,7 +509,13 @@ pub async fn do_process_vote(
 
 /// Only returns false if there is an invariant violation.
 /// There was no 2-chain QC found.
-fn maybe_byzantine_commit_with_n_and_view(ctx: &PinnedServerContext, fork: &MutexGuard<Log>, n: u64, view: u64, lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>) -> bool {
+fn maybe_byzantine_commit_with_n_and_view<Engine>(
+    ctx: &PinnedServerContext, engine: &Engine,
+    fork: &MutexGuard<Log>, n: u64, view: u64,
+    lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>
+) -> bool 
+where Engine: crate::execution::Engine
+{
     // 2-chain commit rule.
 
     // The first block of a view gets a QC immediately.
@@ -537,14 +551,19 @@ fn maybe_byzantine_commit_with_n_and_view(ctx: &PinnedServerContext, fork: &Mute
             error!("Invariant violation: Byzantine commit index {} higher than fork.last() = {}", updated_bci, fork.last());
         }
         ctx.state.byz_commit_index.store(updated_bci, Ordering::SeqCst);
+        engine.signal_byzantine_commit(updated_bci);
 
-        do_commit(ctx, fork, lack_pend, updated_bci);
+        do_commit(ctx, engine, fork, lack_pend, updated_bci);
     }
 
     true
 }
 
-pub fn maybe_byzantine_commit(ctx: &PinnedServerContext, fork: &MutexGuard<Log>, lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>) {
+pub fn maybe_byzantine_commit<Engine>(
+    ctx: &PinnedServerContext, engine: &Engine, fork: &MutexGuard<Log>,
+    lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>)
+where Engine: crate::execution::Engine
+{
     // Check all QCs formed during this view.
     // Since the last_qc need not have link to another qc,
     // due pipelined proposals.
@@ -552,7 +571,7 @@ pub fn maybe_byzantine_commit(ctx: &PinnedServerContext, fork: &MutexGuard<Log>,
     let last_qc_view = fork.last_qc_view();
     let mut check_qc = fork.last_qc();
 
-    while !maybe_byzantine_commit_with_n_and_view(ctx, fork, check_qc, last_qc_view, lack_pend) {
+    while !maybe_byzantine_commit_with_n_and_view(ctx, engine, fork, check_qc, last_qc_view, lack_pend) {
         if check_qc == 0 {
             break;
         }
@@ -768,8 +787,8 @@ pub async fn maybe_backfill_fork<'a>(ctx: &PinnedServerContext, client: &PinnedC
 }
 
 
-pub async fn do_push_append_entries_to_fork(
-    ctx: PinnedServerContext,
+pub async fn do_push_append_entries_to_fork<Engine>(
+    ctx: PinnedServerContext, engine: &Engine,
     client: PinnedClient,
     ae: &ProtoAppendEntries,
     sender: &String,
@@ -779,7 +798,8 @@ pub async fn do_push_append_entries_to_fork(
     u64,      /* updated_last_n */
     Vec<u64>, /* Sequence numbers */
     bool      /* Should update ci */
-) {
+) where Engine: crate::execution::Engine
+{
     // let mut fork = ctx.state.fork.lock().await;
     let fork = ctx.state.fork.try_lock();
     let mut fork = if let Err(e) = fork {
@@ -825,8 +845,12 @@ pub async fn do_push_append_entries_to_fork(
     }
 
     if let Some(f) = &ae.fork {
+        if !ae.view_is_stable {
+            info!("Got New leader message for view {}!", ae.view);
+        }
         let f = maybe_backfill_fork(&ctx, &client, f, &fork, sender).await;
         let res = maybe_verify_view_change_sequence(&ctx, &f, super_majority).await;
+        
         if let Err(e) = res {
             warn!("Verification error: {}", e);
             return (last_n, updated_last_n, seq_nums, false);
@@ -843,7 +867,7 @@ pub async fn do_push_append_entries_to_fork(
             let overwrite_blocks = fork.trim_matching_prefix(overwrite_blocks);
             if overwrite_blocks.blocks.len() > 0 {
                 trace!("Trimmed fork start: {}", overwrite_blocks.blocks[0].n);
-                maybe_rollback(&ctx, &overwrite_blocks, &fork);
+                maybe_rollback(&ctx, engine, &overwrite_blocks, &fork);
                 let overwrite_res = fork.overwrite(&overwrite_blocks);
                 match overwrite_res {
                     Ok(n) => {
@@ -896,7 +920,7 @@ pub async fn do_push_append_entries_to_fork(
         byz_qc_pending.retain(|&n| n > last_qc);
 
         // Also the byzantine commit index may move
-        maybe_byzantine_commit(&ctx, &fork, &mut ctx.client_ack_pending.lock().await);
+        maybe_byzantine_commit(&ctx, engine, &fork, &mut ctx.client_ack_pending.lock().await);
     }
 
     (last_n, updated_last_n, seq_nums, true)
@@ -931,13 +955,14 @@ pub async fn do_reply_vote(
     Ok(())
 }
 
-pub async fn do_process_view_change(
-    ctx: PinnedServerContext,
+pub async fn do_process_view_change<Engine>(
+    ctx: PinnedServerContext, engine: &Engine,
     client: PinnedClient,
     vc: &ProtoViewChange,
     sender: &String,
     super_majority: u64,
-) {
+) where Engine: crate::execution::Engine
+{
     if vc.view < ctx.state.view.load(Ordering::SeqCst)
         || (vc.view == ctx.state.view.load(Ordering::SeqCst)
             && ctx.view_is_stable.load(Ordering::SeqCst))
@@ -1003,7 +1028,7 @@ pub async fn do_process_view_change(
 
         drop(fork_buf);
 
-        do_init_new_leader(ctx, client, vc.view, fork_set, super_majority).await;
+        do_init_new_leader(ctx, engine, client, vc.view, fork_set, super_majority).await;
     }
 }
 
@@ -1034,13 +1059,14 @@ async fn force_noop(ctx: &PinnedServerContext) {
     
 }
 
-pub async fn do_init_new_leader(
-    ctx: PinnedServerContext,
+pub async fn do_init_new_leader<Engine>(
+    ctx: PinnedServerContext, engine: &Engine,
     client: PinnedClient,
     view: u64,
     fork_set: HashMap<String, ProtoViewChange>,
     super_majority: u64,
-) {
+) where Engine: crate::execution::Engine
+{
     if ctx.state.view.load(Ordering::SeqCst) > view
         || (ctx.state.view.load(Ordering::SeqCst) == view
             && ctx.view_is_stable.load(Ordering::SeqCst))
@@ -1071,12 +1097,12 @@ pub async fn do_init_new_leader(
     // Overwrite local fork with chosen fork
     let fork = ctx.state.fork.try_lock();
     let mut fork = if let Err(e) = fork {
-        debug!("do_init_new_leader: Fork is locked, waiting for it to be unlocked: {}", e);
+        info!("do_init_new_leader: Fork is locked, waiting for it to be unlocked: {}", e);
         let fork = ctx.state.fork.lock().await;
-        debug!("do_init_new_leader: Fork locked");
+        info!("do_init_new_leader: Fork locked");
         fork  
     }else{
-        debug!("do_init_new_leader: Fork locked");
+        info!("do_init_new_leader: Fork locked");
         fork.unwrap()
     };
     
@@ -1097,7 +1123,7 @@ pub async fn do_init_new_leader(
                 trace!("Trimmed fork start: {}", trimmed_fork.blocks[0].n);
         
                 let last_n = if trimmed_fork.blocks.len() > 0 {
-                    maybe_rollback(&ctx, &trimmed_fork, &fork);
+                    maybe_rollback(&ctx, engine, &trimmed_fork, &fork);
                     match fork.overwrite(&trimmed_fork){
                         Ok(n) => n,
                         Err(e) => {
@@ -1156,9 +1182,18 @@ pub async fn do_init_new_leader(
         block.qc = chosen_fork.blocks[chosen_fork_stat.last_signed_block as usize].qc.clone();
     }
     profile.register("Block creation done!");
+    info!("Block created");
     let entry = LogEntry::new(block);
-    fork.push_and_sign(entry, &ctx.keys)
-        .expect("Should be able to push fork");
+
+    info!("push and sign");
+    match fork.push_and_sign(entry, &ctx.keys) {
+        Ok(_) => {}
+        Err(e) => {
+            error!("Error pushing block: {}", e);
+            return;
+        }
+    }
+    info!("push and sign done");
     profile.register("Block push done");
 
     chosen_fork.blocks.push(fork.get(fork.last()).unwrap().block.clone());
@@ -1182,16 +1217,18 @@ pub async fn do_init_new_leader(
     let block_n = ae.fork.as_ref().unwrap().blocks[block_n - 1].n;
 
     drop(fork); // create_vote_for_blocks takes lock on fork
+    info!("fork dropped");
     let my_vote = create_vote_for_blocks(ctx.clone(), &vec![block_n])
         .await
         .unwrap();
-
+    info!("vote created");
     broadcast_append_entries(ctx.clone(), client.clone(), ae, &send_list, profile.clone())
     .await
     .unwrap();
+    info!("broadcast done");
     profile.register("Broadcast done");
     do_process_vote(
-        ctx.clone(),
+        ctx.clone(), engine,
         &my_vote,
         &ctx.config.net_config.name,
         super_majority, // Forcing to wait for 2f + 1
@@ -1200,7 +1237,7 @@ pub async fn do_init_new_leader(
     .await
     .unwrap();
     profile.register("Self processing done");
-
+    info!("self processing done");
 
     profile.should_print = true;
     profile.prefix = String::from("New leader message");
@@ -1208,7 +1245,9 @@ pub async fn do_init_new_leader(
     profile.force_print();
 
     // Force a dummy message to be sequenced.
+    info!("forcing noop");
     force_noop(&ctx).await;
+    info!("forcing noop done");
 
     // If I get AppendEntries or NewLeader from higher view during this time,
     // need to update view again and become a follower.
@@ -1362,20 +1401,22 @@ pub async fn do_process_backfill_request(ctx: PinnedServerContext, ack_tx: &mut 
 
 }
 
-pub async fn process_node_request(
-    ctx: &PinnedServerContext,
+pub async fn process_node_request<Engine>(
+    ctx: &PinnedServerContext, engine: &Engine,
     client: &PinnedClient,
     majority: u64,
     super_majority: u64,
     ms: &mut ForwardedMessageWithAckChan,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where Engine: crate::execution::Engine
+{
     let (msg, sender, ack_tx, profile) = ms;
     let _sender = sender.clone();
     match &msg {
         crate::proto::rpc::proto_payload::Message::AppendEntries(ae) => {
             profile.register("AE chan wait");
             let (last_n, updated_last_n, seq_nums, should_update_ci) =
-                do_push_append_entries_to_fork(ctx.clone(), client.clone(), ae, sender, super_majority).await;
+                do_push_append_entries_to_fork(ctx.clone(), engine, client.clone(), ae, sender, super_majority).await;
             profile.register("Fork push");
 
             if updated_last_n > last_n {
@@ -1409,17 +1450,17 @@ pub async fn process_node_request(
                 let mut lack_pend = ctx.client_ack_pending.lock().await;
                 // Followers should not have pending client requests.
                 // But this same interface is good for refactoring.
-                do_commit(ctx, &mut fork, &mut lack_pend, new_ci);
+                do_commit(ctx, engine, &mut fork, &mut lack_pend, new_ci);
             }
         }
         crate::proto::rpc::proto_payload::Message::Vote(v) => {
             profile.register("Vote chan wait");
-            let _ = do_process_vote(ctx.clone(), v, sender, majority, super_majority).await;
+            let _ = do_process_vote(ctx.clone(), engine, v, sender, majority, super_majority).await;
             profile.register("Vote process");
         }
         crate::proto::rpc::proto_payload::Message::ViewChange(vc) => {
             profile.register("View Change chan wait");
-            let _ = do_process_view_change(ctx.clone(), client.clone(), vc, sender, super_majority)
+            let _ = do_process_view_change(ctx.clone(), engine, client.clone(), vc, sender, super_majority)
                 .await;
             profile.register("View change process");
         },
@@ -1462,11 +1503,13 @@ async fn do_reply_all_with_tentative_receipt(ctx: &PinnedServerContext) {
     lack_pend.clear();
 }
 
-async fn do_init_view_change(
-    ctx: &PinnedServerContext,
+async fn do_init_view_change<Engine>(
+    ctx: &PinnedServerContext, engine: &Engine,
     client: &PinnedClient,
     super_majority: u64,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where Engine: crate::execution::Engine
+{
     // Stop accepting new client requests, immediately.
     ctx.view_is_stable.store(false, Ordering::SeqCst);
     ctx.i_am_leader.store(false, Ordering::SeqCst);
@@ -1504,7 +1547,7 @@ async fn do_init_view_change(
         // @todo: Pacemaker: broadcast this
         drop(fork);
         do_process_view_change(
-            ctx.clone(),
+            ctx.clone(), engine,
             client.clone(),
             &vc_msg,
             &ctx.config.net_config.name,
@@ -1538,39 +1581,13 @@ async fn do_init_view_change(
     Ok(())
 }
 
-pub async fn report_stats(ctx: &PinnedServerContext) -> Result<(), Error> {
-    loop {
-        sleep(Duration::from_secs(
-            ctx.config.consensus_config.stats_report_secs,
-        ))
-        .await;
-        {
-            let fork = ctx.state.fork.lock().await;
-            let lack_pend = ctx.client_ack_pending.lock().await;
-            let byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
-
-            info!("fork.last = {}, fork.last_qc = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, pending_qcs = {} num_txs = {}, fork.last_hash = {}, total_client_request = {}, view = {}, view_is_stable = {}, i_am_leader: {}",
-                fork.last(), fork.last_qc(),
-                ctx.state.commit_index.load(Ordering::SeqCst),
-                ctx.state.byz_commit_index.load(Ordering::SeqCst),
-                lack_pend.len(),
-                byz_qc_pending.len(),
-                ctx.state.num_committed_txs.load(Ordering::SeqCst),
-                fork.last_hash().encode_hex::<String>(),
-                ctx.total_client_requests.load(Ordering::SeqCst),
-                ctx.state.view.load(Ordering::SeqCst),
-                ctx.view_is_stable.load(Ordering::SeqCst),
-                ctx.i_am_leader.load(Ordering::SeqCst)
-            );
-        }
-    }
-}
-
-pub async fn create_and_push_block(
-    ctx: PinnedServerContext,
+pub async fn create_and_push_block<Engine>(
+    ctx: PinnedServerContext, engine: &Engine,
     reqs: &mut Vec<ForwardedMessageWithAckChan>,
     should_sign: bool,
-) -> Result<(ProtoAppendEntries, LatencyProfile), Error> {
+) -> Result<(ProtoAppendEntries, LatencyProfile), Error>
+where Engine: crate::execution::Engine
+{
     let fork = ctx.state.fork.try_lock();
     let mut fork = match fork {
         Ok(f) => {
@@ -1645,7 +1662,7 @@ pub async fn create_and_push_block(
             }
             profile.register("Block create");
 
-            maybe_byzantine_commit(&ctx, &fork, &mut ctx.client_ack_pending.lock().await);
+            maybe_byzantine_commit(&ctx, engine, &fork, &mut ctx.client_ack_pending.lock().await);
 
             trace!("QC link: {} --> {:?}", n, __qc_trace);
         }
@@ -1716,17 +1733,19 @@ pub fn do_add_block_to_byz_qc_pending(
     }
 }
 
-pub async fn do_append_entries(
-    ctx: PinnedServerContext,
+pub async fn do_append_entries<Engine>(
+    ctx: PinnedServerContext, engine: &Engine,
     client: PinnedClient,
     reqs: &mut Vec<ForwardedMessageWithAckChan>,
     should_sign: bool,
     send_list: &Vec<String>,
     majority: u64,
     super_majority: u64,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where Engine: crate::execution::Engine
+{
     // Create the block, holding a lock on the fork state.
-    let (ae, profile) = create_and_push_block(ctx.clone(), reqs, should_sign).await?;
+    let (ae, profile) = create_and_push_block(ctx.clone(), engine, reqs, should_sign).await?;
 
     // Add this block to byz_qc_pending, if it is a signed block
     if should_sign {
@@ -1739,7 +1758,7 @@ pub async fn do_append_entries(
     let block_n = ae.fork.as_ref().unwrap().blocks[block_n - 1].n;
     let my_vote = create_vote_for_blocks(ctx.clone(), &vec![block_n]).await?;
     do_process_vote(
-        ctx.clone(),
+        ctx.clone(), engine,
         &my_vote,
         &ctx.config.net_config.name,
         majority,
@@ -1794,10 +1813,14 @@ pub async fn do_respond_with_current_leader(
     bulk_reply_to_client(reqs, msg).await;
 }
 
-pub async fn handle_client_messages(
+pub async fn handle_client_messages<Engine>(
     ctx: PinnedServerContext,
     client: PinnedClient,
-) -> Result<(), Error> {
+    engine: Engine
+) -> Result<(), Error> 
+where 
+    Engine: crate::execution::Engine + Clone + Send + Sync + 'static
+{
     let mut client_rx = ctx.0.client_queue.1.lock().await;
     let mut curr_client_req = Vec::new();
     let mut curr_client_req_num = 0;
@@ -1859,6 +1882,9 @@ pub async fn handle_client_messages(
             signature_timer_tick = false;
             continue;
         }
+
+        // @todo: Reply to read requests (even when I am not the leader).
+
         
         // Ok I am the leader.
         pending_signatures += 1;
@@ -1867,7 +1893,7 @@ pub async fn handle_client_messages(
         // Or I actually got some transactions and I really need to sign
 
         match do_append_entries(
-            ctx.clone(), client.clone(),
+            ctx.clone(), &engine.clone(), client.clone(),
             &mut curr_client_req, should_sig,
             &send_list, majority, super_majority,
         ).await {
@@ -1896,10 +1922,13 @@ pub async fn handle_client_messages(
     Ok(())
 }
 
-pub async fn handle_node_messages(
+pub async fn handle_node_messages<Engine>(
     ctx: PinnedServerContext,
     client: PinnedClient,
-) -> Result<(), Error> {
+    engine: Engine
+) -> Result<(), Error>
+    where Engine: crate::execution::Engine + Clone + Send + Sync + 'static
+{
     let view_timer_handle = ctx.view_timer.run().await;
     let majority = get_majority_num(&ctx);
     let super_majority = get_super_majority_num(&ctx);
@@ -1914,6 +1943,7 @@ pub async fn handle_node_messages(
         vote_worker_chans.push(tx);
         let ctx = ctx.clone();
         let client = client.clone();
+        let engine = engine.clone();
         tokio::spawn(async move {
             loop {
                 let msg = rx.recv().await;
@@ -1922,7 +1952,7 @@ pub async fn handle_node_messages(
                 }
                 let mut msg = msg.unwrap();
                 let _ =
-                    process_node_request(&ctx, &client, majority, super_majority, &mut msg).await;
+                    process_node_request(&ctx, &engine, &client, majority, super_majority, &mut msg).await;
             }
         });
     }
@@ -1966,7 +1996,7 @@ pub async fn handle_node_messages(
             info!("Timer fired");
             intended_view += 1;
             if intended_view > ctx.state.view.load(Ordering::SeqCst) {
-                if let Err(e) = do_init_view_change(&ctx, &client, super_majority).await {
+                if let Err(e) = do_init_view_change(&ctx, &engine, &client, super_majority).await {
                     error!("Error initiating view change: {}", e);
                 }
             }
@@ -1984,7 +2014,7 @@ pub async fn handle_node_messages(
                 vote_worker_rr_cnt += 1;
                 if rr_cnt == 0 {
                     // Let this thread process it.
-                    if let Err(e) = process_node_request(&ctx, &client, majority, super_majority, &mut req).await {
+                    if let Err(e) = process_node_request(&ctx, &engine, &client, majority, super_majority, &mut req).await {
                         error!("Error processing vote: {}", e);
                     }
                 } else {
@@ -1992,7 +2022,7 @@ pub async fn handle_node_messages(
                     let _ = vote_worker_chans[(rr_cnt - 1) as usize].send(req);
                 }
             } else {
-                if let Err(e) = process_node_request(&ctx, &client, majority, super_majority, &mut req).await {
+                if let Err(e) = process_node_request(&ctx, &engine, &client, majority, super_majority, &mut req).await {
                     error!("Error processing node request: {}", e);
                 }
             }

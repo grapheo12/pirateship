@@ -1,5 +1,5 @@
 use log::{debug, info};
-use pft::{config::{self, Config}, consensus};
+use pft::{config::{self, Config}, consensus, execution::engines::logger::PinnedLoggerEngine};
 use tokio::runtime;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
 use std::io::Write;
@@ -33,7 +33,7 @@ fn process_args() -> Config {
 }
 
 async fn run_main(cfg: Config) -> io::Result<()> {
-    let node = Arc::new(consensus::ConsensusNode::new(&cfg));
+    let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
     let mut handles = consensus::ConsensusNode::run(node);
 
     while let Some(res) = handles.join_next().await {
