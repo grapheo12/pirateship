@@ -4,8 +4,6 @@ use hex::ToHex;
 use indexmap::IndexMap;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
-use sha2::digest::InvalidBufferSize;
-use core::hash;
 use std::{
     collections::{HashMap, HashSet}, io::{BufWriter, Error, ErrorKind, Write}, ops::Deref, sync::atomic::Ordering, time::{Duration, Instant}
 };
@@ -381,7 +379,7 @@ where Engine: crate::execution::Engine
     };
 
     if vote.view < ctx.state.view.load(Ordering::SeqCst) {
-        warn!("Vote for older view! Rejected");
+        trace!("Vote for older view! Rejected");
         return Ok(());
     }
     if vote.n > fork.last() {
@@ -411,9 +409,6 @@ where Engine: crate::execution::Engine
         // Try to increase the signature after verifying against my own fork.
         match fork.inc_qc_sig(sender, &vote_sig.sig, vote_sig.n, &ctx.keys) {
             Ok(total_sigs) => {
-                if !ctx.view_is_stable.load(Ordering::SeqCst) {
-                    info!("Vote count: {}", total_sigs);
-                }
                 if total_sigs >= super_majority {
                     qcs.push(vote_sig.n);
                     debug!("Creating QC for {}", vote_sig.n);
@@ -1065,12 +1060,7 @@ async fn force_noop(ctx: &PinnedServerContext) {
         tx: Some(ProtoTransaction {
             on_receive: None,
             on_crash_commit: None,
-            on_byzantine_commit: Some(ProtoTransactionPhase {
-                ops: vec![ProtoTransactionOp {
-                    op_type: crate::proto::execution::ProtoTransactionOpType::Noop.into(),
-                    operands: vec![format!("view_start_noop:{}", ctx.state.view.load(Ordering::SeqCst)).into_bytes()]
-                }],
-            }),
+            on_byzantine_commit: None,
         }),
         // sig: vec![0u8; SIGNATURE_LENGTH],
         sig: vec![0u8; 1],
@@ -1227,10 +1217,8 @@ pub async fn do_init_new_leader<Engine>(
         block.qc = vec![chosen_fork_last_qc.unwrap()];
     }
     profile.register("Block creation done!");
-    info!("Block created");
     let entry = LogEntry::new(block);
 
-    info!("push and sign");
     match fork.push_and_sign(entry, &ctx.keys) {
         Ok(_) => {}
         Err(e) => {
@@ -1238,7 +1226,6 @@ pub async fn do_init_new_leader<Engine>(
             return;
         }
     }
-    info!("push and sign done");
     profile.register("Block push done");
 
     chosen_fork.blocks.push(fork.get(fork.last()).unwrap().block.clone());
@@ -1262,15 +1249,15 @@ pub async fn do_init_new_leader<Engine>(
     let block_n = ae.fork.as_ref().unwrap().blocks[block_n - 1].n;
 
     drop(fork); // create_vote_for_blocks takes lock on fork
-    info!("fork dropped");
+
     let my_vote = create_vote_for_blocks(ctx.clone(), &vec![block_n])
         .await
         .unwrap();
-    info!("vote created");
+
     broadcast_append_entries(ctx.clone(), client.clone(), ae, &send_list, profile.clone())
     .await
     .unwrap();
-    info!("broadcast done");
+
     profile.register("Broadcast done");
     do_process_vote(
         ctx.clone(), engine,
@@ -1282,7 +1269,7 @@ pub async fn do_init_new_leader<Engine>(
     .await
     .unwrap();
     profile.register("Self processing done");
-    info!("self processing done");
+
 
     profile.should_print = true;
     profile.prefix = String::from("New leader message");
@@ -1290,9 +1277,7 @@ pub async fn do_init_new_leader<Engine>(
     profile.force_print();
 
     // Force a dummy message to be sequenced.
-    info!("forcing noop");
     force_noop(&ctx).await;
-    info!("forcing noop done");
 
     // If I get AppendEntries or NewLeader from higher view during this time,
     // need to update view again and become a follower.

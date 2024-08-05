@@ -1,4 +1,4 @@
-use std::{ops::Deref, pin::Pin, sync::{atomic::{AtomicBool, Ordering}, Arc}, time::Duration};
+use std::{ops::Deref, pin::Pin, sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc}, time::Duration};
 
 use hex::ToHex;
 use log::info;
@@ -9,7 +9,9 @@ use crate::{consensus::handler::PinnedServerContext, execution::Engine, proto::e
 pub struct LoggerEngine {
     pub ctx: PinnedServerContext,
     pub ci_chan: (UnboundedSender<u64>, Mutex<UnboundedReceiver<u64>>),
+    pub last_logged_ci: AtomicU64,
     pub bci_chan: (UnboundedSender<u64>, Mutex<UnboundedReceiver<u64>>),
+    pub last_logged_bci: AtomicU64,
     pub rback_chan: (UnboundedSender<u64>, Mutex<UnboundedReceiver<u64>>),
     pub quit_signal: AtomicBool,
 }
@@ -28,6 +30,8 @@ impl LoggerEngine {
             bci_chan: (bci_chan.0, Mutex::new(bci_chan.1)),
             rback_chan: (rback_chan.0, Mutex::new(rback_chan.1)),
             quit_signal: AtomicBool::new(false),
+            last_logged_ci: AtomicU64::new(0),
+            last_logged_bci: AtomicU64::new(0),
         }
     }
 }
@@ -59,11 +63,19 @@ impl Engine for PinnedLoggerEngine {
     }
 
     fn signal_crash_commit(&self, ci: u64) {
-        self.ci_chan.0.send(ci).unwrap();
+        let ci = (ci / 1000) * 1000;
+        if ci > self.last_logged_ci.load(Ordering::SeqCst) {
+            self.last_logged_ci.store(ci, Ordering::SeqCst);
+            self.ci_chan.0.send(ci).unwrap();
+        }
     }
 
     fn signal_byzantine_commit(&self, bci: u64) {
-        self.bci_chan.0.send(bci).unwrap();
+        let bci = (bci / 1000) * 1000;
+        if bci > self.last_logged_bci.load(Ordering::SeqCst) {
+            self.last_logged_bci.store(bci, Ordering::SeqCst);
+            self.bci_chan.0.send(bci).unwrap();
+        }
     }
 
     fn signal_rollback(&self, ci: u64) {
@@ -105,21 +117,15 @@ impl PinnedLoggerEngine {
 
 
         while let Ok(ci) = rback_chan.try_recv() {
-            if ci % 1000 == 0 {
-                info!("rolled back commit_index = {}, hash = {}", ci, fork.hash_at_n(ci).unwrap().encode_hex::<String>());
-            }
+            info!("rolled back commit_index = {}, hash = {}", ci, fork.hash_at_n(ci).unwrap().encode_hex::<String>());
         };
 
         while let Ok(ci) = ci_chan.try_recv() {
-            if ci % 1000 == 0 {
-                info!("commit_index = {}, hash = {}", ci, fork.hash_at_n(ci).unwrap().encode_hex::<String>());
-            }
+            info!("commit_index = {}, hash = {}", ci, fork.hash_at_n(ci).unwrap().encode_hex::<String>());
         };
 
         while let Ok(bci) = bci_chan.try_recv() {
-            if bci % 1000 == 0 {
-                info!("byz_commit_index = {}, hash = {}", bci, fork.hash_at_n(bci).unwrap().encode_hex::<String>());
-            }
+            info!("byz_commit_index = {}, hash = {}", bci, fork.hash_at_n(bci).unwrap().encode_hex::<String>());
         };
     }
 
