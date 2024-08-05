@@ -1,6 +1,6 @@
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::Arc;
 
-use handler::{consensus_rpc_handler, PinnedServerContext};
+use handler::{consensus_rpc_handler, PinnedServerContext, handle_client_messages, handle_node_messages};
 use tokio::task::JoinSet;
 
 use crate::{
@@ -15,9 +15,13 @@ use crate::{
 pub mod handler;
 pub mod leader_rotation;
 pub mod log;
-pub mod protocols;
 pub mod timer;
-
+pub mod view_change;
+pub mod backfill;
+pub mod commit;
+pub mod steady_state;
+pub mod utils;
+pub mod client_reply;
 /// Wrapper around rpc::{Server, Client} with this PinnedServerContext and consensus_rpc_handler
 /// One should use this to spawn a new node, instead of creating rpc::{Server, Client} separately.
 pub struct ConsensusNode<Engine>
@@ -65,10 +69,10 @@ where
             let _ = node2.engine.run().await;
         });
         js.spawn(async move {
-            let _ = protocols::handle_node_messages(node3.ctx.clone(), node3.client.clone(), node3.engine.clone()).await;
+            let _ = handle_node_messages(node3.ctx.clone(), node3.client.clone(), node3.engine.clone()).await;
         });
         js.spawn(async move {
-            let _ = protocols::handle_client_messages(node4.ctx.clone(), node4.client.clone(), node4.engine.clone()).await;
+            let _ = handle_client_messages(node4.ctx.clone(), node4.client.clone(), node4.engine.clone()).await;
         });
 
         js

@@ -1,8 +1,8 @@
-use std::{collections::HashMap, fs::File, io::{self, Cursor, Error}, path, sync::Arc, time::{Duration, Instant}};
+use std::{fs::File, io::{self, Cursor, Error}, path, sync::Arc, time::{Duration, Instant}};
 
 use crate::{config::Config, crypto::KeyStore, rpc::auth};
 use indexmap::IndexMap;
-use tokio::{io::{BufWriter, ReadHalf}, sync::{mpsc, oneshot}};
+use tokio::{io::{BufWriter, ReadHalf}, sync::{mpsc}};
 use log::{debug, info, trace, warn};
 use rustls::{
     crypto::aws_lc_rs,

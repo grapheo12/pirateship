@@ -1,6 +1,5 @@
 use std::{pin::Pin, sync::{atomic::AtomicBool, Arc}, time::Duration};
 
-use log::info;
 use tokio::{sync::{mpsc, Mutex}, task::JoinHandle, time::sleep};
 
 pub struct ResettableTimer {

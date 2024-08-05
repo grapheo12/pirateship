@@ -1,15 +1,14 @@
 use crate::{config::Config, crypto::KeyStore};
-use futures::future::join_all;
-use log::{debug, info, trace, warn};
+use log::{debug, trace, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use std::{
     collections::{HashMap, HashSet}, fs::File, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::{Arc, RwLock}
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter},
+    io::{AsyncReadExt, AsyncWriteExt, BufWriter},
     net::TcpStream,
     sync::{
-        mpsc::{self, Sender, UnboundedSender},
+        mpsc::{self, UnboundedSender},
         Mutex,
     },
 };
