@@ -14,11 +14,11 @@ from pprint import pprint
 # Log format follows the log4rs config.
 # Capture the time from the 3rd []
 
-# Sample log: fork.last = 610405, commit_index = 610397, byz_commit_index = 0, pending_acks = 8, num_txs = 662124, fork.last_hash = 8cf02230d5dfe0275b613b8b34493b90e723c80350eb71289e941b226a13a8a8
-node_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] fork\.last = ([0-9]+), commit_index = ([0-9]+), byz_commit_index = ([0-9]+), pending_acks = ([0-9]+), num_txs = ([0-9]+), fork.last_hash = (.+)")
+# Sample log: [INFO][pft::execution::engines::logger][2024-08-06T10:28:13.926997933+00:00] fork.last = 2172, fork.last_qc = 2169, commit_index = 2171, byz_commit_index = 2166, pending_acks = 200, pending_qcs = 1 num_txs = 388305, fork.last_hash = b7da989badce213929ab457e5301b587593e0781e081ba7261d57cd7778e1b7b, total_client_request = 388706, view = 1, view_is_stable = true, i_am_leader: true
+node_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] fork\.last = ([0-9]+), fork\.last_qc = ([0-9]+), commit_index = ([0-9]+), byz_commit_index = ([0-9]+), pending_acks = ([0-9]+), pending_qcs = ([0-9]+) num_txs = ([0-9]+), fork\.last_hash = (.+), total_client_request = ([0-9]+), view = ([0-9]+), view_is_stable = (.+), i_am_leader\: (.+)")
 
-# Sample log: Client Id: 48, Msg Id: 27000, Latency: 846 us
-client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Client Id\: ([0-9]+), Msg Id\: ([0-9]+), Latency\: ([.0-9]+) us")
+# Sample log: [INFO][client][2024-08-06T10:28:12.352816849+00:00] Client Id: 264, Msg Id: 224, Block num: 1000, Tx num: 145, Latency: 4073 us, Current Leader: node1
+client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Client Id\: ([0-9]+), Msg Id\: ([0-9]+), Block num\: ([0-9]+), Tx num\: ([0-9]+), Latency\: ([.0-9]+) us, Current Leader\: (.+)")
 
 
 def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched):
@@ -26,11 +26,17 @@ def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched):
         (
             isoparse(a[0]),    # ISO format is used in run_remote
             int(a[1]),         # fork.last
-            int(a[2]),         # commit_index
-            int(a[3]),         # byz_commit_index
-            int(a[4]),         # pending_acks
-            int(a[5]),         # num_txs,
-            a[6],              # fork.last_hash
+            int(a[2]),         # fork.last_qc
+            int(a[3]),         # commit_index
+            int(a[4]),         # byz_commit_index
+            int(a[5]),         # pending_acks
+            int(a[6]),         # pending_qcs
+            int(a[7]),         # num_txs,
+            a[8],              # fork.last_hash,
+            int(a[9]),         # total_client_request
+            int(a[10]),        # view
+            a[11] == "true",   # view_is_stable
+            a[12] == "true"    # i_am_leader
         )
         for a in points
     ]
@@ -43,8 +49,8 @@ def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched):
     points = [p for p in points if p[0] >= start_time and p[0] <= end_time]
 
     total_runtime = (points[-1][0] - points[0][0]).total_seconds()
-    total_commit = points[-1][1] - points[0][1]
-    total_tx = points[-1][5] - points[0][5]
+    total_commit = points[-1][3] - points[0][3]
+    total_tx = points[-1][7] - points[0][7]
 
     tputs.append(total_tx / total_runtime)
     tputs_unbatched.append(total_commit / total_runtime)
@@ -56,7 +62,10 @@ def process_latencies(points, ramp_up, ramp_down, latencies):
             isoparse(a[0]),      # ISO format is used in run_remote
             int(a[1]),           # Client Id
             int(a[2]),           # Msg Id
-            float(a[3]),         # Latency us
+            int(a[3]),           # Block num
+            int(a[4]),           # Tx num
+            float(a[5]),         # Latency us
+            a[6]                 # Current Leader
         )
         for a in points
     ]
@@ -91,9 +100,13 @@ def parse_log_dir(dir, repeats, num_clients, leader, ramp_up, ramp_down) -> Stat
         with open(f"{dir}/{i}/{leader}.log", "r") as f:
             for line in f.readlines():
                 captures = node_rgx.findall(line)
+                # print(captures)
                 if len(captures) == 1:
                     points.append(captures[0])
-        process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched)
+        try:
+            process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched)
+        except:
+            continue
 
     for i in range(repeats):
         points = []
@@ -102,11 +115,15 @@ def parse_log_dir(dir, repeats, num_clients, leader, ramp_up, ramp_down) -> Stat
                 with open(f"{dir}/{i}/client{c}.log", "r") as f:
                     for line in f.readlines():
                         captures = client_rgx.findall(line)
+                        # print(captures)
                         if len(captures) == 1:
                             points.append(captures[0])
             except:
                 pass
-        process_latencies(points, ramp_up, ramp_down, latencies)
+        try:
+            process_latencies(points, ramp_up, ramp_down, latencies)
+        except:
+            continue
 
     latency_prob_dist = np.array(latencies)
     latency_prob_dist.sort()
@@ -140,9 +157,14 @@ def parse_log_dir_with_total_clients(dir, repeats, num_clients, leader, ramp_up,
 def parse_log_dir_with_sig_delay(dir, repeats, num_clients, leader, ramp_up, ramp_down) -> Dict[str, Stats]:
     with open(f"{dir}/sig_sweep.txt") as f:
         sig_delay = str(f.read().strip())
-    res = parse_log_dir(dir, repeats, num_clients, leader, ramp_up, ramp_down)
 
-    return {sig_delay: res}
+    try:
+        res = parse_log_dir(dir, repeats, num_clients, leader, ramp_up, ramp_down)
+
+        return {sig_delay: res}
+    except:
+        # Failed run
+        return {}
 
 
 def plot_tput_vs_latency(stats: Dict[int, Stats], name: str):
