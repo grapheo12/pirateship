@@ -47,3 +47,4 @@ sh scripts/run_all_protocols.sh
 - [ ] **Reconfiguration.**
 - [ ] Implication of handling multiple platforms?
 - [ ] Handling persistence: Same disk or replicated disks?
+- [ ] Why is diverse_raft performing worse than cochin?

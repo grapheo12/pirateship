@@ -44,19 +44,20 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
         let client_req = ProtoClientRequest {
             tx: Some(ProtoTransaction{
                 on_receive: None,
-                on_crash_commit: Some(ProtoTransactionPhase {
-                    ops: vec![ProtoTransactionOp {
-                        op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-                        operands: vec![
-                            format!("crash_commit_{}", i).into_bytes(),
-                            format!("Tx:{}:{}", idx, i).into_bytes()
-                        ],
-                        // operands: Vec::new(),
-                    }],
-                }),
-                // on_crash_commit: None,
+                // on_crash_commit: Some(ProtoTransactionPhase {
+                //     ops: vec![ProtoTransactionOp {
+                //         op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
+                //         operands: vec![
+                //             format!("crash_commit_{}", i).into_bytes(),
+                //             format!("Tx:{}:{}", idx, i).into_bytes()
+                //         ],
+                //         // operands: Vec::new(),
+                //     }],
+                // }),
+                on_crash_commit: None,
                 on_byzantine_commit: None,
             }),
+            // tx: None,
             origin: config.net_config.name.clone(),
             // sig: vec![0u8; SIGNATURE_LENGTH],
             sig: vec![0u8; 1]
