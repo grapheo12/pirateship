@@ -156,7 +156,7 @@ def copy_logs(node_conns, client_conns, repeat_num, wd):
 
 
 def run_remote(node_template, client_template, ip_list, identity_file, repeat, seconds):
-    build_project()
+    # build_project()
     git_hash = get_current_git_hash()
     gen_config("configs", "cluster", node_template, client_template, ip_list, -1)
     nodes, clients = tag_all_machines(ip_list)

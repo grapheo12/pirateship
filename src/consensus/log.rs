@@ -318,6 +318,19 @@ impl Log {
             return Err(Error::new(ErrorKind::InvalidData, "Signature not verified"));
         }
 
+        // Check the QCs attached.
+        for qc in &entry.block.qc {
+            for sig in &qc.sig {
+                if sig.sig.len() != SIGNATURE_LENGTH {
+                    return Err(Error::new(ErrorKind::InvalidData, "Malformed QC signature"));
+                }
+                
+                if !keys.verify(&sig.name, &sig.sig.clone().try_into().unwrap(), &qc.digest) {
+                    return Err(Error::new(ErrorKind::InvalidData, "QC signature not verified"));
+                }
+            }
+        }
+
         entry.block.sig = sig_opt;
 
         self.push(entry) // Push the ORIGINAL entry

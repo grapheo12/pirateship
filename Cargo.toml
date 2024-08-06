@@ -48,22 +48,31 @@ name = "tx_serde_bench"
 harness = false
 
 [features]
+# Protocol specifics
+# Leader change
 round_robin_leader = []
+fixed_leader = []
+# Signing
 always_sign = []
 never_sign = []
 dynamic_sign = []
+# Other features
 quorum_diversity = []
-raft_view_change = []
-cochin_view_change = []
+view_change = []
+no_pipeline = []
+no_qc = []
+# Applications
 app_logger = []
-lucky_raft = ["round_robin_leader", "never_sign"]
-signed_raft = ["round_robin_leader", "dynamic_sign"]
-jolteon = ["round_robin_leader", "always_sign", "cochin_view_change"]
-diverse_raft = ["round_robin_leader", "dynamic_sign", "quorum_diversity", "raft_view_change"]
-cochin = ["round_robin_leader", "dynamic_sign", "quorum_diversity", "cochin_view_change"]
+# Protocols specs
+lucky_raft = ["fixed_leader", "never_sign"]         # QC never formed, so no_qc is implied
+signed_raft = ["fixed_leader", "dynamic_sign", "no_qc"]
+diverse_raft = ["fixed_leader", "dynamic_sign", "quorum_diversity"]
+jolteon = ["round_robin_leader", "always_sign", "view_change", "no_pipeline"]
+chained_pbft = ["round_robin_leader", "always_sign", "view_change"]
+cochin = ["round_robin_leader", "dynamic_sign", "quorum_diversity", "view_change"]
+
 default = ["cochin", "app_logger"]
 
-# @todo: Change how raft_view_change behaves.
-# @todo: A feature for jolteon to block on a block's qc.
+
 [profile.release]
 panic = "abort"

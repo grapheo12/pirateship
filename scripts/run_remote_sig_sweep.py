@@ -165,7 +165,7 @@ def run_with_given_signature_sweep(node_template, client_template, ip_list, iden
     type=click.INT
 )
 def main(node_template, client_template, ip_list, identity_file, repeat, seconds, delay_block, delay_ms, ramp_up, ramp_down):
-    build_project()
+    # build_project()
     git_hash = get_current_git_hash()
     _, client_tags = tag_all_machines(ip_list)
     client_machines = len(client_tags)

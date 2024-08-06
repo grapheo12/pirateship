@@ -13,7 +13,7 @@ use indexmap::IndexMap;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
 use std::time::Instant;
-use tokio::{join, sync::{mpsc, Mutex}};
+use tokio::{join, sync::{mpsc, Mutex, Semaphore}};
 
 use crate::{
     config::Config,
@@ -55,7 +55,12 @@ impl ConsensusState {
     fn new() -> ConsensusState {
         ConsensusState {
             fork: Mutex::new(Log::new()),
+
+            #[cfg(feature = "view_change")]
             view: AtomicU64::new(0),
+            #[cfg(not(feature = "view_change"))]
+            view: AtomicU64::new(1),
+
             commit_index: AtomicU64::new(0),
             num_committed_txs: AtomicUsize::new(0),
             byz_commit_index: AtomicU64::new(0),
@@ -103,6 +108,8 @@ pub struct ServerContext {
 
     pub view_timer: Arc<Pin<Box<ResettableTimer>>>,
     pub total_client_requests: AtomicUsize,
+
+    pub should_progress: Semaphore
 }
 
 #[derive(Clone)]
@@ -113,10 +120,16 @@ impl PinnedServerContext {
         let node_ch = mpsc::unbounded_channel();
         let client_ch = mpsc::unbounded_channel();
         let black_hole_ch = mpsc::unbounded_channel();
+
         PinnedServerContext(Arc::new(Box::pin(ServerContext {
             config: cfg.clone(),
             i_am_leader: AtomicBool::new(false),
+
+            #[cfg(feature = "view_change")]
             view_is_stable: AtomicBool::new(false),
+            #[cfg(not(feature = "view_change"))]
+            view_is_stable: AtomicBool::new(true),
+            
             node_queue: (node_ch.0, Mutex::new(node_ch.1)),
             client_queue: (client_ch.0, Mutex::new(client_ch.1)),
             state: ConsensusState::new(),
@@ -126,6 +139,7 @@ impl PinnedServerContext {
             __client_black_hole_channel: (black_hole_ch.0, Mutex::new(black_hole_ch.1)),
             view_timer: ResettableTimer::new(Duration::from_millis(cfg.consensus_config.view_timeout_ms)),
             total_client_requests: AtomicUsize::new(0),
+            should_progress: Semaphore::new(1),
         })))
     }
 }
@@ -313,6 +327,13 @@ where
 
     let mut pending_signatures = 0;
 
+    #[cfg(not(feature = "view_change"))]
+    {
+        if get_leader_str(&ctx) == ctx.config.net_config.name {
+            ctx.i_am_leader.store(true, Ordering::SeqCst);
+        }
+    }
+
 
     loop {
         tokio::select! {
@@ -365,6 +386,10 @@ where
         let mut should_sig = signature_timer_tick    // Either I am running this body because of signature timeout.
             || (pending_signatures >= ctx.config.consensus_config.signature_max_delay_blocks);
         // Or I actually got some transactions and I really need to sign
+
+        // Semaphore will be released in `do_commit` when a commit happens.
+        #[cfg(feature = "no_pipeline")]
+        ctx.should_progress.acquire().await.unwrap().forget();
 
         match do_append_entries(
             ctx.clone(), &engine.clone(), client.clone(),
@@ -466,7 +491,7 @@ pub async fn handle_node_messages<Engine>(
             break; // Select failed because both channels were closed!
         }
 
-        #[cfg(any(feature = "raft_view_change", feature = "cochin_view_change"))]
+        #[cfg(feature = "view_change")]
         {
             if view_timer_tick {
                 info!("Timer fired");

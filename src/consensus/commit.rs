@@ -147,6 +147,10 @@ pub fn do_commit<Engine>(
 
     ctx.state.commit_index.store(n, Ordering::SeqCst);
     engine.signal_crash_commit(n);
+
+    #[cfg(feature = "no_pipeline")]
+    ctx.should_progress.add_permits(1);
+
     let mut del_list = Vec::new();
     for i in (ci + 1)..(n + 1) {
         let num_txs = match fork.get(i) {

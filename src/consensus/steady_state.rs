@@ -58,17 +58,20 @@ pub async fn create_vote_for_blocks(
             max_n = n;
         }
 
-        if fork.get(n)?.has_signature() {
-            atleast_one_sig_block = true;
-            let sig = fork.signature_at_n(n, &ctx.keys).to_vec();
-
-            // This is just caching the signature.
-            fork.inc_qc_sig_unverified(&ctx.config.net_config.name, &sig, n)?;
-
-            // Add the block to byz_qc_pending,
-            // along with all other blocks for which I have sent signature before,
-            // but haven't seen a QC
-            byz_qc_pending.insert(n);
+        #[cfg(not(feature = "no_qc"))]
+        {
+            if fork.get(n)?.has_signature() {
+                atleast_one_sig_block = true;
+                let sig = fork.signature_at_n(n, &ctx.keys).to_vec();
+    
+                // This is just caching the signature.
+                fork.inc_qc_sig_unverified(&ctx.config.net_config.name, &sig, n)?;
+    
+                // Add the block to byz_qc_pending,
+                // along with all other blocks for which I have sent signature before,
+                // but haven't seen a QC
+                byz_qc_pending.insert(n);
+            }
         }
 
         fork.inc_replication_vote(&ctx.config.net_config.name, n)?;
@@ -76,17 +79,20 @@ pub async fn create_vote_for_blocks(
 
     // Resend signatures for QCs I did not get yet.
     // This is safer than creating QCs with votes to higher blocks.
-    if atleast_one_sig_block {
-        // Invariant: Only signature blocks get signature votes.
-        for n in byz_qc_pending.iter() {
-            if *n > fork.last() {
-                continue;
-            }
-            if let Some(sig) = fork.get(*n)?.qc_sigs.get(&ctx.config.net_config.name) {
-                vote_sigs.push(ProtoSignatureArrayEntry {
-                    n: *n,
-                    sig: sig.to_vec(),
-                });
+    #[cfg(not(feature = "no_qc"))]
+    {
+        if atleast_one_sig_block {
+            // Invariant: Only signature blocks get signature votes.
+            for n in byz_qc_pending.iter() {
+                if *n > fork.last() {
+                    continue;
+                }
+                if let Some(sig) = fork.get(*n)?.qc_sigs.get(&ctx.config.net_config.name) {
+                    vote_sigs.push(ProtoSignatureArrayEntry {
+                        n: *n,
+                        sig: sig.to_vec(),
+                    });
+                }
             }
         }
     }
@@ -251,6 +257,9 @@ where Engine: crate::execution::Engine
             if byz_qc_pending.contains(&i)
                 && byz_qc_pending.len() >= k
             {
+                // This code path is never triggered if no_qc or never_sign is enabled.
+                // Since byz_qc_pending is always empty.
+
                 qd_should_wait_supermajority = true;
                 __flipped = true;
                 __byz_qc_pending_len = byz_qc_pending.len();
@@ -621,9 +630,12 @@ where Engine: crate::execution::Engine
     let (ae, profile) = create_and_push_block(ctx.clone(), engine, reqs, should_sign).await?;
 
     // Add this block to byz_qc_pending, if it is a signed block
-    if should_sign {
-        let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
-        do_add_block_to_byz_qc_pending(&mut byz_qc_pending, &ae);
+    #[cfg(not(feature = "no_qc"))]
+    {
+        if should_sign {
+            let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
+            do_add_block_to_byz_qc_pending(&mut byz_qc_pending, &ae);
+        }
     }
 
     // Vote for self; necessary since the network subsystem doesn't send my message to me.

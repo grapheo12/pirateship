@@ -32,6 +32,22 @@ fn process_args() -> Config {
     Config::deserialize(&cfg_contents)
 }
 
+fn get_feature_set() -> (&'static str, &'static str) {
+    let mut app = "";
+    let mut protocol = "";
+
+    #[cfg(feature = "app_logger")]{ app = "app_logger"; }
+
+    #[cfg(feature = "lucky_raft")]{ protocol = "lucky_raft"; }
+    #[cfg(feature = "signed_raft")]{ protocol = "signed_raft"; }
+    #[cfg(feature = "diverse_raft")]{ protocol = "diverse_raft"; }
+    #[cfg(feature = "jolteon")]{ protocol = "jolteon"; }
+    #[cfg(feature = "chained_pbft")]{ protocol = "chained_pbft"; }
+    #[cfg(feature = "cochin")]{ protocol = "cochin"; }
+
+    (protocol, app)
+}
+
 async fn run_main(cfg: Config) -> io::Result<()> {
     #[cfg(feature = "app_logger")]
     let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
@@ -49,6 +65,9 @@ fn main() {
     log4rs::init_config(config::default_log4rs_config()).unwrap();
 
     let cfg = process_args();
+
+    let (protocol, app) = get_feature_set();
+    info!("Protocol: {}, App: {}", protocol, app);
 
     let core_ids = 
         Arc::new(Mutex::new(Box::pin(core_affinity::get_core_ids().unwrap())));
