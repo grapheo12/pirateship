@@ -1,37 +1,49 @@
 # Local setup
 
-Install Rust, jq, clang, llvm, cmake and protoc.
+Install Rust, jq, Python (with pip and virtualenv), clang, llvm, cmake and protoc.
 On an Ubuntu machine you can just run `sudo make install-deps-ubuntu` to install all dependencies.
 
-Run:
+To build, just run `make`.
+
+To run a setup, you need to have a `nodelist.txt` with a tab separated value of node names and IP addresses as follows:
+```tsv
+clientpool_vm0  10.2.7.5
+clientpool_vm1  10.2.7.4
+nodepool_vm0    10.2.6.7
+nodepool_vm1    10.2.6.4
+nodepool_vm2    10.2.6.5
+nodepool_vm3    10.2.6.6
+```
+
+Machines whose name starts with `client` will be used as client machines and nodes whose name starts with `node` will be used a consensus nodes.
+These IP addresses NEED NOT be unique.
+If you want to reuse a machine to simulate more number of nodes (or want to perform local testing),
+feel free to copy the IP addresses of existing machines (or use `127.0.0.1`) and use a new name.
+
+To be compliant with the terraform script that I generally use to create test VMs,
+you need to have an user called `azureadmin` in each of these VMs.
+Further, one must be able to SSH into `azureadmin@ip` using a common SSH key.
+Generate and save this key as `cluster_key.pem`.
+
+Save the `nodelist.txt` and `cluster_key.pem` and copy the path onto `scripts/run_all_protocols.sh`.
+
+Now you can an experiment with all protocols using:
+
 ```bash
-sh scripts/gen_local_config.sh configs 3 scripts/local_template.json scripts/local_client_template.json
-```
-to create a 3 node local config in the `configs` directory with a bunch of defaults set in `scripts/local_template.json`.
+virtualenv scripts/venv
+source scripts/venv/bin/activate
+pip install -r scripts/requirements.txt
 
-The TLS certificates use `node*.localhost` as the Domain name.
-Make sure `node*.localhost` resolves to `127.0.0.1` in your dev machines.
-Azure machines using Ubuntu 20.04 already do this by default.
-If it doesn't work, append the following line in `/etc/hosts` for `$i` in 1..7 inclusive:
-```
-127.0.0.1   node$i.localhost
+sh scripts/run_all_protocols.sh
 ```
 
-Build the project using `make` and run as follows:
+# Current status
 
-```bash
-sh scripts/run_local.sh <NUM_NODES> <NUM_SECONDS> <CONFIG_DIR> <LOG_DIR>
-```
-
-For example,
-```bash
-sh scripts/run_local.sh 3 20 configs logs
-```
-will run the 3 node setup for which the configs are in `configs` for 20 seconds and dump all the logs in `logs`.
+![Performance of Cochin wrt other protocols; Non-TEE and LAN setup](perf.png)
 
 
 # TODO
 
-(To do once a basic code structure is ready)
-- [x] Test if a dedicated async task per connected server (with channels to pass data) is better than locked sockets.
-- [ ] Create a good proto representation for transactions.
+- [ ] **Reconfiguration.**
+- [ ] Implication of handling multiple platforms?
+- [ ] Handling persistence: Same disk or replicated disks?

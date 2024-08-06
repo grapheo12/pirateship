@@ -78,7 +78,7 @@ def process_latencies(points, ramp_up, ramp_down, latencies):
 
     points = [p for p in points if p[0] >= start_time and p[0] <= end_time]
 
-    latencies.extend([p[3] for p in points])
+    latencies.extend([p[5] for p in points])
 
 
 
@@ -208,7 +208,7 @@ def plot_tput_vs_latency_multi(stat_list: List[Dict[int, Stats]], legends: List[
             xerr=np.array(stdev_tputs),
             label=legends[i],
             marker='o',
-            ecolor='r',
+            # ecolor='r',
             capsize=5
         )
     
