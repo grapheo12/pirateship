@@ -217,6 +217,13 @@ pub async fn do_reply_all_with_tentative_receipt(ctx: &PinnedServerContext) {
     }
     info!("Sent tentative responses for {} requests", lack_pend.len());
     lack_pend.clear();
+
+    #[cfg(feature = "no_pipeline")]
+    {
+        if ctx.should_progress.available_permits() == 0 {
+            ctx.should_progress.add_permits(1);
+        }
+    }
 }
 
 pub async fn do_init_view_change<Engine>(

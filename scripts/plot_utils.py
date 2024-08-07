@@ -90,7 +90,7 @@ Stats = namedtuple("Stats", [
     "stdev_latency"])
 
 def parse_log_dir(dir, repeats, num_clients, leader, ramp_up, ramp_down) -> Stats:
-    
+    print(dir, repeats, num_clients, leader, ramp_up, ramp_down)
     tputs = []
     tputs_unbatched = []
     latencies = []
