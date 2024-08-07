@@ -1231,6 +1231,7 @@ dependencies = [
  "prost-build",
  "prost-types",
  "rand",
+ "rand_chacha",
  "rustls",
  "rustls-pemfile",
  "serde",

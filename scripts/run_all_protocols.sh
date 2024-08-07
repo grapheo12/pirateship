@@ -1,11 +1,12 @@
 #!/bin/bash
 set -o xtrace
-source scripts/venv/bin/activate
 
 ALL_CLIENTS="-c 1 -c 10 -c 50 -c 100 -c 200 -c 500 -c 700 -c 1000"
+# ALL_CLIENTS="-c 200 -c 500 -c 700 -c 1000"
 
 start_time=$(date -Ins)
-RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt scripts/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i ../cluster_key.pem -r 3 -s 30 -up 2 -down 2 $ALL_CLIENTS"
+# start_time='2024-08-07T09:19:23.307485+00:00'
+RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt scripts/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i ../cluster_key.pem -r 3 -s 120 -up 2 -down 2 $ALL_CLIENTS"
 
 # Run cochin
 make
@@ -39,9 +40,9 @@ end_time=$(date -Ins)
 python3 scripts/plot_time_range_client_sweep.py \
     --path logs --end $end_time --start $start_time \
     -r 3 -c 2 -l node1 -up 2 -down 2 -o plot.png \
-    --legend "cochin" \
-    --legend "jolteon" \
-    --legend "chained_pbft" \
+    --legend "cochin-20s" \
+    --legend "jolteon-20s" \
+    --legend "chained_pbft-20s" \
     --legend "diverse_raft" \
     --legend "signed_raft" \
     --legend "lucky_raft"

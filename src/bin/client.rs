@@ -1,4 +1,4 @@
-use log::{info, warn};
+use log::{debug, info, trace, warn};
 use pft::{
     config::{default_log4rs_config, ClientConfig}, proto::{
         client::{ProtoClientReply, ProtoClientRequest},
@@ -10,6 +10,8 @@ use pft::{
     }
 };
 use prost::Message;
+use rand::{distributions::WeightedIndex, prelude::*};
+use rand_chacha::ChaCha20Rng;
 use std::{env, fs, io, path};
 use tokio::task::JoinSet;
 use std::time::Instant;
@@ -40,6 +42,13 @@ fn process_args() -> ClientConfig {
 async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, config: ClientConfig) -> io::Result<()> {    
     let mut curr_leader = String::from("node1");
     let mut i = 0;
+
+    let mut rng = ChaCha20Rng::seed_from_u64(42);
+    let sample_item = [(true, 1), (false, 999)];
+
+
+    let weight_dist = WeightedIndex::new(sample_item.iter().map(|(_, weight)| weight)).unwrap();
+
     while i < num_requests {
         let client_req = ProtoClientRequest {
             tx: Some(ProtoTransaction{
@@ -73,71 +82,66 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
         rpc_msg_body.encode(&mut buf).expect("Protobuf error");
 
         let start = Instant::now();
-        
-        let msg = PinnedClient::send_and_await_reply(
-            &client,
-            &curr_leader,
-            MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon),
-        )
-        .await
-        .unwrap();
-        
-        let sz = msg.as_ref().1;
-        let resp = ProtoClientReply::decode(&msg.as_ref().0.as_slice()[..sz]).unwrap();
-        if let None = resp.reply {
-            continue;
+        loop {          // Retry loop
+            let msg = PinnedClient::send_and_await_reply(
+                &client,
+                &curr_leader,
+                MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon),
+            )
+            .await
+            .unwrap();
+            
+            let sz = msg.as_ref().1;
+            let resp = ProtoClientReply::decode(&msg.as_ref().0.as_slice()[..sz]).unwrap();
+            if let None = resp.reply {
+                continue;
+            }
+            let resp = match resp.reply.unwrap() {
+                pft::proto::client::proto_client_reply::Reply::Receipt(r) => r,
+                pft::proto::client::proto_client_reply::Reply::TryAgain(_) => {
+                    continue;
+                },
+                pft::proto::client::proto_client_reply::Reply::Leader(l) => {
+                    if curr_leader != l.name {
+                        trace!("Switching leader: {} --> {}", curr_leader, l.name);
+                        // sleep(Duration::from_millis(10)).await; // Rachel: You fell A-SLEEP?!
+                        
+                        // Drop the connection from the old leader.
+                        // This is required as one process is generally allowed ~1024 open connections.
+                        // If ~700 threads have open connections to the leader
+                        // and the connections to the old leader are not closed,
+                        // within 2 views, the process will run out of file descriptors.
+                        // The OS will reset connections.
+                        
+                        // However, doing a drop here is not that efficient, why?
+                        // Because sometime node1 changes view where node2 is leader,
+                        // but node1 is still leader for node2 and
+                        // the curr_leader will ping pong until node2 changes view.
+                        
+                        PinnedClient::drop_connection(&client, &curr_leader).await;
+    
+    
+                        curr_leader = l.name.clone();
+                    }
+                    continue;
+                },
+                pft::proto::client::proto_client_reply::Reply::TentativeReceipt(r) => {
+                    debug!("Got tentative receipt: {:?}", r);
+                    continue;
+                    // @todo: Wait to see if my txn gets committed in the tentative block.
+                },
+            };
+
+            let should_log = sample_item[weight_dist.sample(&mut rng)].0;
+
+            if should_log {
+                info!("Client Id: {}, Msg Id: {}, Block num: {}, Tx num: {}, Latency: {} us, Current Leader: {}",
+                    idx, i, resp.block_n, resp.tx_n,
+                    start.elapsed().as_micros(), curr_leader
+                );
+            }
+            break;
         }
-        let resp = match resp.reply.unwrap() {
-            pft::proto::client::proto_client_reply::Reply::Receipt(r) => r,
-            pft::proto::client::proto_client_reply::Reply::TryAgain(_) => {
-                continue;
-            },
-            pft::proto::client::proto_client_reply::Reply::Leader(l) => {
-                if curr_leader != l.name {
-                    info!("Switching leader: {} --> {}", curr_leader, l.name);
-                    // sleep(Duration::from_millis(10)).await; // Rachel: You fell A-SLEEP?!
-                    
-                    // Drop the connection from the old leader.
-                    // This is required as one process is generally allowed ~1024 open connections.
-                    // If ~700 threads have open connections to the leader
-                    // and the connections to the old leader are not closed,
-                    // within 2 views, the process will run out of file descriptors.
-                    // The OS will reset connections.
-                    
-                    // However, doing a drop here is not that efficient, why?
-                    // Because sometime node1 changes view where node2 is leader,
-                    // but node1 is still leader for node2 and
-                    // the curr_leader will ping pong until node2 changes view.
-                    
-                    PinnedClient::drop_connection(&client, &curr_leader).await;
-
-
-                    curr_leader = l.name.clone();
-                }
-                continue;
-            },
-            pft::proto::client::proto_client_reply::Reply::TentativeReceipt(r) => {
-                warn!("Got tentative receipt: {:?}", r);
-                continue;
-                // @todo: Wait to see if my txn gets committed in the tentative block.
-            },
-        };
-
-
-        
-        if resp.block_n % 1000 == 0 {
-            info!("Client Id: {}, Msg Id: {}, Block num: {}, Tx num: {}, Latency: {} us, Current Leader: {}",
-                idx, i, resp.block_n, resp.tx_n,
-                start.elapsed().as_micros(), curr_leader
-            );
-        }
-        // } else {
-        //     debug!("Sending message: {} Reply: {} {} Time: {} us",
-        //         format!("Tx:{}:{}", idx, i),
-        //         msg.as_ref().0.encode_hex::<String>(), msg.as_ref().1,
-        //         start.elapsed().as_micros()
-        //     );
-        // }
 
         i += 1;
     }
