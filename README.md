@@ -45,6 +45,11 @@ sh scripts/run_all_protocols.sh
 # TODO
 
 - [ ] **Reconfiguration.**
+    * Verifying signatures from old configs in terms of the new config
+    * Reconf on byz commit, so that all correct replicas eventually (after GST) knows of this new config and joins it.
+    * Until then it is possible to crash commit 2 entries by 2 leaders in 2 different configs.
+    * But that's ok. Byz commit still won't happen.
+    
 - [ ] Implication of handling multiple platforms?
 - [ ] Handling persistence: Same disk or replicated disks?
 - [ ] Why is diverse_raft performing worse than cochin?

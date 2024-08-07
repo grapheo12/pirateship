@@ -592,6 +592,15 @@ pub async fn do_init_new_leader<Engine>(
 }
 
 async fn force_noop(ctx: &PinnedServerContext) {
+    // We need to make sure that the client queue is not blocked
+    // due to semaphore wait of the last view.
+    #[cfg(feature = "no_pipeline")]
+    {
+        if ctx.should_progress.available_permits() == 0 {
+            ctx.should_progress.add_permits(1);
+        }
+    }
+
     let client_tx = ctx.client_queue.0.clone();
     
     let client_req = ProtoClientRequest {
