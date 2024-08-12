@@ -4,7 +4,7 @@ use std::{
     ops::Deref,
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI8, AtomicU64, AtomicUsize, Ordering},
         Arc,
     }, time::Duration,
 };
@@ -22,17 +22,10 @@ use crate::{
 };
 
 use super::{
-    log::Log,
     super::proto::{
         consensus::{ProtoQuorumCertificate, ProtoViewChange},
         rpc::{self, ProtoPayload},
-    }, timer::ResettableTimer,
-    utils::*,
-    client_reply::*,
-    commit::*,
-    steady_state::*,
-    view_change::*,
-    backfill::*
+    }, backfill::*, client_reply::*, commit::*, log::Log, reconfiguration::{decide_my_lifecycle_stage, do_graceful_shutdown}, steady_state::*, timer::ResettableTimer, utils::*, view_change::*
 };
 
 /// @todo: This doesn't have to be here. Unncessary Mutexes.
@@ -41,12 +34,13 @@ use super::{
 pub struct ConsensusState {
     pub fork: Mutex<Log>,
     pub view: AtomicU64,
+    pub config_num: AtomicU64,
     pub commit_index: AtomicU64,
     pub num_committed_txs: AtomicUsize,
     pub byz_commit_index: AtomicU64,
     pub byz_qc_pending: Mutex<HashSet<u64>>,
     pub next_qc_list: Mutex<IndexMap<(u64, u64), ProtoQuorumCertificate>>,
-    pub fork_buffer: Mutex<BTreeMap<u64, HashMap<String, ProtoViewChange>>>
+    pub fork_buffer: Mutex<BTreeMap<u64, HashMap<String, ProtoViewChange>>>,
 }
 
 impl ConsensusState {
@@ -59,6 +53,7 @@ impl ConsensusState {
             #[cfg(not(feature = "view_change"))]
             view: AtomicU64::new(1),
 
+            config_num: AtomicU64::new(0),
             commit_index: AtomicU64::new(0),
             num_committed_txs: AtomicUsize::new(0),
             byz_commit_index: AtomicU64::new(0),
@@ -77,10 +72,19 @@ pub type ForwardedMessageWithAckChan = (
     LatencyProfile,
 );
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifecycleStage {
+    Dormant = 1,
+    Learner = 2,
+    FullNode = 3,
+    Dead = 4,
+}
+
 pub struct ServerContext {
     pub config: AtomicConfig,
     pub i_am_leader: AtomicBool,
     pub view_is_stable: AtomicBool,
+    pub lifecycle_stage: AtomicI8,
     pub node_queue: (
         mpsc::UnboundedSender<ForwardedMessageWithAckChan>,
         Mutex<mpsc::UnboundedReceiver<ForwardedMessageWithAckChan>>,
@@ -122,9 +126,11 @@ impl PinnedServerContext {
         let client_ch = mpsc::unbounded_channel();
         let black_hole_ch = mpsc::unbounded_channel();
 
-        PinnedServerContext(Arc::new(Box::pin(ServerContext {
+
+        let mut ctx = PinnedServerContext(Arc::new(Box::pin(ServerContext {
             config: AtomicConfig::new(cfg.clone()),
             i_am_leader: AtomicBool::new(false),
+            lifecycle_stage: AtomicI8::new(LifecycleStage::Dormant as i8),
 
             #[cfg(feature = "view_change")]
             view_is_stable: AtomicBool::new(false),
@@ -141,7 +147,11 @@ impl PinnedServerContext {
             view_timer: ResettableTimer::new(Duration::from_millis(cfg.consensus_config.view_timeout_ms)),
             total_client_requests: AtomicUsize::new(0),
             should_progress: Semaphore::new(1),
-        })))
+        })));
+        let lifecycle_stage = decide_my_lifecycle_stage(&ctx, true);
+        ctx.lifecycle_stage.store(lifecycle_stage as i8, Ordering::SeqCst);
+        
+        ctx
     }
 }
 
@@ -290,6 +300,10 @@ where Engine: crate::execution::Engine
             profile.register("Backfill Request process");
         },
         _ => {}
+    }
+
+    if ctx.lifecycle_stage.load(Ordering::SeqCst) == LifecycleStage::Dead as i8 {
+        do_graceful_shutdown().await;
     }
 
     Ok(())

@@ -1,16 +1,15 @@
 use core::str;
 use std::{io::Error, sync::Arc};
 
-use ed25519_dalek::{pkcs8::spki::der::Encode, VerifyingKey, PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
+use ed25519_dalek::{VerifyingKey, PUBLIC_KEY_LENGTH};
 use log::{error, info, warn};
 use nix::sys::signal;
 use nix::sys::signal::Signal::SIGINT;
 use nix::unistd::Pid;
-use sha2::digest::typenum::int;
 
 use crate::{config::{Config, NodeNetInfo}, crypto::KeyStore, proto::execution::{ProtoTransaction, ProtoTransactionOp}};
 
-use super::handler::PinnedServerContext;
+use super::handler::{LifecycleStage, PinnedServerContext};
 
 /// Gracefully shut down the node
 pub async fn do_graceful_shutdown() {
@@ -267,6 +266,12 @@ pub fn maybe_execute_reconfiguration_transaction(ctx: &PinnedServerContext, tx: 
     
             do_add_learners(ctx, &to_add);
             do_delete_learners(ctx, &to_remove);
+
+            if ret {
+                let lifecycle_stage = decide_my_lifecycle_stage(ctx, false);
+                info!("Lifecycle stage: {:?}", lifecycle_stage);
+                ctx.lifecycle_stage.store(lifecycle_stage as i8, std::sync::atomic::Ordering::SeqCst);
+            }
         }
     } else {
 
@@ -299,10 +304,36 @@ pub fn maybe_execute_reconfiguration_transaction(ctx: &PinnedServerContext, tx: 
 
             do_upgrade_learners_to_node(ctx, &to_upgrade);
             do_downgrade_nodes_to_learner(ctx, &to_downgrade);
+
+            if ret {
+                let lifecycle_stage = decide_my_lifecycle_stage(ctx, false);
+                info!("Lifecycle stage: {:?}", lifecycle_stage);
+                ctx.lifecycle_stage.store(lifecycle_stage as i8, std::sync::atomic::Ordering::SeqCst);
+            }
         }
     }
 
 
 
     Ok(ret)
+}
+
+pub fn decide_my_lifecycle_stage(ctx: &PinnedServerContext, life_is_starting: bool) -> LifecycleStage {
+    let mut lifecycle_stage = LifecycleStage::Dormant;
+    let _cfg = ctx.config.get();
+    // Am I a learner in the initial config.
+    if _cfg.consensus_config.learner_list.contains(&_cfg.net_config.name) {
+        lifecycle_stage = LifecycleStage::Learner;
+    }
+    
+    // Am I a full node in the initial config.
+    if _cfg.consensus_config.node_list.contains(&_cfg.net_config.name) {
+        lifecycle_stage = LifecycleStage::FullNode;
+    }
+
+    if !life_is_starting && lifecycle_stage == LifecycleStage::Dormant {
+        lifecycle_stage = LifecycleStage::Dead;
+    }
+
+    lifecycle_stage
 }
