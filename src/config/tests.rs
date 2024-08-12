@@ -1,6 +1,12 @@
-use std::collections::HashMap;
+use core::panic;
+use std::{borrow::BorrowMut, collections::HashMap, sync::{atomic::{AtomicI16, AtomicPtr}, Arc}, time::Duration};
+
+use crossbeam::atomic::{self, AtomicCell};
+use tokio::{join, runtime, time::sleep};
 
 use crate::config::{AppConfig, Config, ConsensusConfig, NetConfig, NodeNetInfo, RpcConfig};
+
+use super::AtomicConfig;
 
 #[test]
 fn test_nodeconfig_serialize() {
@@ -73,4 +79,107 @@ fn test_nodeconfig_serialize() {
         let val = opt.unwrap();
         assert!(val.addr.eq(&node_config.addr));
     }
+}
+
+#[test]
+fn test_crossbeam_lock_less() {
+    if !AtomicConfig::is_lock_free() {
+        panic!("AtomicConfig is not lock free");
+    }
+}
+
+#[tokio::test]
+async fn test_atomic_config_access() {
+    let mut net_config = NetConfig {
+        name: "node1".to_string(),
+        addr: "0.0.0.0:3001".to_string(),
+        tls_cert_path: String::from("blah"),
+        tls_key_path: String::from("blah"),
+        tls_root_ca_cert_path: String::from("blah"),
+        nodes: HashMap::new(),
+        client_max_retry: 10,
+    };
+
+    for n in 0..5 {
+        let mut name = "node".to_string();
+        name.push_str(n.to_string().as_str());
+        let mut addr = "127.0.0.1:300".to_string();
+        addr.push_str(n.to_string().as_str());
+        net_config.nodes.insert(
+            name,
+            NodeNetInfo {
+                addr: addr.to_owned(),
+                domain: String::from("blah.com"),
+            },
+        );
+    }
+
+    let rpc_config = RpcConfig {
+        allowed_keylist_path: String::from("blah/blah"),
+        signing_priv_key_path: String::from("blah/blah"),
+        recv_buffer_size: (1 << 15),
+        channel_depth: 32,
+    };
+
+    let consensus_config = ConsensusConfig {
+        node_list: vec![
+            String::from("node1"),
+            String::from("node2"),
+            String::from("node3"),
+        ],
+        quorum_diversity_k: 3,
+        max_backlog_batch_size: 1000,
+        signature_max_delay_blocks: 128,
+        signature_max_delay_ms: 100,
+        vote_processing_workers: 128,
+        view_timeout_ms: 150
+    };
+
+    let app_config = AppConfig {
+        logger_stats_report_secs: 1,
+    };
+
+    let config = Config {
+        net_config,
+        rpc_config,
+        consensus_config,
+        app_config,
+    };
+
+    let atomic_config = AtomicConfig::new(config);
+    let atomic_config2 = atomic_config.clone();
+
+    unsafe {
+        let ptr1 = atomic_config.0.as_ptr().as_ref().unwrap();
+        let ptr2 = atomic_config2.0.as_ptr().as_ref().unwrap();
+        println!("{:?}\n{:?}", std::ptr::addr_of!(ptr1), std::ptr::addr_of!(ptr2));
+    }
+
+    let handle1 = tokio::spawn(async move {
+        let mut got_different = false;
+        for _ in 0..100 {
+            let cfg = atomic_config.get();
+            println!("{}", cfg.net_config.name);
+            if !cfg.net_config.name.eq("node1") {
+                got_different = true;
+            }
+            sleep(Duration::from_millis(1)).await;
+
+        }
+
+        assert!(got_different);
+    });
+
+    let handle2 = tokio::spawn(async move {
+        for i in 0..100 {
+            let mut cfg = atomic_config2.get();
+            let cfg = Arc::make_mut(&mut cfg);
+            cfg.net_config.name = format!("node{}", i);
+
+            atomic_config2.set(cfg.clone());
+            sleep(Duration::from_millis(1)).await;
+        }
+    });
+
+    let _ = join!(handle1, handle2);
 }

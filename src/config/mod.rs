@@ -1,6 +1,7 @@
+use crossbeam::atomic::AtomicCell;
 use serde::{Deserialize, Serialize};
 use serde_json::Result;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 #[cfg(test)]
 mod tests;
@@ -10,13 +11,13 @@ mod tests;
 mod log4rs;
 pub use log4rs::*;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct NodeNetInfo {
     pub addr: String,
     pub domain: String,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct NetConfig {
     pub name: String,
     pub addr: String,
@@ -27,7 +28,7 @@ pub struct NetConfig {
     pub client_max_retry: i32,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RpcConfig {
     pub allowed_keylist_path: String,
     pub signing_priv_key_path: String,
@@ -35,7 +36,7 @@ pub struct RpcConfig {
     pub channel_depth: u32,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ConsensusConfig {
     pub node_list: Vec<String>, // This better be in the same order in all nodes.
     pub quorum_diversity_k: usize,
@@ -46,12 +47,12 @@ pub struct ConsensusConfig {
     pub vote_processing_workers: u16
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
     pub logger_stats_report_secs: u64,         // This is only for the logger app
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
     pub net_config: NetConfig,
     pub rpc_config: RpcConfig,
@@ -59,7 +60,7 @@ pub struct Config {
     pub app_config: AppConfig,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ClientNetConfig {
     pub name: String,
     pub tls_root_ca_cert_path: String,
@@ -67,19 +68,19 @@ pub struct ClientNetConfig {
     pub client_max_retry: i32,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ClientRpcConfig {
     pub signing_priv_key_path: String,
 
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkloadConfig {
     pub num_clients: usize,
     pub num_requests: usize
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ClientConfig {
     pub net_config: ClientNetConfig,
     pub rpc_config: ClientRpcConfig,
@@ -137,5 +138,32 @@ impl ClientConfig {
                 logger_stats_report_secs: 1,
             }
         }
+    }
+}
+
+pub struct AtomicConfig(pub Arc<AtomicCell<Arc<Box<Config>>>>);
+
+impl AtomicConfig {
+    pub fn new(config: Config) -> Self {
+        AtomicConfig(Arc::new(AtomicCell::new(Arc::new(Box::new(config)))))
+    }
+
+    pub fn get(&self) -> Arc<Box<Config>> {
+        let ptr = self.0.as_ptr();
+        unsafe{ ptr.as_ref().unwrap() }.clone()
+    }
+
+    pub fn set(&self, config: Box<Config>) {
+        self.0.store(Arc::new(config));
+    }
+
+    pub fn is_lock_free() -> bool {
+        AtomicCell::<Arc<Box<Config>>>::is_lock_free()
+    }
+}
+
+impl Clone for AtomicConfig {
+    fn clone(&self) -> Self {
+        AtomicConfig(self.0.clone())
     }
 }

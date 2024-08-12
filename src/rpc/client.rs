@@ -1,4 +1,5 @@
-use crate::{config::Config, crypto::KeyStore};
+use crate::{config::{AtomicConfig, Config}, crypto::KeyStore};
+use crossbeam::atomic::AtomicCell;
 use log::{debug, trace, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use std::{
@@ -126,7 +127,7 @@ impl PinnedTlsStream {
     }
 }
 pub struct Client {
-    pub config: Config,
+    pub config: AtomicConfig,
     pub tls_ca_root_cert: RootCertStore,
     pub sock_map: PinnedHashMap<String, PinnedTlsStream>,
     pub chan_map: PinnedHashMap<String, UnboundedSender<(PinnedMessage, LatencyProfile)>>,
@@ -172,7 +173,7 @@ impl Client {
     }
     pub fn new(cfg: &Config, key_store: &KeyStore) -> Client {
         Client {
-            config: cfg.clone(),
+            config: AtomicConfig::new(cfg.clone()),
             tls_ca_root_cert: Client::load_root_ca_cert(&cfg.net_config.tls_root_ca_cert_path),
             sock_map: PinnedHashMap::new(),
             do_auth: true,
@@ -183,7 +184,7 @@ impl Client {
     }
     pub fn new_unauthenticated(cfg: &Config) -> Client {
         Client {
-            config: cfg.clone(),
+            config: AtomicConfig::new(cfg.clone()),
             tls_ca_root_cert: Client::load_root_ca_cert(&cfg.net_config.tls_root_ca_cert_path),
             sock_map: PinnedHashMap::new(),
             do_auth: false,
@@ -200,9 +201,8 @@ impl Client {
 
 impl PinnedClient {
     async fn connect(client: &PinnedClient, name: &String) -> Result<PinnedTlsStream, Error> {
-        let peer = client
-            .0
-            .config
+        let cfg = client.0.config.get();
+        let peer = cfg
             .net_config
             .nodes
             .get(name)
@@ -369,7 +369,8 @@ impl PinnedClient {
         name: &String,
         data: MessageRef<'b>,
     ) -> Result<(), Error> {
-        let mut i = client.0.config.net_config.client_max_retry;
+        let cfg = client.0.config.get();
+        let mut i = cfg.net_config.client_max_retry;
         while i > 0 {
             let done = match Self::send(client, name, data.clone()).await {
                 Ok(()) => true,

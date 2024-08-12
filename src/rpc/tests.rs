@@ -20,7 +20,7 @@ use crate::{
 use super::{auth::HandshakeResponse, client::PinnedClient, server::{MsgAckChan, RespType}, MessageRef};
 
 fn process_args(i: i32) -> Config {
-    let _p = format!("configs/node{i}.json");
+    let _p = format!("configs/node{i}_config.json");
     let cfg_path = path::Path::new(&_p);
     if !cfg_path.exists() {
         panic!("Node configs not generated!");

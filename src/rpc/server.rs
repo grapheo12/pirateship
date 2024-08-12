@@ -1,6 +1,6 @@
 use std::{fs::File, io::{self, Cursor, Error}, path, sync::Arc, time::{Duration, Instant}};
 
-use crate::{config::Config, crypto::KeyStore, rpc::auth};
+use crate::{config::{AtomicConfig, Config}, crypto::KeyStore, rpc::auth};
 use indexmap::IndexMap;
 use tokio::{io::{BufWriter, ReadHalf}, sync::{mpsc}};
 use log::{debug, info, trace, warn};
@@ -80,7 +80,7 @@ pub struct Server<ServerContext>
 where
     ServerContext: Send + Sync + 'static,
 {
-    pub config: Config,
+    pub config: AtomicConfig,
     pub tls_certs: Vec<CertificateDer<'static>>,
     pub tls_keys: PrivateKeyDer<'static>,
     pub key_store: KeyStore,
@@ -219,7 +219,7 @@ where
         key_store: &KeyStore,
     ) -> Server<S> {
         Server {
-            config: cfg.clone(),
+            config: AtomicConfig::new(cfg.clone()),
             tls_certs: Server::<S>::load_certs(&cfg.net_config.tls_cert_path),
             tls_keys: Server::<S>::load_keys(&cfg.net_config.tls_key_path),
             msg_handler: handler,
@@ -230,7 +230,7 @@ where
 
     pub fn new_unauthenticated(cfg: &Config, handler: HandlerType<S>) -> Server<S> {
         Server {
-            config: cfg.clone(),
+            config: AtomicConfig::new(cfg.clone()),
             tls_certs: Server::<S>::load_certs(&cfg.net_config.tls_cert_path),
             tls_keys: Server::<S>::load_keys(&cfg.net_config.tls_key_path),
             msg_handler: handler,
@@ -261,7 +261,7 @@ where
             sender = SenderType::Auth(name);
         }
         let (rx, mut _tx) = split(stream);
-        let mut read_buf = vec![0u8; _server.config.rpc_config.recv_buffer_size as usize];
+        let mut read_buf = vec![0u8; _server.config.get().rpc_config.recv_buffer_size as usize];
         let mut tx_buf = BufWriter::new(_tx);
         let mut rx_buf = FrameReader::new(rx);
         let (ack_tx, mut ack_rx) = mpsc::unbounded_channel();
@@ -330,7 +330,7 @@ where
         Ok(())
     }
     pub async fn run(server: Arc<Self>, ctx: S) -> io::Result<()> {
-        let server_addr = &server.config.net_config.addr;
+        let server_addr = &server.config.get().net_config.addr;
         info!("Listening on {}", server_addr);
 
         // aws_lc_rs::default_provider() uses AES-GCM. This automatically includes a MAC.

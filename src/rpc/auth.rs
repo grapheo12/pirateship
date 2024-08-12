@@ -112,10 +112,11 @@ pub async fn handshake_client(
 ) -> Result<(), Error> {
     let nonce = stream.read_u32().await?;
     debug!("Received nonce: {}", nonce);
-    let payload = construct_payload(nonce, &client.config.net_config.name);
+    let cfg = client.config.get();
+    let payload = construct_payload(nonce, &cfg.net_config.name);
     let signature = client.key_store.sign(&payload.as_slice());
     let signature = Bytes::from(Vec::from(signature));
-    let name = client.config.net_config.name.clone();
+    let name = cfg.net_config.name.clone();
     let resp = HandshakeResponse { name, signature };
     let resp_buf = resp.serialize();
 
