@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::config::{Config, ConsensusConfig, NetConfig, NodeNetInfo, RpcConfig};
+use crate::config::{AppConfig, Config, ConsensusConfig, NetConfig, NodeNetInfo, RpcConfig};
 
 #[test]
 fn test_nodeconfig_serialize() {
@@ -42,7 +42,6 @@ fn test_nodeconfig_serialize() {
             String::from("node3"),
         ],
         quorum_diversity_k: 3,
-        stats_report_secs: 1,
         max_backlog_batch_size: 1000,
         signature_max_delay_blocks: 128,
         signature_max_delay_ms: 100,
@@ -50,10 +49,15 @@ fn test_nodeconfig_serialize() {
         view_timeout_ms: 150
     };
 
+    let app_config = AppConfig {
+        logger_stats_report_secs: 1,
+    };
+
     let config = Config {
         net_config,
         rpc_config,
         consensus_config,
+        app_config,
     };
 
     let s = config.serialize();

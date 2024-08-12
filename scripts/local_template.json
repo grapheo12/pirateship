@@ -18,12 +18,13 @@
     "consensus_config": {
         "node_list": [],
         "quorum_diversity_k": 3,
-        "stats_report_secs": 1,
         "max_backlog_batch_size": 400,
         "signature_max_delay_blocks": 1000,
         "signature_max_delay_ms": 1200000,
         "vote_processing_workers": 8,
         "view_timeout_ms": 20000
-
+    },
+    "app_config": {
+        "stats_report_secs": 1
     }
 }

@@ -101,6 +101,9 @@ pub struct ServerContext {
     pub ping_counters: std::sync::Mutex<HashMap<u64, Instant>>,
     pub keys: KeyStore,
 
+    /// The default flow for client requests is to send a reply when committed.
+    /// For Noop blocks, there is no such client waiting,
+    /// so we send the reply to a black hole.
     pub __client_black_hole_channel: (
         mpsc::UnboundedSender<(PinnedMessage, LatencyProfile)>,
         Mutex<mpsc::UnboundedReceiver<(PinnedMessage, LatencyProfile)>>,

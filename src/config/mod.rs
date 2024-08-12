@@ -39,7 +39,6 @@ pub struct RpcConfig {
 pub struct ConsensusConfig {
     pub node_list: Vec<String>, // This better be in the same order in all nodes.
     pub quorum_diversity_k: usize,
-    pub stats_report_secs: u64,
     pub max_backlog_batch_size: usize,
     pub signature_max_delay_ms: u64,
     pub view_timeout_ms: u64,
@@ -48,10 +47,16 @@ pub struct ConsensusConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    pub logger_stats_report_secs: u64,         // This is only for the logger app
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     pub net_config: NetConfig,
     pub rpc_config: RpcConfig,
     pub consensus_config: ConsensusConfig,
+    pub app_config: AppConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -122,13 +127,15 @@ impl ClientConfig {
             consensus_config: ConsensusConfig {
                 node_list: Vec::new(),
                 quorum_diversity_k: 0,
-                stats_report_secs: 1,
                 max_backlog_batch_size: 1,
                 signature_max_delay_blocks: 128,
                 signature_max_delay_ms: 100,
                 view_timeout_ms: 150,
                 vote_processing_workers: 128
             },
+            app_config: AppConfig {
+                logger_stats_report_secs: 1,
+            }
         }
     }
 }
