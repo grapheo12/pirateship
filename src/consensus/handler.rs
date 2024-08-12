@@ -16,11 +16,9 @@ use std::time::Instant;
 use tokio::{join, sync::{mpsc, Mutex, Semaphore}};
 
 use crate::{
-    config::Config,
-    crypto::KeyStore,
-    rpc::{
+    config::Config, crypto::KeyStore, rpc::{
         client::PinnedClient, server::{LatencyProfile, MsgAckChan, RespType}, MessageRef, PinnedMessage
-    },
+    }
 };
 
 use super::{

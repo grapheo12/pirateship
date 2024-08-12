@@ -1,6 +1,6 @@
-use log::{debug, info};
+use log::{debug, error, info};
 use pft::{config::{self, Config}, consensus, execution::engines::logger::PinnedLoggerEngine};
-use tokio::runtime;
+use tokio::{runtime, signal};
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
 use std::io::Write;
 
@@ -52,6 +52,16 @@ async fn run_main(cfg: Config) -> io::Result<()> {
     #[cfg(feature = "app_logger")]
     let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
     let mut handles = consensus::ConsensusNode::run(node);
+
+    match signal::ctrl_c().await {
+        Ok(_) => {
+            info!("Received SIGINT. Shutting down.");
+            handles.abort_all();
+        },
+        Err(e) => {
+            error!("Signal: {:?}", e);
+        }
+    }
 
     while let Some(res) = handles.join_next().await {
         info!("Task completed with {:?}", res);
