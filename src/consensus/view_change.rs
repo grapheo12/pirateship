@@ -241,9 +241,10 @@ where Engine: crate::execution::Engine
     do_reply_all_with_tentative_receipt(ctx).await;
 
     // Increase view
+    let _cfg = ctx.config.get();
     let view = ctx.state.view.fetch_add(1, Ordering::SeqCst) + 1; // Fetch_add returns the old val
     let leader = get_leader_str(ctx);
-    if leader == ctx.config.net_config.name {
+    if leader == _cfg.net_config.name {
         // I am the leader
         ctx.i_am_leader.store(true, Ordering::SeqCst);
     }else{
@@ -277,7 +278,7 @@ where Engine: crate::execution::Engine
     sign_view_change_msg(&mut vc_msg, &ctx.keys, &fork);
 
 
-    if leader == ctx.config.net_config.name {
+    if leader == _cfg.net_config.name {
         // I won't send the message to myself.
         // @todo: Pacemaker: broadcast this
         drop(fork);
@@ -285,7 +286,7 @@ where Engine: crate::execution::Engine
             ctx.clone(), engine,
             client.clone(),
             &vc_msg,
-            &ctx.config.net_config.name,
+            &_cfg.net_config.name,
             super_majority,
         )
         .await;
@@ -324,6 +325,7 @@ pub async fn do_process_view_change<Engine>(
     super_majority: u64,
 ) where Engine: crate::execution::Engine
 {
+    let _cfg = ctx.config.get();
     if vc.view < ctx.state.view.load(Ordering::SeqCst)
         || (vc.view == ctx.state.view.load(Ordering::SeqCst)
             && ctx.view_is_stable.load(Ordering::SeqCst))
@@ -335,7 +337,7 @@ pub async fn do_process_view_change<Engine>(
         return;
     }
 
-    if !ctx.config.net_config.name
+    if !_cfg.net_config.name
         .eq(&get_leader_str_for_view(&ctx, vc.view))
     {
         // I am not the leader for this message's intended view
@@ -398,11 +400,13 @@ pub async fn do_init_new_leader<Engine>(
     super_majority: u64,
 ) where Engine: crate::execution::Engine
 {
+    let _cfg = ctx.config.get();
+
     if ctx.state.view.load(Ordering::SeqCst) > view
         || (ctx.state.view.load(Ordering::SeqCst) == view
             && ctx.view_is_stable.load(Ordering::SeqCst))
         || fork_set.len() < super_majority as usize
-        || ctx.config.net_config.name != get_leader_str_for_view(&ctx, view)
+        || _cfg.net_config.name != get_leader_str_for_view(&ctx, view)
     {
         // Precondition check
         return;
@@ -420,7 +424,7 @@ pub async fn do_init_new_leader<Engine>(
     let mut profile = LatencyProfile::new();
 
     // Choose fork
-    let (mut chosen_fork, chosen_fork_stat) = fork_choice_rule_get(&fork_set, &ctx.config.net_config.name);
+    let (mut chosen_fork, chosen_fork_stat) = fork_choice_rule_get(&fork_set, &_cfg.net_config.name);
     // Backfill the fork, such that the overwrite doesn't fail.
     profile.register("Fork Choice Rule done");
     
@@ -444,7 +448,7 @@ pub async fn do_init_new_leader<Engine>(
     //     chosen_fork = maybe_backfill_fork(&ctx, &client, &chosen_fork, &fork, &chosen_fork_stat.name).await;
     // }
     
-    let (last_n, last_hash) = if chosen_fork_stat.name != ctx.config.net_config.name {
+    let (last_n, last_hash) = if chosen_fork_stat.name != _cfg.net_config.name {
         if chosen_fork.blocks.len() == 0 {
             // No blocks in the chosen fork.
             let last_n = fork.last();
@@ -556,8 +560,8 @@ pub async fn do_init_new_leader<Engine>(
     profile.register("AE creation done");
 
     let send_list = get_everyone_except_me(
-        &ctx.config.net_config.name,
-        &ctx.config.consensus_config.node_list,
+        &_cfg.net_config.name,
+        &_cfg.consensus_config.node_list,
     );
 
     let block_n = ae.fork.as_ref().unwrap().blocks.len();
@@ -577,7 +581,7 @@ pub async fn do_init_new_leader<Engine>(
     do_process_vote(
         ctx.clone(), engine,
         &my_vote,
-        &ctx.config.net_config.name,
+        &_cfg.net_config.name,
         super_majority, // Forcing to wait for 2f + 1
         super_majority,
     )
@@ -607,7 +611,7 @@ async fn force_noop(ctx: &PinnedServerContext) {
             ctx.should_progress.add_permits(1);
         }
     }
-
+    let _cfg = ctx.config.get();
     let client_tx = ctx.client_queue.0.clone();
     
     let client_req = ProtoClientRequest {
@@ -618,13 +622,13 @@ async fn force_noop(ctx: &PinnedServerContext) {
         }),
         // sig: vec![0u8; SIGNATURE_LENGTH],
         sig: vec![0u8; 1],
-        origin: ctx.config.net_config.name.clone(),
+        origin: _cfg.net_config.name.clone(),
     };
 
     let request = crate::proto::rpc::proto_payload::Message::ClientRequest(client_req);
     let profile = LatencyProfile::new();
 
-    let _ = client_tx.send((request, ctx.config.net_config.name.clone(), ctx.__client_black_hole_channel.0.clone(), profile));
+    let _ = client_tx.send((request, _cfg.net_config.name.clone(), ctx.__client_black_hole_channel.0.clone(), profile));
 
     
 }

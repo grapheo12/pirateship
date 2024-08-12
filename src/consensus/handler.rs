@@ -16,7 +16,7 @@ use std::time::Instant;
 use tokio::{join, sync::{mpsc, Mutex, Semaphore}};
 
 use crate::{
-    config::Config, crypto::KeyStore, rpc::{
+    config::{AtomicConfig, Config}, crypto::KeyStore, rpc::{
         client::PinnedClient, server::{LatencyProfile, MsgAckChan, RespType}, MessageRef, PinnedMessage
     }
 };
@@ -78,7 +78,7 @@ pub type ForwardedMessageWithAckChan = (
 );
 
 pub struct ServerContext {
-    pub config: Config,
+    pub config: AtomicConfig,
     pub i_am_leader: AtomicBool,
     pub view_is_stable: AtomicBool,
     pub node_queue: (
@@ -123,7 +123,7 @@ impl PinnedServerContext {
         let black_hole_ch = mpsc::unbounded_channel();
 
         PinnedServerContext(Arc::new(Box::pin(ServerContext {
-            config: cfg.clone(),
+            config: AtomicConfig::new(cfg.clone()),
             i_am_leader: AtomicBool::new(false),
 
             #[cfg(feature = "view_change")]
@@ -312,16 +312,17 @@ where
 
     let majority = get_majority_num(&ctx);
     let super_majority = get_super_majority_num(&ctx);
+    let cfg = ctx.config.get();
     let send_list = get_everyone_except_me(
-        &ctx.config.net_config.name,
-        &ctx.config.consensus_config.node_list,
+        &cfg.net_config.name,
+        &cfg.consensus_config.node_list,
     );
 
     // Signed block logic: Either this timer expires.
     // Or the number of blocks crosses signature_max_delay_blocks.
     // In the later case, reset the timer.
     let signature_timer = ResettableTimer::new(Duration::from_millis(
-        ctx.config.consensus_config.signature_max_delay_ms,
+        cfg.consensus_config.signature_max_delay_ms,
     ));
 
     let signature_timer_handle = signature_timer.run().await;
@@ -337,9 +338,10 @@ where
 
 
     loop {
+        let cfg = ctx.config.get();
         tokio::select! {
             biased;
-            n_ = client_rx.recv_many(&mut curr_client_req, ctx.config.consensus_config.max_backlog_batch_size) => {
+            n_ = client_rx.recv_many(&mut curr_client_req, cfg.consensus_config.max_backlog_batch_size) => {
                 curr_client_req_num = n_;
             },
             tick = signature_timer.wait() => {
@@ -376,7 +378,7 @@ where
 
         // @todo: Reply to read requests (even when I am not the leader).
 
-        
+        let cfg = ctx.config.get();
         // Ok I am the leader.
         pending_signatures += 1;
         #[cfg(feature = "always_sign")]
@@ -385,7 +387,7 @@ where
         let mut should_sig = false;
         #[cfg(feature = "dynamic_sign")]
         let mut should_sig = signature_timer_tick    // Either I am running this body because of signature timeout.
-            || (pending_signatures >= ctx.config.consensus_config.signature_max_delay_blocks);
+            || (pending_signatures >= cfg.consensus_config.signature_max_delay_blocks);
         // Or I actually got some transactions and I really need to sign
 
         // Semaphore will be released in `do_commit` when a commit happens.
@@ -437,7 +439,8 @@ pub async fn handle_node_messages<Engine>(
     // This thread will also act as one.
     let mut vote_worker_chans = Vec::new();
     let mut vote_worker_rr_cnt = 1u16;
-    for _ in 1..ctx.config.consensus_config.vote_processing_workers {
+    let cfg = ctx.config.get();
+    for _ in 1..cfg.consensus_config.vote_processing_workers {
         // 0th index is for this thread
         let (tx, mut rx) = mpsc::unbounded_channel();
         vote_worker_chans.push(tx);
@@ -458,9 +461,10 @@ pub async fn handle_node_messages<Engine>(
     }
 
     let mut node_rx = ctx.0.node_queue.1.lock().await;
+    let cfg = ctx.config.get();
     let send_list = get_everyone_except_me(
-        &ctx.config.net_config.name,
-        &ctx.config.consensus_config.node_list,
+        &cfg.net_config.name,
+        &cfg.consensus_config.node_list,
     );
 
     debug!(
@@ -512,8 +516,9 @@ pub async fn handle_node_messages<Engine>(
             // AppendEntries should be processed by a single thread.
             // Only votes can be safely processed by multiple threads.
             if let crate::proto::rpc::proto_payload::Message::Vote(_) = req.0 {
+                let cfg = ctx.config.get();
                 let rr_cnt =
-                    vote_worker_rr_cnt % ctx.config.consensus_config.vote_processing_workers;
+                    vote_worker_rr_cnt % cfg.consensus_config.vote_processing_workers;
                 vote_worker_rr_cnt += 1;
                 if rr_cnt == 0 {
                     // Let this thread process it.

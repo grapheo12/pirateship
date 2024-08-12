@@ -20,15 +20,17 @@ pub fn get_leader_str(ctx: &PinnedServerContext) -> String {
 }
 
 pub fn get_leader_str_for_view(ctx: &PinnedServerContext, view: u64) -> String {
-    ctx.config.consensus_config.node_list
-        [get_current_leader(ctx.config.consensus_config.node_list.len() as u64, view)]
+    let _cfg = ctx.config.get();
+    _cfg.consensus_config.node_list
+        [get_current_leader(_cfg.consensus_config.node_list.len() as u64, view)]
     .clone()
 }
 
 pub fn get_node_num(ctx: &PinnedServerContext) -> u64 {
+    let _cfg = ctx.config.get();
     let mut i = 0;
-    for name in &ctx.config.consensus_config.node_list {
-        if name.eq(&ctx.config.net_config.name) {
+    for name in &_cfg.consensus_config.node_list {
+        if name.eq(&_cfg.net_config.name) {
             return i;
         }
         i += 1;
@@ -38,12 +40,14 @@ pub fn get_node_num(ctx: &PinnedServerContext) -> u64 {
 }
 
 pub fn get_majority_num(ctx: &PinnedServerContext) -> u64 {
-    let n = ctx.config.consensus_config.node_list.len() as u64;
+    let _cfg = ctx.config.get();
+    let n = _cfg.consensus_config.node_list.len() as u64;
     n / 2 + 1
 }
 
 pub fn get_super_majority_num(ctx: &PinnedServerContext) -> u64 {
-    let n = ctx.config.consensus_config.node_list.len() as u64;
+    let _cfg = ctx.config.get();
+    let n = _cfg.consensus_config.node_list.len() as u64;
     2 * (n / 3) + 1
 }
 

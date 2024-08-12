@@ -31,6 +31,7 @@ pub async fn create_vote_for_blocks(
 ) -> Result<ProtoVote, Error> {
     // let mut fork = ctx.state.fork.lock().await;
     let fork = ctx.state.fork.try_lock();
+    let _cfg = ctx.config.get();
     let mut fork = if let Err(e) = fork {
         debug!("create_vote_for_blocks: Fork is locked, waiting for it to be unlocked: {}", e);
         let fork = ctx.state.fork.lock().await;
@@ -65,7 +66,7 @@ pub async fn create_vote_for_blocks(
                 let sig = fork.signature_at_n(n, &ctx.keys).to_vec();
     
                 // This is just caching the signature.
-                fork.inc_qc_sig_unverified(&ctx.config.net_config.name, &sig, n)?;
+                fork.inc_qc_sig_unverified(&_cfg.net_config.name, &sig, n)?;
     
                 // Add the block to byz_qc_pending,
                 // along with all other blocks for which I have sent signature before,
@@ -74,7 +75,7 @@ pub async fn create_vote_for_blocks(
             }
         }
 
-        fork.inc_replication_vote(&ctx.config.net_config.name, n)?;
+        fork.inc_replication_vote(&_cfg.net_config.name, n)?;
     }
 
     // Resend signatures for QCs I did not get yet.
@@ -87,7 +88,7 @@ pub async fn create_vote_for_blocks(
                 if *n > fork.last() {
                     continue;
                 }
-                if let Some(sig) = fork.get(*n)?.qc_sigs.get(&ctx.config.net_config.name) {
+                if let Some(sig) = fork.get(*n)?.qc_sigs.get(&_cfg.net_config.name) {
                     vote_sigs.push(ProtoSignatureArrayEntry {
                         n: *n,
                         sig: sig.to_vec(),
@@ -148,6 +149,7 @@ pub async fn do_process_vote<Engine>(
 where Engine: crate::execution::Engine
 {
     // let mut fork = ctx.state.fork.lock().await;
+    let _cfg = ctx.config.get();
     let fork = ctx.state.fork.try_lock();
     let mut fork = if let Err(e) = fork {
         debug!("do_process_vote: Fork is locked, waiting for it to be unlocked: {}", e);
@@ -252,7 +254,7 @@ where Engine: crate::execution::Engine
             let k = 1;
 
             #[cfg(feature = "quorum_diversity")]
-            let k = ctx.config.consensus_config.quorum_diversity_k;
+            let k = _cfg.consensus_config.quorum_diversity_k;
 
             if byz_qc_pending.contains(&i)
                 && byz_qc_pending.len() >= k
@@ -309,6 +311,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
 ) where Engine: crate::execution::Engine
 {
     // let mut fork = ctx.state.fork.lock().await;
+    let _cfg = ctx.config.get();
     let fork = ctx.state.fork.try_lock();
     let mut fork = if let Err(e) = fork {
         debug!("do_push_append_entries_to_fork: Fork is locked, waiting for it to be unlocked: {}", e);
@@ -330,7 +333,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
         return (last_n, last_n, seq_nums, false);
     }else if ae.view > ctx.state.view.load(Ordering::SeqCst) {
         ctx.state.view.store(ae.view, Ordering::SeqCst);
-        if get_leader_str(&ctx) == ctx.config.net_config.name {
+        if get_leader_str(&ctx) == _cfg.net_config.name {
             ctx.i_am_leader.store(true, Ordering::SeqCst);
             // Don't think this can happen again.
         }else{
@@ -471,6 +474,7 @@ pub async fn create_and_push_block<Engine>(
 where Engine: crate::execution::Engine
 {
     let fork = ctx.state.fork.try_lock();
+    let _cfg = ctx.config.get();
     let mut fork = match fork {
         Ok(f) => {
             debug!("create_and_push_block: Fork locked");
@@ -504,7 +508,7 @@ where Engine: crate::execution::Engine
     let __view = ctx.state.view.load(Ordering::SeqCst);
     let __view_is_stable = ctx.view_is_stable.load(Ordering::SeqCst);
 
-    if get_leader_str_for_view(&ctx, __view) != ctx.config.net_config.name {
+    if get_leader_str_for_view(&ctx, __view) != _cfg.net_config.name {
         warn!("I am not the leader for view {}", __view);
         return Err(Error::new(ErrorKind::Other, "Not the leader"));
     }
@@ -627,6 +631,7 @@ pub async fn do_append_entries<Engine>(
 where Engine: crate::execution::Engine
 {
     // Create the block, holding a lock on the fork state.
+    let _cfg = ctx.config.get();
     let (ae, profile) = create_and_push_block(ctx.clone(), engine, reqs, should_sign).await?;
 
     // Add this block to byz_qc_pending, if it is a signed block
@@ -645,7 +650,7 @@ where Engine: crate::execution::Engine
     do_process_vote(
         ctx.clone(), engine,
         &my_vote,
-        &ctx.config.net_config.name,
+        &_cfg.net_config.name,
         majority,
         super_majority,
     )
