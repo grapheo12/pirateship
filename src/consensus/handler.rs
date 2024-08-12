@@ -16,7 +16,7 @@ use std::time::Instant;
 use tokio::{join, sync::{mpsc, Mutex, Semaphore}};
 
 use crate::{
-    config::{AtomicConfig, Config}, crypto::KeyStore, rpc::{
+    config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, rpc::{
         client::PinnedClient, server::{LatencyProfile, MsgAckChan, RespType}, MessageRef, PinnedMessage
     }
 };
@@ -97,7 +97,7 @@ pub struct ServerContext {
         >,
     >,
     pub ping_counters: std::sync::Mutex<HashMap<u64, Instant>>,
-    pub keys: KeyStore,
+    pub keys: AtomicKeyStore,
 
     /// The default flow for client requests is to send a reply when committed.
     /// For Noop blocks, there is no such client waiting,
@@ -136,7 +136,7 @@ impl PinnedServerContext {
             state: ConsensusState::new(),
             client_ack_pending: Mutex::new(HashMap::new()),
             ping_counters: std::sync::Mutex::new(HashMap::new()),
-            keys: keys.clone(),
+            keys: AtomicKeyStore::new(keys.clone()),
             __client_black_hole_channel: (black_hole_ch.0, Mutex::new(black_hole_ch.1)),
             view_timer: ResettableTimer::new(Duration::from_millis(cfg.consensus_config.view_timeout_ms)),
             total_client_requests: AtomicUsize::new(0),

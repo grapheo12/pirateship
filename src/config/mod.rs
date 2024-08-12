@@ -11,6 +11,8 @@ mod tests;
 mod log4rs;
 pub use log4rs::*;
 
+use crate::utils::AtomicStruct;
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct NodeNetInfo {
     pub addr: String,
@@ -141,29 +143,4 @@ impl ClientConfig {
     }
 }
 
-pub struct AtomicConfig(pub Arc<AtomicCell<Arc<Box<Config>>>>);
-
-impl AtomicConfig {
-    pub fn new(config: Config) -> Self {
-        AtomicConfig(Arc::new(AtomicCell::new(Arc::new(Box::new(config)))))
-    }
-
-    pub fn get(&self) -> Arc<Box<Config>> {
-        let ptr = self.0.as_ptr();
-        unsafe{ ptr.as_ref().unwrap() }.clone()
-    }
-
-    pub fn set(&self, config: Box<Config>) {
-        self.0.store(Arc::new(config));
-    }
-
-    pub fn is_lock_free() -> bool {
-        AtomicCell::<Arc<Box<Config>>>::is_lock_free()
-    }
-}
-
-impl Clone for AtomicConfig {
-    fn clone(&self) -> Self {
-        AtomicConfig(self.0.clone())
-    }
-}
+pub type AtomicConfig = AtomicStruct<Config>;

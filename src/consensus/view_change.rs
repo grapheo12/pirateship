@@ -242,6 +242,8 @@ where Engine: crate::execution::Engine
 
     // Increase view
     let _cfg = ctx.config.get();
+    let _keys = ctx.keys.get();
+
     let view = ctx.state.view.fetch_add(1, Ordering::SeqCst) + 1; // Fetch_add returns the old val
     let leader = get_leader_str(ctx);
     if leader == _cfg.net_config.name {
@@ -275,7 +277,7 @@ where Engine: crate::execution::Engine
         },
     };
 
-    sign_view_change_msg(&mut vc_msg, &ctx.keys, &fork);
+    sign_view_change_msg(&mut vc_msg, &_keys, &fork);
 
 
     if leader == _cfg.net_config.name {
@@ -326,6 +328,8 @@ pub async fn do_process_view_change<Engine>(
 ) where Engine: crate::execution::Engine
 {
     let _cfg = ctx.config.get();
+    let _keys = ctx.keys.get();
+
     if vc.view < ctx.state.view.load(Ordering::SeqCst)
         || (vc.view == ctx.state.view.load(Ordering::SeqCst)
             && ctx.view_is_stable.load(Ordering::SeqCst))
@@ -346,7 +350,7 @@ pub async fn do_process_view_change<Engine>(
     }
 
     // Check the signature on the fork.
-    if !verify_view_change_msg(vc, &ctx.keys, sender) {
+    if !verify_view_change_msg(vc, &_keys, sender) {
         return;
     } 
 
@@ -401,6 +405,7 @@ pub async fn do_init_new_leader<Engine>(
 ) where Engine: crate::execution::Engine
 {
     let _cfg = ctx.config.get();
+    let _keys = ctx.keys.get();
 
     if ctx.state.view.load(Ordering::SeqCst) > view
         || (ctx.state.view.load(Ordering::SeqCst) == view
@@ -538,7 +543,7 @@ pub async fn do_init_new_leader<Engine>(
     profile.register("Block creation done!");
     let entry = LogEntry::new(block);
 
-    match fork.push_and_sign(entry, &ctx.keys) {
+    match fork.push_and_sign(entry, &_keys) {
         Ok(_) => {}
         Err(e) => {
             error!("Error pushing block: {}", e);
@@ -642,6 +647,7 @@ async fn force_noop(ctx: &PinnedServerContext) {
 pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &ProtoFork, super_majority: u64) -> Result<(ProtoFork, ProtoFork), Error> {
     let mut i = (f.blocks.len() - 1) as i64;
     let mut split_point = None;
+    let _keys = ctx.keys.get();
 
     while i >= 0 {
         if !f.blocks[i as usize].view_is_stable {
@@ -662,7 +668,7 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
                     &fork_validation.fork_hash,
                     fork_validation.view,
                     fork_validation.fork_len, last_qc,
-                    &fork_validation.fork_sig, &ctx.keys,
+                    &fork_validation.fork_sig, &_keys,
                     &fork_validation.name
                 );
                 if !chk {

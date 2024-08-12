@@ -2,13 +2,17 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{BufRead, BufReader, Read},
-    path,
+    path, sync::Arc,
 };
 
+use crossbeam::atomic::AtomicCell;
 use ed25519_dalek::{
     pkcs8::{DecodePrivateKey, DecodePublicKey},
     Signature, Signer, SigningKey, Verifier, VerifyingKey, SECRET_KEY_LENGTH, SIGNATURE_LENGTH,
 };
+use rustls::crypto::hmac::Key;
+
+use crate::utils::AtomicStruct;
 
 /// KeyStore is an immutable struct.
 /// It is initiated when called new.
@@ -114,3 +118,5 @@ impl KeyStore {
         key.verify(data, &Signature::from_bytes(sig)).is_ok()
     }
 }
+
+pub type AtomicKeyStore = AtomicStruct<KeyStore>;

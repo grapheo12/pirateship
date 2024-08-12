@@ -1,4 +1,4 @@
-use super::KeyStore;
+use super::{AtomicKeyStore, KeyStore};
 
 /// The tests needs a config directory.
 /// Create it by running: sh scripts/gen_local_config.sh configs 7 scripts/local_template.json
@@ -31,5 +31,12 @@ pub fn test_sign_and_verify() {
 
     if keys.verify(&String::from("node1"), &sig, message.as_bytes()) {
         panic!("I should not verify a forged signature!");
+    }
+}
+
+#[test]
+fn test_lock_free() {
+    if !AtomicKeyStore::is_lock_free() {
+        panic!("KeyStore is not lock free");
     }
 }

@@ -63,7 +63,7 @@ pub async fn create_vote_for_blocks(
         {
             if fork.get(n)?.has_signature() {
                 atleast_one_sig_block = true;
-                let sig = fork.signature_at_n(n, &ctx.keys).to_vec();
+                let sig = fork.signature_at_n(n, &ctx.keys.get()).to_vec();
     
                 // This is just caching the signature.
                 fork.inc_qc_sig_unverified(&_cfg.net_config.name, &sig, n)?;
@@ -150,6 +150,7 @@ where Engine: crate::execution::Engine
 {
     // let mut fork = ctx.state.fork.lock().await;
     let _cfg = ctx.config.get();
+    let _keys = ctx.keys.get();
     let fork = ctx.state.fork.try_lock();
     let mut fork = if let Err(e) = fork {
         debug!("do_process_vote: Fork is locked, waiting for it to be unlocked: {}", e);
@@ -190,7 +191,7 @@ where Engine: crate::execution::Engine
             continue;
         }
         // Try to increase the signature after verifying against my own fork.
-        match fork.inc_qc_sig(sender, &vote_sig.sig, vote_sig.n, &ctx.keys) {
+        match fork.inc_qc_sig(sender, &vote_sig.sig, vote_sig.n, &_keys) {
             Ok(total_sigs) => {
                 if total_sigs >= super_majority {
                     qcs.push(vote_sig.n);
@@ -312,6 +313,8 @@ pub async fn do_push_append_entries_to_fork<Engine>(
 {
     // let mut fork = ctx.state.fork.lock().await;
     let _cfg = ctx.config.get();
+    let _keys = ctx.keys.get();
+
     let fork = ctx.state.fork.try_lock();
     let mut fork = if let Err(e) = fork {
         debug!("do_push_append_entries_to_fork: Fork is locked, waiting for it to be unlocked: {}", e);
@@ -397,7 +400,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
             let entry = LogEntry::new(b.clone());
 
             let res = if entry.has_signature() {
-                fork.verify_and_push(entry, &ctx.keys, &get_leader_str_for_view(&ctx, b.view))
+                fork.verify_and_push(entry, &_keys, &get_leader_str_for_view(&ctx, b.view))
             } else {
                 fork.push(entry)
             };
@@ -473,8 +476,10 @@ pub async fn create_and_push_block<Engine>(
 ) -> Result<(ProtoAppendEntries, LatencyProfile), Error>
 where Engine: crate::execution::Engine
 {
-    let fork = ctx.state.fork.try_lock();
     let _cfg = ctx.config.get();
+    let _keys = ctx.keys.get();
+
+    let fork = ctx.state.fork.try_lock();
     let mut fork = match fork {
         Ok(f) => {
             debug!("create_and_push_block: Fork locked");
@@ -535,7 +540,7 @@ where Engine: crate::execution::Engine
     let __qc_trace: Vec<(u64, u64)> = entry.block.qc.iter().map(|x| (x.n, x.view)).collect();
 
     let res = match should_sign {
-        true => fork.push_and_sign(entry, &ctx.keys),
+        true => fork.push_and_sign(entry, &_keys),
         false => fork.push(entry),
     };
 
