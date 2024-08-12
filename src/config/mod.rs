@@ -41,6 +41,7 @@ pub struct RpcConfig {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ConsensusConfig {
     pub node_list: Vec<String>, // This better be in the same order in all nodes.
+    pub learner_list: Vec<String>,
     pub quorum_diversity_k: usize,
     pub max_backlog_batch_size: usize,
     pub signature_max_delay_ms: u64,
@@ -129,6 +130,7 @@ impl ClientConfig {
             },
             consensus_config: ConsensusConfig {
                 node_list: Vec::new(),
+                learner_list: Vec::new(),
                 quorum_diversity_k: 0,
                 max_backlog_batch_size: 1,
                 signature_max_delay_blocks: 128,

@@ -10,9 +10,9 @@ enum ProtoTransactionOpType {
 
     // For reconfiguration
     ADD_LEARNER = 3;
-    ADD_FULL_NODE = 4;
+    UPGRADE_FULL_NODE = 4;
     DEL_LEARNER = 5;
-    DEL_FULL_NODE = 6;
+    DOWNGRADE_FULL_NODE = 6;
 }
 
 message ProtoTransactionOp {
