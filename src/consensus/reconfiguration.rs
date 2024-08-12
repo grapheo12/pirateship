@@ -231,60 +231,78 @@ fn is_valid_reconfiguration(ctx: &PinnedServerContext, to_upgrade: &Vec<String>,
     true
 }
 
-pub async fn handle_reconfiguration_transaction(ctx: PinnedServerContext, tx: ProtoTransaction) -> Result<(), Error>{
+/// `on_byz_commit` controls whether to execute the byz_commit phase or the crash_commit phase
+/// Returns true if there was some configuration change.#
+/// Otherwise, returns false.
+pub fn maybe_execute_reconfiguration_transaction(ctx: &PinnedServerContext, tx: &ProtoTransaction, on_byz_commit: bool) -> Result<bool, Error>{
     // Sanity check: Cannot be both on_crash_commit and on_byz_commit
     if tx.on_crash_commit.is_some() && tx.on_byzantine_commit.is_some() {
         return Err(Error::new(std::io::ErrorKind::InvalidData, "Cannot be both on_crash_commit and on_byz_commit"));
     }
 
-    if let Some(phase) = tx.on_crash_commit {
-        let mut to_add = Vec::new();
-        let mut to_remove = Vec::new();
+    let mut ret = false;
 
-        for op in phase.ops {
-            match op.op_type() {
-                crate::proto::execution::ProtoTransactionOpType::AddLearner => {
-                    let learner_info = parse_add_learner(&op)?;
-                    to_add.push(learner_info);
-                },
-                crate::proto::execution::ProtoTransactionOpType::DelLearner => {
-                    let name = parse_del_learner(&op)?;
-                    to_remove.push(name);
-                },
-                _ => { /* skip */ },
+    if !on_byz_commit {
+        if let Some(phase) = &tx.on_crash_commit {
+            let mut to_add = Vec::new();
+            let mut to_remove = Vec::new();
+    
+            for op in &phase.ops {
+                match op.op_type() {
+                    crate::proto::execution::ProtoTransactionOpType::AddLearner => {
+                        let learner_info = parse_add_learner(&op)?;
+                        to_add.push(learner_info);
+                    },
+                    crate::proto::execution::ProtoTransactionOpType::DelLearner => {
+                        let name = parse_del_learner(&op)?;
+                        to_remove.push(name);
+                    },
+                    _ => { /* skip */ },
+                }
             }
-        }
 
-        do_add_learners(&ctx, &to_add);
-        do_delete_learners(&ctx, &to_remove);
+            if to_add.len() > 0 || to_remove.len() > 0 {
+                ret = true;
+            }
+    
+            do_add_learners(ctx, &to_add);
+            do_delete_learners(ctx, &to_remove);
+        }
+    } else {
+
+        if let Some(phase) = &tx.on_byzantine_commit {
+            let mut to_upgrade = Vec::new();
+            let mut to_downgrade = Vec::new();
+    
+            for op in &phase.ops {
+                match op.op_type() {
+                    crate::proto::execution::ProtoTransactionOpType::UpgradeFullNode => {
+                        let name = parse_full_node_op(&op)?;
+                        to_upgrade.push(name);
+                    },
+                    crate::proto::execution::ProtoTransactionOpType::DowngradeFullNode => {
+                        let name = parse_full_node_op(&op)?;
+                        to_downgrade.push(name);
+                    },
+                    _ => { /* skip */ },
+                }
+            }
+    
+            
+            if !is_valid_reconfiguration(&ctx, &to_upgrade, &to_downgrade) {
+                return Err(Error::new(std::io::ErrorKind::InvalidData, "Invalid reconfiguration"));
+            }
+
+            if to_upgrade.len() > 0 || to_downgrade.len() > 0 {
+                ret = true;
+            }
+
+            do_upgrade_learners_to_node(ctx, &to_upgrade);
+            do_downgrade_nodes_to_learner(ctx, &to_downgrade);
+        }
     }
 
-    if let Some(phase) = tx.on_byzantine_commit {
-        let mut to_upgrade = Vec::new();
-        let mut to_downgrade = Vec::new();
-
-        for op in phase.ops {
-            match op.op_type() {
-                crate::proto::execution::ProtoTransactionOpType::UpgradeFullNode => {
-                    let name = parse_full_node_op(&op)?;
-                    to_upgrade.push(name);
-                },
-                crate::proto::execution::ProtoTransactionOpType::DowngradeFullNode => {
-                    let name = parse_full_node_op(&op)?;
-                    to_downgrade.push(name);
-                },
-                _ => { /* skip */ },
-            }
-        }
-
-        
-        if !is_valid_reconfiguration(&ctx, &to_upgrade, &to_downgrade) {
-            return Err(Error::new(std::io::ErrorKind::InvalidData, "Invalid reconfiguration"));
-        }
-        do_upgrade_learners_to_node(&ctx, &to_upgrade);
-        do_downgrade_nodes_to_learner(&ctx, &to_downgrade);
-    }
 
 
-    Ok(())
+    Ok(ret)
 }

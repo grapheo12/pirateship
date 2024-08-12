@@ -1,5 +1,5 @@
 use hex::ToHex;
-use log::{debug, error, trace, warn};
+use log::{debug, error, info, trace, warn};
 use prost::Message;
 use std::{
     collections::HashMap, sync::atomic::Ordering
@@ -8,7 +8,7 @@ use tokio::sync::MutexGuard;
 
 use crate::{
     consensus::{
-        handler::PinnedServerContext, log::Log
+        handler::PinnedServerContext, log::Log, reconfiguration::maybe_execute_reconfiguration_transaction
     }, crypto::hash,
     proto::{
         client::{
@@ -75,7 +75,8 @@ where Engine: crate::execution::Engine
     }
 
     let block_qcs = &fork.get(n).unwrap().block.qc;
-    let mut updated_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+    let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+    let mut updated_bci = old_bci;
     if block_qcs.len() == 0 && updated_bci > 0 {
         trace!("Invariant violation: No QC found!");
         return false;
@@ -85,12 +86,11 @@ where Engine: crate::execution::Engine
             updated_bci = qc.n;
         }
     }
-
-    if updated_bci > ctx.state.byz_commit_index.load(Ordering::SeqCst) {
+    if updated_bci > old_bci {
         
         trace!(
             "Updating byzantine_commit_index {} --> {}",
-            ctx.state.byz_commit_index.load(Ordering::SeqCst),
+            old_bci,
             updated_bci
         );
 
@@ -98,9 +98,31 @@ where Engine: crate::execution::Engine
             error!("Invariant violation: Byzantine commit index {} higher than fork.last() = {}", updated_bci, fork.last());
         }
         ctx.state.byz_commit_index.store(updated_bci, Ordering::SeqCst);
-        engine.signal_byzantine_commit(updated_bci);
-
         do_commit(ctx, engine, fork, lack_pend, updated_bci);
+        
+        engine.signal_byzantine_commit(updated_bci);
+        for bn in (old_bci + 1)..(updated_bci + 1) {
+            let entry = fork.get(bn).unwrap();
+            for _tx in &entry.block.tx {
+                if !_tx.is_reconfiguration {
+                    continue;
+                }
+                match maybe_execute_reconfiguration_transaction(ctx, _tx, true) {
+                    Ok(did_reconf) => {
+                        if did_reconf {
+                            info!("Reconfiguration transaction executed successfully!");
+                            // @todo: Increase config number.
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Error executing reconfiguration transaction: {:?}", e);
+                    }
+                }
+            }
+        }
+
+
+
     }
 
     true
@@ -147,6 +169,25 @@ pub fn do_commit<Engine>(
 
     ctx.state.commit_index.store(n, Ordering::SeqCst);
     engine.signal_crash_commit(n);
+
+    for bn in (ci + 1)..(n + 1) {
+        let entry = fork.get(bn).unwrap();
+        for _tx in &entry.block.tx {
+            if !_tx.is_reconfiguration {
+                continue;
+            }
+            match maybe_execute_reconfiguration_transaction(ctx, _tx, false) {
+                Ok(did_reconf) => {
+                    if did_reconf {
+                        info!("Reconfiguration transaction executed successfully!");
+                    }
+                }
+                Err(e) => {
+                    warn!("Error executing reconfiguration transaction: {:?}", e);
+                }
+            }
+        } 
+    }
 
     #[cfg(feature = "no_pipeline")]
     ctx.should_progress.add_permits(1);

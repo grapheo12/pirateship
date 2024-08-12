@@ -624,6 +624,7 @@ async fn force_noop(ctx: &PinnedServerContext) {
             on_receive: None,
             on_crash_commit: None,
             on_byzantine_commit: None,
+            is_reconfiguration: false,
         }),
         // sig: vec![0u8; SIGNATURE_LENGTH],
         sig: vec![0u8; 1],

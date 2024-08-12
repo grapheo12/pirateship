@@ -65,6 +65,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
                 // }),
                 on_crash_commit: None,
                 on_byzantine_commit: None,
+                is_reconfiguration: false,
             }),
             // tx: None,
             origin: config.net_config.name.clone(),

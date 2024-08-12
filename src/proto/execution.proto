@@ -28,6 +28,7 @@ message ProtoTransaction {
     ProtoTransactionPhase on_receive = 1;
     ProtoTransactionPhase on_crash_commit = 2;
     ProtoTransactionPhase on_byzantine_commit = 3;
+    bool is_reconfiguration = 4;
 }
 
 message ProtoTransactionOpResult {
