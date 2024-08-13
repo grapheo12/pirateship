@@ -17,8 +17,8 @@ def parse_reconfiguration_trace(trace_file) -> List[Tuple[int, List[List[str]]]]
 
     Example:
     ```
-    1 ADD_LEARNER node5 10.2.0.7:3005 node5.pft.org
-    1 ADD_LEARNER node6 10.2.0.7:3006 node6.pft.org
+    1 ADD_LEARNER node5 10.2.0.7:3005 node5.pft.org MCowgjksngjkngfsgn...(Public key PEM)
+    1 ADD_LEARNER node6 10.2.0.7:3006 node6.pft.org MCowgjksngjkngfsgn...(Public key PEM)
     2 UPGRADE_FULL_NODE node5
     5 DOWNGRADE_FULL_NODE node3
     10 DEL_LEARNER node3
@@ -36,8 +36,8 @@ def parse_reconfiguration_trace(trace_file) -> List[Tuple[int, List[List[str]]]]
             raise Exception(f"Unknown command {parts[1]}")
         cmd.append(parts[1])
         if parts[1] == "ADD_LEARNER":
-            if len(parts) != 5:
-                raise Exception(f"ADD_LEARNER should have 3 operands")
+            if len(parts) != 6:
+                raise Exception(f"ADD_LEARNER should have 4 operands")
         elif parts[1] != "END":
             if len(parts) != 3:
                 raise Exception(f"{parts[1]} should have 1 operand")
@@ -55,7 +55,7 @@ def parse_reconfiguration_trace(trace_file) -> List[Tuple[int, List[List[str]]]]
 
 def run_controller(conn: Connection, wd: str, cmd: str, repeat_num: int, log_num: int):
     prom = conn.run(f"cd pft/{wd} && ./target/release/controller configs/controller{CONFIG_SUFFIX} {cmd} > logs/{repeat_num}/controller_cmd{log_num}.log 2> logs/{repeat_num}/controller_cmd{log_num}.err",
-                pty=True, hide=True)
+                pty=True, hide=True, asynchronous=True)
     return prom
 
 
@@ -63,13 +63,13 @@ def get_cmd_str(cmd_list: List[List[str]]) -> str:
     ret = []
     for cmd in cmd_list:
         if cmd[0] == "ADD_LEARNER":
-            ret.append(f"--add_learner {cmd[1]} {cmd[2]} {cmd[3]}")
+            ret.append(f"--add_learner '{cmd[1]} {cmd[2]} {cmd[3]} {cmd[4]}'")
         elif cmd[0] == "UPGRADE_FULL_NODE":
-            ret.append(f"--upgrade_fullnode {cmd[1]}")
+            ret.append(f"--upgrade_fullnode '{cmd[1]}'")
         elif cmd[0] == "DOWNGRADE_FULL_NODE":
-            ret.append(f"--downgrade_fullnode {cmd[1]}")
+            ret.append(f"--downgrade_fullnode '{cmd[1]}'")
         elif cmd[0] == "DEL_LEARNER":
-            ret.append(f"--del_learner {cmd[1]}")
+            ret.append(f"--del_learner '{cmd[1]}'")
 
     return " ".join(ret)
 
@@ -154,8 +154,11 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
             if len(cmd[1]) == 0 or cmd[1][0] == "END":
                 break
 
-            res = run_controller(controller_conn, curr_time, get_cmd_str(cmd[1]), i, j)
-            print(res)
+            prom = run_controller(controller_conn, curr_time, get_cmd_str(cmd[1]), i, j)
+            try:
+                prom.join()
+            except Exception as e:
+                print(e)
         
         print("Killing clients")
         kill_clients(client_conns)

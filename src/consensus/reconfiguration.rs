@@ -1,7 +1,7 @@
 use core::str;
-use std::{io::Error, sync::Arc};
+use std::{io::Error, str::FromStr, sync::Arc};
 
-use ed25519_dalek::{VerifyingKey, PUBLIC_KEY_LENGTH};
+use ed25519_dalek::{pkcs8::DecodePublicKey, VerifyingKey, PUBLIC_KEY_LENGTH};
 use log::{error, info, warn};
 use nix::sys::signal;
 use nix::sys::signal::Signal::SIGINT;
@@ -57,10 +57,41 @@ fn insert_pub_key(new_keys: &mut Box<KeyStore>, name: &String, pub_key: &Verifyi
     new_keys.pub_keys.insert(name.clone(), pub_key.clone());
 }
 
+#[derive(Clone, Debug)]
 pub struct LearnerInfo {
     pub name: String,
     pub info: NodeNetInfo,
     pub pub_key: VerifyingKey,
+}
+
+impl FromStr for LearnerInfo {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split(" ").collect();
+        if parts.len() != 4 {
+            return Err("Invalid LearnerInfo".to_string());
+        }
+
+        let name = parts[0];
+        let addr = parts[1];
+        let domain = parts[2];
+        let key_pem = String::from("-----BEGIN PUBLIC KEY-----\n")
+            + parts[3]
+            + "\n-----END PUBLIC KEY-----\n";
+
+        let pub_key =
+            VerifyingKey::from_public_key_pem(&key_pem).expect("Invalid PEM format");
+
+        Ok(LearnerInfo {
+            name: name.to_string(),
+            info: NodeNetInfo {
+                addr: addr.to_string(),
+                domain: domain.to_string(),
+            },
+            pub_key,
+        })
+    }
 }
 
 /// Adding a learner == adding net config info + adding to learner list + adding public key
