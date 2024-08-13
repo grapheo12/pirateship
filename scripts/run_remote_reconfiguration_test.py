@@ -1,24 +1,27 @@
+from collections import OrderedDict
+import os
 from pprint import pprint
 from typing import List, Tuple
 import click
 import json
 from run_remote import build_project, get_current_git_hash, gen_config, tag_all_machines, CONFIG_SUFFIX, create_dirs_and_copy_files, tag_controller
 from run_remote import run_nodes, run_clients, kill_clients, kill_nodes, copy_logs
+from gen_cluster_config import gen_cluster_nodelist, DEFAULT_CA_NAME, LEARNER_SUFFIX, TLS_CERT_SUFFIX, TLS_PRIVKEY_SUFFIX, SIGN_PRIVKEY_SUFFIX, gen_keys_and_certs
 import time
 from fabric import Connection
 import datetime
 
 from plot_utils import parse_log_dir_with_total_clients, plot_tput_vs_latency
 
-def parse_reconfiguration_trace(trace_file) -> List[Tuple[int, List[List[str]]]]:
+def parse_reconfiguration_trace(trace_file, config_dir) -> List[Tuple[int, List[List[str]]]]:
     """
     Reconfiguration trace file format:
-    `<second> <command> [operands]`
+    `<second> <command> [name]`
 
     Example:
     ```
-    1 ADD_LEARNER node5 10.2.0.7:3005 node5.pft.org MCowgjksngjkngfsgn...(Public key PEM)
-    1 ADD_LEARNER node6 10.2.0.7:3006 node6.pft.org MCowgjksngjkngfsgn...(Public key PEM)
+    1 ADD_LEARNER node5
+    1 ADD_LEARNER node6
     2 UPGRADE_FULL_NODE node5
     5 DOWNGRADE_FULL_NODE node3
     10 DEL_LEARNER node3
@@ -36,8 +39,20 @@ def parse_reconfiguration_trace(trace_file) -> List[Tuple[int, List[List[str]]]]
             raise Exception(f"Unknown command {parts[1]}")
         cmd.append(parts[1])
         if parts[1] == "ADD_LEARNER":
+            # Find the appropriate one-liner learner info from configs
+            if len(parts) != 3:
+                raise Exception(f"ADD_LEARNER should have 1 operand")
+            
+            try:
+                with open(f"{config_dir}/{parts[2]}{LEARNER_SUFFIX}", "r") as f:
+                    learner_info = f.read().strip().split()
+                parts.pop()
+                parts.extend(learner_info)
+            except Exception as e:
+                pass
+
             if len(parts) != 6:
-                raise Exception(f"ADD_LEARNER should have 4 operands")
+                raise Exception(f"ADD_LEARNER learner info not found for {parts[2]}")
         elif parts[1] != "END":
             if len(parts) != 3:
                 raise Exception(f"{parts[1]} should have 1 operand")
@@ -73,22 +88,61 @@ def get_cmd_str(cmd_list: List[List[str]]) -> str:
 
     return " ".join(ret)
 
+
+def gen_extra_node_configs(outdir, extra_ip_list, template, num_init_config_nodes):
+    # Need to contain the original config.
+    # But only with the details specific to this node changed.
+    cwd = os.getcwd()
+    os.chdir(outdir)
+    with open(template, "r") as f:
+        cfg = json.load(f)
     
-def run_with_given_reconfiguration_trace(node_template, client_template, ip_list, identity_file, trace_file, repeat, git_hash, client_n):
-    # Parse the trace file
-    try:
-        commands = parse_reconfiguration_trace(trace_file)
-    except Exception as e:
-        print(e)
-        return
+    nodelist, _ = gen_cluster_nodelist(extra_ip_list, ".pft.org", num_init_config_nodes)
+    # Add the port numbers to the addresses
+    nodelist = OrderedDict({
+        k: (v[0] + ":" + str(num_init_config_nodes + 3001 + i), v[1])
+        for i, (k, v) in enumerate(nodelist.items())
+    })
     
+    print("Number of extra nodes:", len(nodelist))
+
+    gen_keys_and_certs(nodelist, DEFAULT_CA_NAME, 0, False, False)
+    
+    for i, node in enumerate(nodelist.keys()):
+        cfg["net_config"]["name"] = node
+        cfg["net_config"]["addr"] = "0.0.0.0:" + str(num_init_config_nodes + 3001 + i)
+        cfg["net_config"]["tls_cert_path"] = f"{outdir}/{node}{TLS_CERT_SUFFIX}"
+        cfg["net_config"]["tls_key_path"] = f"{outdir}/{node}{TLS_PRIVKEY_SUFFIX}"
+        cfg["rpc_config"]["signing_priv_key_path"] = f"{outdir}/{node}{SIGN_PRIVKEY_SUFFIX}"
+
+        with open(f"{node}{CONFIG_SUFFIX}", "w") as f:
+            json.dump(cfg, f)
+
+
+
+    os.chdir(cwd)
+
+
+
+    
+def run_with_given_reconfiguration_trace(node_template, client_template, ip_list, extra_ip_list, identity_file, trace_file, repeat, git_hash, client_n):
     # This is almost same as run_remote.
     # But we will modify each clients config after all the configs are generated.
     # Then we will copy them over to remote and run experiments.
     gen_config("configs", "cluster", node_template, client_template, ip_list, -1)
+
+
     nodes, clients = tag_all_machines(ip_list)
+    # Generate configs for extra nodes
+    gen_extra_node_configs("configs", extra_ip_list, f"{list(nodes.keys())[0]}{CONFIG_SUFFIX}", len(nodes))
     controller_ip = tag_controller(ip_list)
 
+    # Parse the trace file
+    try:
+        commands = parse_reconfiguration_trace(trace_file, "configs")
+    except Exception as e:
+        print(e)
+        return
     # How many client goes in each machine?
     num_clients = [client_n // len(clients) for _ in range(len(clients))]
     num_clients[-1] += client_n % len(clients)
@@ -151,7 +205,8 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
             print("Running reconfiguration command", j, ": Sleeping for", cmd[0], "seconds")
             time.sleep(cmd[0])
             print(f"Running reconfiguration command {j}: {cmd[1]}")
-            if len(cmd[1]) == 0 or cmd[1][0] == "END":
+            if len(cmd[1]) == 0 or len(cmd[1][0]) == 0 or cmd[1][0][0] == "END":
+                print("Ending")
                 break
 
             prom = run_controller(controller_conn, curr_time, get_cmd_str(cmd[1]), i, j)
@@ -159,6 +214,8 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
                 prom.join()
             except Exception as e:
                 print(e)
+        
+        time.sleep(1)
         
         print("Killing clients")
         kill_clients(client_conns)
@@ -200,7 +257,7 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
         )
 
         print("Copying logs")
-        copy_logs(node_conns, client_conns, i, curr_time, controller_conn, len(commands))
+        copy_logs(node_conns, client_conns, i, curr_time, controller_conn, len(commands) - 1) # End is not counted
 
     # Copy the number of clients in log directory for safekeeping
     with open(f"logs/{curr_time}/num_clients.txt", "w") as f:
@@ -233,6 +290,11 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
     type=click.Path(exists=True, file_okay=True, resolve_path=True)
 )
 @click.option(
+    "-eips", "--extra_ip_list", required=True,
+    help="File with list of node names and IP addresses to be used in later configurations",
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
     "-i", "--identity_file", required=True,
     help="SSH key",
     type=click.Path(exists=True, file_okay=True, resolve_path=True)
@@ -248,14 +310,14 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
     help="Number of clients",
     type=click.INT
 )
-def main(node_template, client_template, trace_file, ip_list, identity_file, repeat, client):
+def main(node_template, client_template, trace_file, ip_list, extra_ip_list, identity_file, repeat, client):
     # build_project()
     git_hash = get_current_git_hash()
     _, client_tags = tag_all_machines(ip_list)
     client_machines = len(client_tags)
 
     dir = run_with_given_reconfiguration_trace(
-            node_template, client_template, ip_list,
+            node_template, client_template, ip_list, extra_ip_list,
             identity_file, trace_file, repeat, git_hash,
             client)
     dir = f"logs/{dir}"

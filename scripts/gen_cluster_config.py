@@ -19,6 +19,7 @@ CSR_SUFFIX = "_csr.pem"
 PUB_KEYLIST_NAME = "signing_pub_keys.keylist"
 SIGN_PRIVKEY_SUFFIX = "_signing_privkey.pem"
 CONFIG_SUFFIX = "_config.json"
+LEARNER_SUFFIX = "_learner_info.txt"
 DEFAULT_CA_NAME = "Pft"
 
 
@@ -36,6 +37,14 @@ def gen_root_ca_key(caname: str) -> rsa.RSAPrivateKey:
         f.write(pem)
 
     return root_ca_key
+
+def read_root_ca_key(caname: str) -> rsa.RSAPrivateKey:
+    with open(caname + ROOT_KEY_SUFFIX, "rb") as f:
+        key = serialization.load_pem_private_key(f.read(), password=None)
+        assert(isinstance(key, rsa.RSAPrivateKey))
+        return key
+        
+        
 
 def gen_root_cert(key: rsa.RSAPrivateKey, caname: str) -> x509.Certificate:
     issuer = x509.Name([
@@ -179,12 +188,17 @@ def gen_signing_keypair(node) -> Tuple[ed25519.Ed25519PrivateKey, ed25519.Ed2551
     return priv_key, priv_key.public_key()
 
 
-def gen_keys_and_certs(nodelist: Dict[str, Tuple[str, str]], caname: str, client_cnt: int):
+def gen_keys_and_certs(nodelist: Dict[str, Tuple[str, str]], caname: str, client_cnt: int, gen_root_ca=True, gen_combined_keylist=True):
     print(nodelist)
-    print("Generating key for root CA")
-    root_ca_key = gen_root_ca_key(caname)
-    print("Generating root CA certificate")
-    root_ca_cert = gen_root_cert(root_ca_key, caname)
+    if gen_root_ca:
+        print("Generating key for root CA")
+        root_ca_key = gen_root_ca_key(caname)
+        print("Generating root CA certificate")
+        root_ca_cert = gen_root_cert(root_ca_key, caname)
+    else:
+        print("Fetching root CA key")
+        root_ca_key = read_root_ca_key(caname)
+
     print("Generating certificate private key for each node")
     cert_keys = {node: gen_cert_priv_key(node) for node in nodelist.keys()}
     print("Generating certificate signing requests for each node")
@@ -199,24 +213,37 @@ def gen_keys_and_certs(nodelist: Dict[str, Tuple[str, str]], caname: str, client
     keypairs.update(
         {"controller": gen_signing_keypair("controller")})
     
-    print("Generating public key list")
-    with open(PUB_KEYLIST_NAME, "w") as f:
-        for node, (_, pubk) in keypairs.items():
+    if gen_combined_keylist:
+        print("Generating public key list")
+        with open(PUB_KEYLIST_NAME, "w") as f:
+            for node, (_, pubk) in keypairs.items():
+                pubk_pem = pubk.public_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PublicFormat.SubjectPublicKeyInfo
+                )
+
+                pubk_line = pubk_pem.splitlines()[1]
+                print(node, pubk_line.decode(), file=f)
+    else:
+        print("Generating Learner Info oneliners")
+        for node, (addr, domain) in nodelist.items():
+            _, pubk = keypairs[node]
             pubk_pem = pubk.public_bytes(
                 encoding=serialization.Encoding.PEM,
                 format=serialization.PublicFormat.SubjectPublicKeyInfo
             )
 
             pubk_line = pubk_pem.splitlines()[1]
-            print(node, pubk_line.decode(), file=f)
+            with open(f"{node}{LEARNER_SUFFIX}", "w") as f:
+                print(node, addr, domain, pubk_line.decode(), file=f)
 
 # All gen_*_nodelist functions return: dict(node -> (ip, domain name)) and number of clients
-def gen_cluster_nodelist(ip_list, domain_suffix) -> Tuple[OrderedDict[str, Tuple[str, str]], int]:
+def gen_cluster_nodelist(ip_list, domain_suffix, cnt_start=0) -> Tuple[OrderedDict[str, Tuple[str, str]], int]:
     if ip_list == "/dev/null":
         raise Exception("Ip list must be provided when using cluster mode")
     
     nodelist = collections.OrderedDict()
-    node_cnt = 0
+    node_cnt = cnt_start
     client_cnt = 0
     with open(ip_list) as f:
         for line in f.readlines():
