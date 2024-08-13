@@ -196,6 +196,8 @@ def gen_keys_and_certs(nodelist: Dict[str, Tuple[str, str]], caname: str, client
     keypairs = {node: gen_signing_keypair(node) for node in nodelist}
     keypairs.update(
         {"client" + str(i): gen_signing_keypair("client" + str(i)) for i in range(1, client_cnt + 1)})
+    keypairs.update(
+        {"controller": gen_signing_keypair("controller")})
     
     print("Generating public key list")
     with open(PUB_KEYLIST_NAME, "w") as f:
@@ -273,6 +275,13 @@ def gen_client_config(i, root_path, tmpl):
     with open(client + CONFIG_SUFFIX, "w") as f:
         json.dump(tmpl, f, indent=4)
 
+def gen_controller_config(root_path, tmpl):
+    tmpl["net_config"]["name"] = "controller"
+    tmpl["rpc_config"]["signing_priv_key_path"] = os.path.join(root_path, "controller" + SIGN_PRIVKEY_SUFFIX)
+
+    with open("controller" + CONFIG_SUFFIX, "w") as f:
+        json.dump(tmpl, f, indent=4)
+
 def gen_client_configs(num_clients: int, nodelist: OrderedDict[str, Tuple[str, str]], tmpl: Dict, caname, root_path):
     tmpl["net_config"]["nodes"] = {node: {"addr": addr + ":" + str(3000 + i + 1), "domain": domain} for i, (node, (addr, domain)) in enumerate(nodelist.items())}
     tmpl["net_config"]["tls_root_ca_cert_path"] = os.path.join(root_path, caname + ROOT_CERT_SUFFIX)
@@ -312,6 +321,10 @@ def gen_config(outdir, mode, node_template, client_template, ip_list, num_nodes)
 
     print("Generating Client configs")
     gen_client_configs(client_cnt, nodelist, client_template, DEFAULT_CA_NAME, outdir)
+
+    print("Generating Controller config")
+    gen_controller_config(outdir, client_template)
+
     os.chdir(pwd)
 
 

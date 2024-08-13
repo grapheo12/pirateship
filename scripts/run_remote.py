@@ -64,7 +64,16 @@ def tag_all_machines(ip_list) -> Tuple[OrderedDict[str, str], OrderedDict[str, s
 
     return nodelist, clientlist
 
-def create_dirs_and_copy_files(node_conns, client_conns, wd, repeat, git_hash):
+def tag_controller(ip_list) -> str:
+    with open(ip_list) as f:
+        for line in f.readlines():
+            if line.startswith("controller"):
+                return line.split()[1].strip()
+
+    raise Exception("Controller not found in ip list")
+
+
+def create_dirs_and_copy_files(node_conns, client_conns, wd, repeat, git_hash, controller_conn=None):
     for node, conn in node_conns.items():
         run_all([
             f"mkdir -p pft/{wd}",
@@ -104,6 +113,22 @@ def create_dirs_and_copy_files(node_conns, client_conns, wd, repeat, git_hash):
         conn.put(f"configs/{client}{CONFIG_SUFFIX}", remote=f"pft/{wd}/configs/")
         conn.put("target/release/client", remote=f"pft/{wd}/target/release")
 
+    if not controller_conn is None:
+        run_all([
+            f"mkdir -p pft/{wd}",
+            f"echo '{git_hash}' > pft/{wd}/git_hash.txt",
+            f"mkdir -p pft/{wd}/target/release",
+            f"mkdir -p pft/{wd}/configs"
+        ] + [f"mkdir -p pft/{wd}/logs/{i}" for i in range(repeat)], controller_conn)
+        with open(f"configs/{client}{CONFIG_SUFFIX}") as f:
+            cfg = json.load(f)
+        
+        controller_conn.put(f"{cfg['net_config']['tls_root_ca_cert_path']}", remote=f"pft/{wd}/configs/")
+        controller_conn.put(f"{cfg['rpc_config']['signing_priv_key_path']}", remote=f"pft/{wd}/configs/")
+        conn.put(f"configs/controller{CONFIG_SUFFIX}", remote=f"pft/{wd}/configs/")
+
+        controller_conn.put("target/release/controller", remote=f"pft/{wd}/target/release")
+
 
 def run_nodes(node_conns: Dict[str, Connection], repeat_num: int, wd: str) -> List:
     promises = []
@@ -142,17 +167,29 @@ def kill_nodes(node_conns: Dict[str, Connection]):
             "pkill -c server"       # There better not be any other process that matches this.
         ], conn)
 
+
+
 def copy_log(name: str, conn: Connection, repeat_num: int, wd: str):
     conn.get(f"pft/{wd}/logs/{repeat_num}/{name}.log", local=f"logs/{wd}/{repeat_num}/")
     conn.get(f"pft/{wd}/logs/{repeat_num}/{name}.err", local=f"logs/{wd}/{repeat_num}/")
 
-def copy_logs(node_conns, client_conns, repeat_num, wd):
+def copy_logs(node_conns, client_conns, repeat_num, wd, controller_conn=None, controller_total_logs=0):
     invoke.run(f"mkdir -p logs/{wd}/{repeat_num}", hide=True)
     for node, conn in node_conns.items():
         copy_log(node, conn, repeat_num, wd)
 
     for client, conn in client_conns.items():
         copy_log(client, conn, repeat_num, wd)
+
+    if not controller_conn is None:
+        try:    # Controller may not be present in all experiments
+            for i in range(controller_total_logs):
+                copy_log(f"controller_cmd{i}", controller_conn, repeat_num, wd) # type: ignore
+
+            # Also copy the controller config as it changes over time.
+            controller_conn.get(f"pft/{wd}/configs/controller{CONFIG_SUFFIX}", local=f"logs/{wd}/{repeat_num}/")
+        except Exception as e:
+            print(e)
 
 
 def run_remote(node_template, client_template, ip_list, identity_file, repeat, seconds):

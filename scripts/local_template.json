@@ -26,6 +26,6 @@
         "view_timeout_ms": 20000
     },
     "app_config": {
-        "logger_stats_report_secs": 1
+        "logger_stats_report_ms": 100
     }
 }

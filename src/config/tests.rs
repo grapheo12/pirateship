@@ -57,7 +57,7 @@ fn test_nodeconfig_serialize() {
     };
 
     let app_config = AppConfig {
-        logger_stats_report_secs: 1,
+        logger_stats_report_ms: 100,
     };
 
     let config = Config {
@@ -138,7 +138,7 @@ async fn test_atomic_config_access() {
     };
 
     let app_config = AppConfig {
-        logger_stats_report_secs: 1,
+        logger_stats_report_ms: 100,
     };
 
     let config = Config {

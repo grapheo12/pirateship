@@ -53,7 +53,7 @@ impl Engine for PinnedLoggerEngine {
 
     async fn run(&self) {
         while !self.quit_signal.load(Ordering::SeqCst) {
-            sleep(Duration::from_secs(self.ctx.config.get().app_config.logger_stats_report_secs)).await;
+            sleep(Duration::from_millis(self.ctx.config.get().app_config.logger_stats_report_ms)).await;
             self.log_stats().await;
         }
     }

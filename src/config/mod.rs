@@ -52,7 +52,7 @@ pub struct ConsensusConfig {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
-    pub logger_stats_report_secs: u64,         // This is only for the logger app
+    pub logger_stats_report_ms: u64,         // This is only for the logger app
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -139,7 +139,7 @@ impl ClientConfig {
                 vote_processing_workers: 128
             },
             app_config: AppConfig {
-                logger_stats_report_secs: 1,
+                logger_stats_report_ms: 100,
             }
         }
     }
