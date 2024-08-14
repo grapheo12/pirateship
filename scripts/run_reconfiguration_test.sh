@@ -1,12 +1,12 @@
 #!/bin/sh
 
-# make
+make
 
 cat <<EOF > /tmp/reconf.trace
 5 ADD_LEARNER node5
 5 ADD_LEARNER node6
 10 DEL_LEARNER node5
-30 END
+5 END
 EOF
 
 python3 scripts/run_remote_reconfiguration_test.py \

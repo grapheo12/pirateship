@@ -133,6 +133,8 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
 
 
     nodes, clients = tag_all_machines(ip_list)
+    extra_nodes, _ = tag_all_machines(extra_ip_list, len(nodes))
+
     # Generate configs for extra nodes
     gen_extra_node_configs("configs", extra_ip_list, f"{list(nodes.keys())[0]}{CONFIG_SUFFIX}", len(nodes))
     controller_ip = tag_controller(ip_list)
@@ -201,13 +203,32 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
         print("Running clients")
         promises.extend(run_clients(client_conns, i, curr_time))
 
+        extra_node_conns = {}
+        extra_promises = []
+
         for j, cmd in enumerate(commands):
+            for c in cmd[1]:
+                if c[0] == "ADD_LEARNER":
+                    # Boot up this node
+                    print("Booting up extra node:", c[1])
+                    extra_node_conns[c[1]] = Connection(
+                        host=extra_nodes[c[1]],
+                        user="azureadmin", # This dependency comes from terraform
+                        connect_kwargs={
+                            "key_filename": identity_file
+                        }
+                    )
+                    create_dirs_and_copy_files({c[1]: extra_node_conns[c[1]]}, {}, curr_time, repeat, git_hash, None)
+                    time.sleep(0.1)
+                    extra_promises.append(run_nodes({c[1]: extra_node_conns[c[1]]}, i, curr_time))
+
             print("Running reconfiguration command", j, ": Sleeping for", cmd[0], "seconds")
             time.sleep(cmd[0])
             print(f"Running reconfiguration command {j}: {cmd[1]}")
             if len(cmd[1]) == 0 or len(cmd[1][0]) == 0 or cmd[1][0][0] == "END":
                 print("Ending")
                 break
+
 
             prom = run_controller(controller_conn, curr_time, get_cmd_str(cmd[1]), i, j)
             try:
@@ -222,6 +243,9 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
 
         print("Killing nodes")
         kill_nodes(node_conns)
+
+        print("Killing extra nodes")
+        kill_nodes(extra_node_conns)
 
         print("Joining on all promises (which should have terminated by now)")
         for prom in promises:
@@ -238,6 +262,14 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
                 "key_filename": identity_file
             }
         ) for node, ip in nodes.items()}
+
+        extra_node_conns = {node: Connection(
+            host=ip,
+            user="azureadmin", # This dependency comes from terraform
+            connect_kwargs={
+                "key_filename": identity_file
+            }
+        ) for node, ip in extra_nodes.items() if node in extra_node_conns}
 
         
         client_conns = {client: Connection(
@@ -258,6 +290,7 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
 
         print("Copying logs")
         copy_logs(node_conns, client_conns, i, curr_time, controller_conn, len(commands) - 1) # End is not counted
+        copy_logs(extra_node_conns, {}, i, curr_time)
 
     # Copy the number of clients in log directory for safekeeping
     with open(f"logs/{curr_time}/num_clients.txt", "w") as f:

@@ -152,6 +152,7 @@ impl PinnedServerContext {
         })));
         let lifecycle_stage = decide_my_lifecycle_stage(&ctx, true);
         ctx.lifecycle_stage.store(lifecycle_stage as i8, Ordering::SeqCst);
+        info!("Initial lifecycle stage: {:?}", lifecycle_stage);
         
         ctx
     }
