@@ -96,13 +96,14 @@ impl PinnedLoggerEngine {
             let lack_pend = self.ctx.client_ack_pending.lock().await;
             let byz_qc_pending = self.ctx.state.byz_qc_pending.lock().await;
     
-            info!("fork.last = {}, fork.last_qc = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, pending_qcs = {} num_txs = {}, fork.last_hash = {}, total_client_request = {}, view = {}, view_is_stable = {}, i_am_leader: {}",
+            info!("fork.last = {}, fork.last_qc = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, pending_qcs = {} num_crash_committed_txs = {}, num_byz_committed_txs = {}, fork.last_hash = {}, total_client_request = {}, view = {}, view_is_stable = {}, i_am_leader: {}",
                 fork.last(), fork.last_qc(),
                 self.ctx.state.commit_index.load(Ordering::SeqCst),
                 self.ctx.state.byz_commit_index.load(Ordering::SeqCst),
                 lack_pend.len(),
                 byz_qc_pending.len(),
                 self.ctx.state.num_committed_txs.load(Ordering::SeqCst),
+                self.ctx.state.num_byz_committed_txs.load(Ordering::SeqCst),
                 fork.last_hash().encode_hex::<String>(),
                 self.ctx.total_client_requests.load(Ordering::SeqCst),
                 self.ctx.state.view.load(Ordering::SeqCst),

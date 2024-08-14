@@ -69,9 +69,20 @@ def main(path, start, end, repeats, num_clients, leader, ramp_up, ramp_down, out
         assert len(dir) % len(legend) == 0
         per_legend = len(dir) // len(legend)
         stats = [{} for _ in range(len(legend))]
+        byz_stats = [{} for _ in range(len(legend))]
         for i, d in enumerate(dir):
             res = parse_log_dir_with_total_clients(d, repeats, num_clients, leader, ramp_up, ramp_down)
             stats[i // per_legend].update(res)
+            if legend[i // per_legend].endswith("+byz"):
+                byz_res = parse_log_dir_with_total_clients(d, repeats, num_clients, leader, ramp_up, ramp_down, byz=True)
+                byz_stats[i // per_legend].update(byz_res)
+            
+        byz_legends = [a[:-4] + "-byz" for a in legend if a.endswith("+byz")]
+        byz_stats = [a for a in byz_stats if len(a) > 0]
+        print(byz_legends, byz_stats)
+        legend = [a[:-4] if a.endswith("+byz") else a for a in legend]
+        legend.extend(byz_legends)
+        stats.extend(byz_stats)
 
         pprint(stats)
         plot_tput_vs_latency_multi(stats, legend, out)

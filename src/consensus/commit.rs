@@ -119,6 +119,8 @@ where Engine: crate::execution::Engine
                     }
                 }
             }
+
+            ctx.state.num_byz_committed_txs.fetch_add(entry.block.tx.len(), Ordering::SeqCst);
         }
 
 

@@ -37,6 +37,7 @@ pub struct ConsensusState {
     pub config_num: AtomicU64,
     pub commit_index: AtomicU64,
     pub num_committed_txs: AtomicUsize,
+    pub num_byz_committed_txs: AtomicUsize,
     pub byz_commit_index: AtomicU64,
     pub byz_qc_pending: Mutex<HashSet<u64>>,
     pub next_qc_list: Mutex<IndexMap<(u64, u64), ProtoQuorumCertificate>>,
@@ -56,6 +57,7 @@ impl ConsensusState {
             config_num: AtomicU64::new(0),
             commit_index: AtomicU64::new(0),
             num_committed_txs: AtomicUsize::new(0),
+            num_byz_committed_txs: AtomicUsize::new(0),
             byz_commit_index: AtomicU64::new(0),
             byz_qc_pending: Mutex::new(HashSet::new()),
             next_qc_list: Mutex::new(IndexMap::new()),
@@ -345,7 +347,7 @@ where
 
     #[cfg(not(feature = "view_change"))]
     {
-        if get_leader_str(&ctx) == ctx.config.net_config.name {
+        if get_leader_str(&ctx) == ctx.config.get().net_config.name {
             ctx.i_am_leader.store(true, Ordering::SeqCst);
         }
     }
