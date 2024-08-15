@@ -17,7 +17,7 @@ use crate::{
     rpc::{client::Client, server::{LatencyProfile, Server}, PinnedMessage},
 };
 
-use super::{auth::HandshakeResponse, client::PinnedClient, server::{MsgAckChan, RespType}, MessageRef};
+use super::{auth::HandshakeResponse, client::PinnedClient, server::{GetServerKeys, MsgAckChan, RespType}, MessageRef};
 
 fn process_args(i: i32) -> Config {
     let _p = format!("configs/node{i}_config.json");
@@ -31,7 +31,7 @@ fn process_args(i: i32) -> Config {
     Config::deserialize(&cfg_contents)
 }
 
-fn mock_msg_handler(_ctx: &(), buf: MessageRef, _tx: MsgAckChan) -> Result<RespType, Error> {
+fn mock_msg_handler(_ctx: &ServerEmptyCtx, buf: MessageRef, _tx: MsgAckChan) -> Result<RespType, Error> {
     info!(
         "Received message: {}",
         std::str::from_utf8(&buf).unwrap_or("Parsing error")
@@ -39,14 +39,22 @@ fn mock_msg_handler(_ctx: &(), buf: MessageRef, _tx: MsgAckChan) -> Result<RespT
     Ok(RespType::NoResp)
 }
 
+#[derive(Clone)]
+struct ServerEmptyCtx;
+impl GetServerKeys for ServerEmptyCtx {
+    fn get_server_keys(&self) -> Arc<Box<KeyStore>> {
+        Arc::new(Box::new(KeyStore::empty()))
+    }
+}
+
 async fn run_body(
-    server: &Arc<Server<()>>,
+    server: &Arc<Server<ServerEmptyCtx>>,
     client: &PinnedClient,
     config: &Config,
 ) -> Result<(), Error> {
     let server = server.clone();
     let server_handle = tokio::spawn(async move {
-        let _ = Server::<()>::run(server, ()).await;
+        let _ = Server::<ServerEmptyCtx>::run(server, ServerEmptyCtx{}).await;
     });
     let data = String::from("Hello world!\n");
     let data = data.into_bytes();
@@ -126,18 +134,25 @@ async fn test_unauthenticated_client_server() {
     run_body(&server, &client, &config).await.unwrap();
 }
 
-struct ServerCtx(i32);
+#[derive(Clone)]
+struct ServerCtx(Arc<Mutex<Pin<Box<i32>>>>);
 
-fn drop_after_n(ctx: &Arc<Mutex<Pin<Box<ServerCtx>>>>, m: MessageRef, _tx: MsgAckChan) -> Result<RespType, Error> {
-    let mut _ctx = ctx.lock().unwrap();
-    _ctx.0 -= 1;
+impl GetServerKeys for ServerCtx {
+    fn get_server_keys(&self) -> Arc<Box<KeyStore>> {
+        Arc::new(Box::new(KeyStore::empty()))
+    }
+}
+
+fn drop_after_n(ctx: &ServerCtx, m: MessageRef, _tx: MsgAckChan) -> Result<RespType, Error> {
+    let mut _ctx = ctx.0.lock().unwrap();
+    **_ctx -= 1;
     info!(
         "{:?} said: {}",
         m.sender(),
         std::str::from_utf8(&m).unwrap_or("Parsing error")
     );
 
-    if _ctx.0 <= 0 {
+    if **_ctx <= 0 {
         return Err(Error::new(ErrorKind::BrokenPipe, "breaking connection"));
     }
     Ok(RespType::NoResp)
@@ -161,9 +176,9 @@ async fn test_3_node_bcast() {
         &config3.rpc_config.allowed_keylist_path,
         &config3.rpc_config.signing_priv_key_path,
     );
-    let ctx1 = Arc::new(Mutex::new(Box::pin(ServerCtx(3))));
-    let ctx2 = Arc::new(Mutex::new(Box::pin(ServerCtx(1))));
-    let ctx3 = Arc::new(Mutex::new(Box::pin(ServerCtx(2))));
+    let ctx1 = ServerCtx(Arc::new(Mutex::new(Box::pin(3))));
+    let ctx2 = ServerCtx(Arc::new(Mutex::new(Box::pin(1))));
+    let ctx3 = ServerCtx(Arc::new(Mutex::new(Box::pin(2))));
     let server1 = Arc::new(Server::new(&config1, drop_after_n, &keys1));
     let server2 = Arc::new(Server::new(&config2, drop_after_n, &keys2));
     let server3 = Arc::new(Server::new(&config3, drop_after_n, &keys3));

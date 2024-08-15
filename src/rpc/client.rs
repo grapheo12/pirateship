@@ -1,6 +1,6 @@
 use crate::{config::{AtomicConfig, Config}, crypto::KeyStore};
 use crossbeam::atomic::AtomicCell;
-use log::{debug, trace, warn};
+use log::{debug, error, info, trace, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use std::{
     collections::{HashMap, HashSet}, fs::File, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::{Arc, RwLock}
@@ -19,18 +19,18 @@ use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
 use super::{auth, server::LatencyProfile, MessageRef, PinnedMessage};
 
 #[derive(Clone)]
-pub struct PinnedHashMap<K, V>(Pin<Box<Arc<RwLock<HashMap<K, V>>>>>);
+pub struct PinnedHashMap<K, V>(Arc<Pin<Box<RwLock<HashMap<K, V>>>>>);
 impl<K, V> PinnedHashMap<K, V> {
     fn new() -> PinnedHashMap<K, V> {
-        PinnedHashMap(Box::pin(Arc::new(RwLock::new(HashMap::new()))))
+        PinnedHashMap(Arc::new(Box::pin(RwLock::new(HashMap::new()))))
     }
 }
 
 #[derive(Clone)]
-pub struct PinnedHashSet<K>(Pin<Box<Arc<RwLock<HashSet<K>>>>>);
+pub struct PinnedHashSet<K>(Arc<Pin<Box<RwLock<HashSet<K>>>>>);
 impl<K> PinnedHashSet<K> {
     fn new() -> PinnedHashSet<K> {
-        PinnedHashSet(Box::pin(Arc::new(RwLock::new(HashSet::new()))))
+        PinnedHashSet(Arc::new(Box::pin(RwLock::new(HashSet::new()))))
     }
 }
 
@@ -118,10 +118,10 @@ impl DerefMut for BufferedTlsStream {
 }
 
 #[derive(Clone)]
-pub struct PinnedTlsStream(Pin<Box<Arc<Mutex<BufferedTlsStream>>>>);
+pub struct PinnedTlsStream(Arc<Pin<Box<Mutex<BufferedTlsStream>>>>);
 impl PinnedTlsStream {
     fn new(stream: TlsStream<TcpStream>) -> PinnedTlsStream {
-        PinnedTlsStream(Box::pin(Arc::new(Mutex::new(BufferedTlsStream::new(
+        PinnedTlsStream(Arc::new(Box::pin(Mutex::new(BufferedTlsStream::new(
             stream,
         )))))
     }
@@ -137,7 +137,7 @@ pub struct Client {
 }
 
 #[derive(Clone)]
-pub struct PinnedClient(Pin<Box<Arc<Client>>>);
+pub struct PinnedClient(pub Arc<Pin<Box<Client>>>);
 
 enum SendDataType<'a> {
     ByteType(MessageRef<'a>),
@@ -195,13 +195,14 @@ impl Client {
     }
 
     pub fn into(self) -> PinnedClient {
-        PinnedClient(Box::pin(Arc::new(self)))
+        PinnedClient(Arc::new(Box::pin(self)))
     }
 }
 
 impl PinnedClient {
     async fn connect(client: &PinnedClient, name: &String) -> Result<PinnedTlsStream, Error> {
         let cfg = client.0.config.get();
+        info!("Node list: {:?}", cfg.net_config.nodes);
         let peer = cfg
             .net_config
             .nodes
@@ -229,7 +230,7 @@ impl PinnedClient {
         let mut stream = connector.connect(domain, stream).await?;
 
         if client.0.do_auth {
-            auth::handshake_client(&client.0, &mut stream).await?;
+            auth::handshake_client(&client, &mut stream).await?;
         }
         let stream_safe = PinnedTlsStream::new(stream.into());
         client
@@ -431,7 +432,18 @@ impl PinnedClient {
 
                 let mut msgs = Vec::new();
                 let c = _client.clone();
-                let sock = Self::get_sock(&c, &_name).await.unwrap();
+                let sock = loop {
+                    let s = match Self::get_sock(&c, &_name).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            error!("Broadcast worker dying: {}", e);
+                            continue;
+                        },
+                    };
+
+                    break s
+                };
+                
                 while rx.recv_many(&mut msgs, 10).await > 0 {
                     let mut should_print_flush_time = false;
                     let mut combined_prefix = String::from("");

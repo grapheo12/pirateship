@@ -140,7 +140,7 @@ pub fn do_create_qcs(
 }
 
 pub async fn do_process_vote<Engine>(
-    ctx: PinnedServerContext, engine: &Engine,
+    ctx: PinnedServerContext, client: PinnedClient, engine: &Engine,
     vote: &ProtoVote,
     sender: &String,
     majority: u64,
@@ -291,7 +291,7 @@ where Engine: crate::execution::Engine
     {
         let mut lack_pend = ctx.client_ack_pending.lock().await;
 
-        do_commit(&ctx, engine, &mut fork, &mut lack_pend, updated_ci);
+        do_commit(&ctx, &client, engine, &mut fork, &mut lack_pend, updated_ci);
     }
 
     Ok(())
@@ -347,10 +347,12 @@ pub async fn do_push_append_entries_to_fork<Engine>(
         // Send tentative replies to everyone.
         do_reply_all_with_tentative_receipt(&ctx).await;
         // ctx.view_timer.reset();
+
+
+        // @todo: RESET VIEW TO OLD VALUE IF FORK COULD NOT BE VERIFIED
     }else{
         trace!("AppendEntries for view {} stable? {} sender {}", ae.view, ae.view_is_stable, sender);
     }
-    // @todo: Backfilling!
 
     if !sender.eq(&get_leader_str(&ctx)) {
         // Can't accept blocks from non-leader.
@@ -434,7 +436,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
         byz_qc_pending.retain(|&n| n > last_qc);
 
         // Also the byzantine commit index may move
-        maybe_byzantine_commit(&ctx, engine, &fork, &mut ctx.client_ack_pending.lock().await);
+        maybe_byzantine_commit(&ctx, &client, engine, &fork, &mut ctx.client_ack_pending.lock().await);
     }
 
     (last_n, updated_last_n, seq_nums, true)
@@ -470,7 +472,7 @@ pub async fn do_reply_vote(
 }
 
 pub async fn create_and_push_block<Engine>(
-    ctx: PinnedServerContext, engine: &Engine,
+    ctx: PinnedServerContext, client: PinnedClient, engine: &Engine,
     reqs: &mut Vec<ForwardedMessageWithAckChan>,
     should_sign: bool,
 ) -> Result<(ProtoAppendEntries, LatencyProfile), Error>
@@ -553,7 +555,7 @@ where Engine: crate::execution::Engine
             }
             profile.register("Block create");
 
-            maybe_byzantine_commit(&ctx, engine, &fork, &mut ctx.client_ack_pending.lock().await);
+            maybe_byzantine_commit(&ctx, &client, engine, &fork, &mut ctx.client_ack_pending.lock().await);
 
             trace!("QC link: {} --> {:?}", n, __qc_trace);
         }
@@ -576,7 +578,7 @@ where Engine: crate::execution::Engine
 }
 
 pub async fn broadcast_append_entries(
-    _ctx: PinnedServerContext,
+    ctx: PinnedServerContext,
     client: PinnedClient,
     ae: ProtoAppendEntries,
     send_list: &Vec<String>,
@@ -611,6 +613,11 @@ pub async fn broadcast_append_entries(
         );
     }
 
+    // Also send to all learners
+    let _ = PinnedClient::broadcast(&client, &ctx.config.get().consensus_config.learner_list, &bcast_msg, &mut profile).await;
+
+
+
     Ok(())
 }
 
@@ -637,7 +644,7 @@ where Engine: crate::execution::Engine
 {
     // Create the block, holding a lock on the fork state.
     let _cfg = ctx.config.get();
-    let (ae, profile) = create_and_push_block(ctx.clone(), engine, reqs, should_sign).await?;
+    let (ae, profile) = create_and_push_block(ctx.clone(), client.clone(), engine, reqs, should_sign).await?;
 
     // Add this block to byz_qc_pending, if it is a signed block
     #[cfg(not(feature = "no_qc"))]
@@ -653,7 +660,7 @@ where Engine: crate::execution::Engine
     let block_n = ae.fork.as_ref().unwrap().blocks[block_n - 1].n;
     let my_vote = create_vote_for_blocks(ctx.clone(), &vec![block_n]).await?;
     do_process_vote(
-        ctx.clone(), engine,
+        ctx.clone(), client.clone(), engine,
         &my_vote,
         &_cfg.net_config.name,
         majority,

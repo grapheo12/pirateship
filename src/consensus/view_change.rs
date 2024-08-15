@@ -584,7 +584,7 @@ pub async fn do_init_new_leader<Engine>(
 
     profile.register("Broadcast done");
     do_process_vote(
-        ctx.clone(), engine,
+        ctx.clone(), client.clone(), engine,
         &my_vote,
         &_cfg.net_config.name,
         super_majority, // Forcing to wait for 2f + 1

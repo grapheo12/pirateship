@@ -113,19 +113,19 @@ def create_dirs_and_copy_files(node_conns, client_conns, wd, repeat, git_hash, c
         conn.put(f"configs/{client}{CONFIG_SUFFIX}", remote=f"pft/{wd}/configs/")
         conn.put("target/release/client", remote=f"pft/{wd}/target/release")
 
-    if not controller_conn is None:
+    if not (controller_conn is None):
         run_all([
             f"mkdir -p pft/{wd}",
             f"echo '{git_hash}' > pft/{wd}/git_hash.txt",
             f"mkdir -p pft/{wd}/target/release",
             f"mkdir -p pft/{wd}/configs"
         ] + [f"mkdir -p pft/{wd}/logs/{i}" for i in range(repeat)], controller_conn)
-        with open(f"configs/{client}{CONFIG_SUFFIX}") as f:
+        with open(f"configs/controller{CONFIG_SUFFIX}") as f:
             cfg = json.load(f)
         
         controller_conn.put(f"{cfg['net_config']['tls_root_ca_cert_path']}", remote=f"pft/{wd}/configs/")
         controller_conn.put(f"{cfg['rpc_config']['signing_priv_key_path']}", remote=f"pft/{wd}/configs/")
-        conn.put(f"configs/controller{CONFIG_SUFFIX}", remote=f"pft/{wd}/configs/")
+        controller_conn.put(f"configs/controller{CONFIG_SUFFIX}", remote=f"pft/{wd}/configs/")
 
         controller_conn.put("target/release/controller", remote=f"pft/{wd}/target/release")
 

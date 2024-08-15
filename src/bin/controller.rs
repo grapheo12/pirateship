@@ -1,7 +1,15 @@
-use std::str::FromStr;
+use std::{fs, io, path, str::FromStr};
 
 use clap::{arg, command, Arg, ArgAction};
-use pft::consensus::reconfiguration::LearnerInfo;
+use log::{debug, info, trace};
+use pft::{
+    config::{default_log4rs_config, ClientConfig},
+    consensus::reconfiguration::{serialize_add_learner, LearnerInfo},
+    crypto::KeyStore,
+    proto::{client::{self, ProtoClientReply, ProtoClientRequest}, execution::{ProtoTransaction, ProtoTransactionPhase}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, MessageRef},
+};
+use prost::Message;
+
 
 #[derive(Debug)]
 struct Config {
@@ -15,53 +23,157 @@ struct Config {
 fn parse_args() -> Config {
     let matches = command!()
         .arg(arg!(<client_config_path> "Path to client config"))
-        .arg(Arg::new("add_learner")
-            .long("add_learner")
-            .action(ArgAction::Append)
-            .value_parser(LearnerInfo::from_str)
-            .help("Add learners with learner_info of the form 'name addr domain pub_key'")
-            .required(false)
+        .arg(
+            Arg::new("add_learner")
+                .long("add_learner")
+                .action(ArgAction::Append)
+                .value_parser(LearnerInfo::from_str)
+                .help("Add learners with learner_info of the form 'name addr domain pub_key'")
+                .required(false),
         )
-        .arg(Arg::new("del_learner")
-            .long("del_learner")
-            .action(ArgAction::Append)
-            .help("Delete learners with given names")
-            .required(false)
+        .arg(
+            Arg::new("del_learner")
+                .long("del_learner")
+                .action(ArgAction::Append)
+                .help("Delete learners with given names")
+                .required(false),
         )
-        .arg(Arg::new("upgrade_fullnode")
-            .long("upgrade_fullnode")
-            .action(ArgAction::Append)
-            .help("Upgrade to full nodes given names")
-            .required(false)
+        .arg(
+            Arg::new("upgrade_fullnode")
+                .long("upgrade_fullnode")
+                .action(ArgAction::Append)
+                .help("Upgrade to full nodes given names")
+                .required(false),
         )
-        .arg(Arg::new("downgrade_fullnode")
-            .long("downgrade_fullnode")
-            .action(ArgAction::Append)
-            .help("Downgrade to learners given names")
-            .required(false)
+        .arg(
+            Arg::new("downgrade_fullnode")
+                .long("downgrade_fullnode")
+                .action(ArgAction::Append)
+                .help("Downgrade to learners given names")
+                .required(false),
         )
         .get_matches();
 
-    let add_learner = matches.get_many::<LearnerInfo>("add_learner")
-        .unwrap_or_default().cloned().collect::<Vec<_>>();
-    let del_learner = matches.get_many::<String>("del_learner")
-        .unwrap_or_default().cloned().collect::<Vec<_>>();
-    let upgrade_fullnode = matches.get_many::<String>("upgrade_fullnode")
-        .unwrap_or_default().cloned().collect::<Vec<_>>();
-    let downgrade_fullnode = matches.get_many::<String>("downgrade_fullnode")
-        .unwrap_or_default().cloned().collect::<Vec<_>>();
+    let add_learner = matches
+        .get_many::<LearnerInfo>("add_learner")
+        .unwrap_or_default()
+        .cloned()
+        .collect::<Vec<_>>();
+    let del_learner = matches
+        .get_many::<String>("del_learner")
+        .unwrap_or_default()
+        .cloned()
+        .collect::<Vec<_>>();
+    let upgrade_fullnode = matches
+        .get_many::<String>("upgrade_fullnode")
+        .unwrap_or_default()
+        .cloned()
+        .collect::<Vec<_>>();
+    let downgrade_fullnode = matches
+        .get_many::<String>("downgrade_fullnode")
+        .unwrap_or_default()
+        .cloned()
+        .collect::<Vec<_>>();
 
     Config {
-        client_config_path: matches.get_one::<String>("client_config_path").unwrap().to_string(),
+        client_config_path: matches
+            .get_one::<String>("client_config_path")
+            .unwrap()
+            .to_string(),
         add_learner,
         del_learner,
         upgrade_fullnode,
-        downgrade_fullnode
+        downgrade_fullnode,
     }
-
 }
 
-fn main() {
-    let cfg = parse_args();
-    println!("Hello, world! {:#?}", cfg);
+#[tokio::main]
+async fn main() -> io::Result<()> {
+    log4rs::init_config(default_log4rs_config()).unwrap();
+
+    let config = parse_args();
+    let cfg_path = path::Path::new(config.client_config_path.as_str());
+    if !cfg_path.exists() {
+        panic!("{} does not exist", config.client_config_path);
+    }
+
+    let cfg_contents = fs::read_to_string(cfg_path).expect("Invalid file path");
+    let client_cfg = ClientConfig::deserialize(&cfg_contents);
+    let mut keys = KeyStore::empty();
+    keys.priv_key = KeyStore::get_privkeys(&client_cfg.rpc_config.signing_priv_key_path);
+
+    let add_learner_op = config.add_learner.iter().map(|info| {
+        serialize_add_learner(info)
+    }).collect();
+
+    info!("Add learner op: {:?}", add_learner_op);
+
+    let client_req = ProtoClientRequest {
+        tx: Some(ProtoTransaction {
+            on_receive: None,
+            on_crash_commit: Some(ProtoTransactionPhase { 
+                ops: add_learner_op,
+            }),
+            on_byzantine_commit: None,
+            is_reconfiguration: true,
+        }),
+        origin: client_cfg.net_config.name.clone(),
+        sig: vec![0u8; 1],
+    };
+
+    let rpc_msg_body = ProtoPayload {
+        message: Some(
+            pft::proto::rpc::proto_payload::Message::ClientRequest(client_req),
+        ),
+    };
+
+    let mut buf = Vec::new();
+    rpc_msg_body.encode(&mut buf).expect("Protobuf error");
+
+    let client = Client::new(&client_cfg.fill_missing(), &keys);
+    let client = client.into();
+    let mut curr_leader = String::from("node1");
+
+    loop {
+        let msg = PinnedClient::send_and_await_reply(
+            &client,
+            &curr_leader,
+            MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon),
+        )
+        .await
+        .unwrap();
+
+        let sz = msg.as_ref().1;
+        let resp = ProtoClientReply::decode(&msg.as_ref().0.as_slice()[..sz]).unwrap();
+        if let None = resp.reply {
+            continue;
+        }
+        let resp = match resp.reply.unwrap() {
+            pft::proto::client::proto_client_reply::Reply::Receipt(r) => r,
+            pft::proto::client::proto_client_reply::Reply::TryAgain(_) => {
+                continue;
+            },
+            pft::proto::client::proto_client_reply::Reply::Leader(l) => {
+                if curr_leader != l.name {
+                    trace!("Switching leader: {} --> {}", curr_leader, l.name);
+                    PinnedClient::drop_connection(&client, &curr_leader).await;    
+                    curr_leader = l.name.clone();
+                }
+                continue;
+            },
+            pft::proto::client::proto_client_reply::Reply::TentativeReceipt(r) => {
+                debug!("Got tentative receipt: {:?}", r);
+                break;
+            },
+        };
+
+        info!("{:#?}", resp);
+        break;
+    }
+
+
+    
+
+
+    Ok(())
 }

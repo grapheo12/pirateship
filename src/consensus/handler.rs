@@ -17,7 +17,7 @@ use tokio::{join, sync::{mpsc, Mutex, Semaphore}};
 
 use crate::{
     config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, rpc::{
-        client::PinnedClient, server::{LatencyProfile, MsgAckChan, RespType}, MessageRef, PinnedMessage
+        client::PinnedClient, server::{GetServerKeys, LatencyProfile, MsgAckChan, RespType}, MessageRef, PinnedMessage
     }
 };
 
@@ -166,7 +166,11 @@ impl Deref for PinnedServerContext {
     }
 }
 
-
+impl GetServerKeys for PinnedServerContext {
+    fn get_server_keys(&self) -> Arc<Box<KeyStore>> {
+        self.keys.get()
+    }
+}
 /// This should be a very short running function.
 /// No blocking and/or locking allowed.
 /// The job is to filter old messages quickly and send them on the channel.
@@ -204,12 +208,20 @@ pub fn consensus_rpc_handler<'a>(
     };
 
     match &msg {
-        rpc::proto_payload::Message::ClientRequest(_) => {
+        rpc::proto_payload::Message::ClientRequest(client_req) => {
+            let ret = 
+            if client_req.tx.as_ref().is_some() && client_req.tx.as_ref().unwrap().is_reconfiguration {
+                Ok(RespType::RespAndTrackAndReconf)
+            } else {
+                Ok(RespType::RespAndTrack)
+            };
+
             let msg = (body.message.unwrap(), sender, ack_tx, profile);
             if let Err(_) = ctx.client_queue.0.send(msg) {
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }
-            return Ok(RespType::RespAndTrack);
+
+            return ret;
         }
         rpc::proto_payload::Message::BackfillRequest(_) => {
             let msg = (body.message.unwrap(), sender, ack_tx, profile);
@@ -254,15 +266,19 @@ where Engine: crate::execution::Engine
 
             if updated_last_n > last_n {
                 // New block has been added. Vote for the last one.
-                let vote = create_vote_for_blocks(ctx.clone(), &seq_nums).await?;
-                profile.register("Prepare vote");
-                do_reply_vote(ctx.clone(), client.clone(), vote, &sender).await?;
-                profile.register("Sent vote");
-
-                if updated_last_n % 1000 == 0 {
-                    profile.should_print = true;
-                    profile.prefix = String::from(format!("Block: {}", updated_last_n));
-                    profile.print();
+                let stage = ctx.lifecycle_stage.load(Ordering::SeqCst);
+                if stage == LifecycleStage::FullNode as i8 {
+                    // Only full nodes vote.
+                    let vote = create_vote_for_blocks(ctx.clone(), &seq_nums).await?;
+                    profile.register("Prepare vote");
+                    do_reply_vote(ctx.clone(), client.clone(), vote, &sender).await?;
+                    profile.register("Sent vote");
+    
+                    if updated_last_n % 1000 == 0 {
+                        profile.should_print = true;
+                        profile.prefix = String::from(format!("Block: {}", updated_last_n));
+                        profile.print();
+                    }
                 }
             }
 
@@ -283,12 +299,12 @@ where Engine: crate::execution::Engine
                 let mut lack_pend = ctx.client_ack_pending.lock().await;
                 // Followers should not have pending client requests.
                 // But this same interface is good for refactoring.
-                do_commit(ctx, engine, &mut fork, &mut lack_pend, new_ci);
+                do_commit(ctx, client, engine, &mut fork, &mut lack_pend, new_ci);
             }
         }
         crate::proto::rpc::proto_payload::Message::Vote(v) => {
             profile.register("Vote chan wait");
-            let _ = do_process_vote(ctx.clone(), engine, v, sender, majority, super_majority).await;
+            let _ = do_process_vote(ctx.clone(), client.clone(), engine, v, sender, majority, super_majority).await;
             profile.register("Vote process");
         }
         crate::proto::rpc::proto_payload::Message::ViewChange(vc) => {
@@ -305,9 +321,9 @@ where Engine: crate::execution::Engine
         _ => {}
     }
 
-    if ctx.lifecycle_stage.load(Ordering::SeqCst) == LifecycleStage::Dead as i8 {
-        do_graceful_shutdown().await;
-    }
+    // if ctx.lifecycle_stage.load(Ordering::SeqCst) == LifecycleStage::Dead as i8 {
+    //     do_graceful_shutdown().await;
+    // }
 
     Ok(())
 }
@@ -513,14 +529,26 @@ pub async fn handle_node_messages<Engine>(
             break; // Select failed because both channels were closed!
         }
 
+        let stage = ctx.lifecycle_stage.load(Ordering::SeqCst);
+        if stage == LifecycleStage::Dead as i8 {
+            do_graceful_shutdown().await;
+            break;
+        }
+
         #[cfg(feature = "view_change")]
         {
-            if view_timer_tick {
-                info!("Timer fired");
-                intended_view += 1;
-                if intended_view > ctx.state.view.load(Ordering::SeqCst) {
-                    if let Err(e) = do_init_view_change(&ctx, &engine, &client, super_majority).await {
-                        error!("Error initiating view change: {}", e);
+            // If Dormant or Learner, don't act on view timer.
+            let stage = ctx.lifecycle_stage.load(Ordering::SeqCst);
+            if stage == LifecycleStage::Dormant as i8 || stage == LifecycleStage::Learner as i8 {
+                // Do nothing
+            }else {
+                if view_timer_tick {
+                    info!("Timer fired");
+                    intended_view += 1;
+                    if intended_view > ctx.state.view.load(Ordering::SeqCst) {
+                        if let Err(e) = do_init_view_change(&ctx, &engine, &client, super_majority).await {
+                            error!("Error initiating view change: {}", e);
+                        }
                     }
                 }
             }
@@ -530,6 +558,22 @@ pub async fn handle_node_messages<Engine>(
             // @todo: Really need a VecDeque::pop_front() here. But this suffices for now.
             let mut req = curr_node_req.remove(0);
             node_req_num -= 1;
+
+            // If we are in the Dormant or Learner stage, only process AppendEntries.
+            if stage == LifecycleStage::Dormant as i8 || stage == LifecycleStage::Learner as i8 {
+                if let crate::proto::rpc::proto_payload::Message::AppendEntries(_) = req.0 {
+                    // If I am Dormant, by this msg, I become a learner.
+                    if stage == LifecycleStage::Dormant as i8 {
+                        info!("Lifecycle stage: Dormant -> Learner");
+                        ctx.lifecycle_stage.store(LifecycleStage::Learner as i8, Ordering::SeqCst);
+                    }
+                    if let Err(e) = process_node_request(&ctx, &engine, &client, majority, super_majority, &mut req).await {
+                        error!("Error processing append entries: {}", e);
+                    }
+                }
+                continue;
+            }
+
             // AppendEntries should be processed by a single thread.
             // Only votes can be safely processed by multiple threads.
             if let crate::proto::rpc::proto_payload::Message::Vote(_) = req.0 {

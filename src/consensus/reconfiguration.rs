@@ -7,7 +7,7 @@ use nix::sys::signal;
 use nix::sys::signal::Signal::SIGINT;
 use nix::unistd::Pid;
 
-use crate::{config::{Config, NodeNetInfo}, crypto::KeyStore, proto::execution::{ProtoTransaction, ProtoTransactionOp}};
+use crate::{config::{Config, NodeNetInfo}, crypto::KeyStore, proto::execution::{ProtoTransaction, ProtoTransactionOp}, rpc::client::PinnedClient};
 
 use super::handler::{LifecycleStage, PinnedServerContext};
 
@@ -95,7 +95,7 @@ impl FromStr for LearnerInfo {
 }
 
 /// Adding a learner == adding net config info + adding to learner list + adding public key
-pub fn do_add_learners(ctx: &PinnedServerContext, learners: &Vec<LearnerInfo>) {
+pub fn do_add_learners(ctx: &PinnedServerContext, client: &PinnedClient, learners: &Vec<LearnerInfo>) {
     let mut _cfg = ctx.config.get();
     let new_cfg = Arc::make_mut(&mut _cfg);
 
@@ -107,8 +107,9 @@ pub fn do_add_learners(ctx: &PinnedServerContext, learners: &Vec<LearnerInfo>) {
         insert_learner(new_cfg, &learner.name);
         insert_pub_key(new_keys, &learner.name, &learner.pub_key);
     }
-    
+
     ctx.config.set(new_cfg.clone());
+    client.0.config.set(new_cfg.clone());
     ctx.keys.set(new_keys.clone());
 }
 
@@ -205,6 +206,18 @@ fn parse_add_learner(op: &ProtoTransactionOp) -> Result<LearnerInfo, Error> {
     })
 }
 
+pub fn serialize_add_learner(learners: &LearnerInfo) -> ProtoTransactionOp {
+    ProtoTransactionOp {
+        op_type: crate::proto::execution::ProtoTransactionOpType::AddLearner.into(),
+        operands: vec![
+            learners.name.as_bytes().to_vec(),
+            learners.info.addr.as_bytes().to_vec(),
+            learners.info.domain.as_bytes().to_vec(),
+            learners.pub_key.to_bytes().to_vec(),
+        ],
+    }
+} 
+
 fn parse_del_learner(op: &ProtoTransactionOp) -> Result<String, Error> {
     /*
         Op format: [name] (1)
@@ -264,7 +277,7 @@ fn is_valid_reconfiguration(ctx: &PinnedServerContext, to_upgrade: &Vec<String>,
 /// `on_byz_commit` controls whether to execute the byz_commit phase or the crash_commit phase
 /// Returns true if there was some configuration change.#
 /// Otherwise, returns false.
-pub fn maybe_execute_reconfiguration_transaction(ctx: &PinnedServerContext, tx: &ProtoTransaction, on_byz_commit: bool) -> Result<bool, Error>{
+pub fn maybe_execute_reconfiguration_transaction(ctx: &PinnedServerContext, client: &PinnedClient, tx: &ProtoTransaction, on_byz_commit: bool) -> Result<bool, Error>{
     // Sanity check: Cannot be both on_crash_commit and on_byz_commit
     if tx.on_crash_commit.is_some() && tx.on_byzantine_commit.is_some() {
         return Err(Error::new(std::io::ErrorKind::InvalidData, "Cannot be both on_crash_commit and on_byz_commit"));
@@ -295,7 +308,7 @@ pub fn maybe_execute_reconfiguration_transaction(ctx: &PinnedServerContext, tx: 
                 ret = true;
             }
     
-            do_add_learners(ctx, &to_add);
+            do_add_learners(ctx, client, &to_add);
             do_delete_learners(ctx, &to_remove);
 
             if ret {

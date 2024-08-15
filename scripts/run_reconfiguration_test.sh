@@ -6,7 +6,7 @@ cat <<EOF > /tmp/reconf.trace
 5 ADD_LEARNER node5
 5 ADD_LEARNER node6
 10 DEL_LEARNER node5
-5 END
+30 END
 EOF
 
 python3 scripts/run_remote_reconfiguration_test.py \

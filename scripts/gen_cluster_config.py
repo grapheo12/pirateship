@@ -210,10 +210,10 @@ def gen_keys_and_certs(nodelist: Dict[str, Tuple[str, str]], caname: str, client
     keypairs = {node: gen_signing_keypair(node) for node in nodelist}
     keypairs.update(
         {"client" + str(i): gen_signing_keypair("client" + str(i)) for i in range(1, client_cnt + 1)})
-    keypairs.update(
-        {"controller": gen_signing_keypair("controller")})
     
     if gen_combined_keylist:
+        keypairs.update(
+            {"controller": gen_signing_keypair("controller")})
         print("Generating public key list")
         with open(PUB_KEYLIST_NAME, "w") as f:
             for node, (_, pubk) in keypairs.items():

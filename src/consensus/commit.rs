@@ -16,8 +16,7 @@ use crate::{
         }, consensus::ProtoFork, execution::ProtoTransactionResult
     },
     rpc::{
-        server::{LatencyProfile, MsgAckChan},
-        PinnedMessage,
+        client::PinnedClient, server::{LatencyProfile, MsgAckChan}, PinnedMessage
     }
 };
 
@@ -57,7 +56,7 @@ where Engine: crate::execution::Engine
 /// Only returns false if there is an invariant violation.
 /// There was no 2-chain QC found.
 fn maybe_byzantine_commit_with_n_and_view<Engine>(
-    ctx: &PinnedServerContext, engine: &Engine,
+    ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine,
     fork: &MutexGuard<Log>, n: u64, view: u64,
     lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>
 ) -> bool 
@@ -98,7 +97,7 @@ where Engine: crate::execution::Engine
             error!("Invariant violation: Byzantine commit index {} higher than fork.last() = {}", updated_bci, fork.last());
         }
         ctx.state.byz_commit_index.store(updated_bci, Ordering::SeqCst);
-        do_commit(ctx, engine, fork, lack_pend, updated_bci);
+        do_commit(ctx, client, engine, fork, lack_pend, updated_bci);
         
         engine.signal_byzantine_commit(updated_bci);
         for bn in (old_bci + 1)..(updated_bci + 1) {
@@ -107,7 +106,7 @@ where Engine: crate::execution::Engine
                 if !_tx.is_reconfiguration {
                     continue;
                 }
-                match maybe_execute_reconfiguration_transaction(ctx, _tx, true) {
+                match maybe_execute_reconfiguration_transaction(ctx, client, _tx, true) {
                     Ok(did_reconf) => {
                         if did_reconf {
                             info!("Reconfiguration transaction executed successfully!");
@@ -131,7 +130,7 @@ where Engine: crate::execution::Engine
 }
 
 pub fn maybe_byzantine_commit<Engine>(
-    ctx: &PinnedServerContext, engine: &Engine, fork: &MutexGuard<Log>,
+    ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine, fork: &MutexGuard<Log>,
     lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>)
 where Engine: crate::execution::Engine
 {
@@ -142,7 +141,7 @@ where Engine: crate::execution::Engine
     let last_qc_view = fork.last_qc_view();
     let mut check_qc = fork.last_qc();
 
-    while !maybe_byzantine_commit_with_n_and_view(ctx, engine, fork, check_qc, last_qc_view, lack_pend) {
+    while !maybe_byzantine_commit_with_n_and_view(ctx, client, engine, fork, check_qc, last_qc_view, lack_pend) {
         if check_qc == 0 {
             break;
         }
@@ -154,7 +153,7 @@ where Engine: crate::execution::Engine
 }
 
 pub fn do_commit<Engine>(
-    ctx: &PinnedServerContext, engine: &Engine,
+    ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine,
     fork: &MutexGuard<Log>,
     lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>,
     n: u64,
@@ -178,7 +177,8 @@ pub fn do_commit<Engine>(
             if !_tx.is_reconfiguration {
                 continue;
             }
-            match maybe_execute_reconfiguration_transaction(ctx, _tx, false) {
+            info!("Reconfiguration transaction found in block: {}", bn);
+            match maybe_execute_reconfiguration_transaction(ctx, client, _tx, false) {
                 Ok(did_reconf) => {
                     if did_reconf {
                         info!("Reconfiguration transaction executed successfully!");

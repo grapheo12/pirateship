@@ -13,7 +13,7 @@ use tokio::{
 };
 use tokio_rustls::{client, server};
 
-use super::{client::Client, proto::auth::ProtoHandshakeResponse, server::Server};
+use super::{client::{Client, PinnedClient}, proto::auth::ProtoHandshakeResponse, server::{GetServerKeys, Server}};
 
 #[derive(Clone, Debug)]
 pub(crate) struct HandshakeResponse {
@@ -69,7 +69,7 @@ pub async fn handshake_server<S>(
     stream: &mut server::TlsStream<TcpStream>,
 ) -> Result<String, Error>
 where
-    S: Send + Sync + 'static,
+    S: GetServerKeys + Send + Sync + 'static,
 {
     let mut rng = rand::rngs::OsRng;
     let nonce: u32 = rng.gen();
@@ -87,7 +87,7 @@ where
 
     let name = resp.name;
     // String::from(std::str::from_utf8(resp.name).unwrap_or(""));
-    if server.key_store.get_pubkey(&name).is_none() {
+    if server.key_store.get().get_pubkey(&name).is_none() {
         return Err(Error::new(ErrorKind::InvalidData, "unknown peer"));
     }
 
@@ -99,7 +99,7 @@ where
         .unwrap_or(&[0u8; SIGNATURE_LENGTH]);
     // Let's hope a blank signature is never a valid signature.
 
-    if !server.key_store.verify(&name, sig, payload.as_slice()) {
+    if !server.key_store.get().verify(&name, sig, payload.as_slice()) {
         return Err(Error::new(ErrorKind::InvalidData, "invalid signature"));
     }
 
@@ -107,14 +107,14 @@ where
 }
 
 pub async fn handshake_client(
-    client: &Arc<Client>,
+    client: &PinnedClient,
     stream: &mut client::TlsStream<TcpStream>,
 ) -> Result<(), Error> {
     let nonce = stream.read_u32().await?;
     debug!("Received nonce: {}", nonce);
-    let cfg = client.config.get();
+    let cfg = client.0.config.get();
     let payload = construct_payload(nonce, &cfg.net_config.name);
-    let signature = client.key_store.sign(&payload.as_slice());
+    let signature = client.0.key_store.sign(&payload.as_slice());
     let signature = Bytes::from(Vec::from(signature));
     let name = cfg.net_config.name.clone();
     let resp = HandshakeResponse { name, signature };
