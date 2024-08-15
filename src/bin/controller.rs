@@ -2,11 +2,12 @@ use std::{fs, io, path, str::FromStr};
 
 use clap::{arg, command, Arg, ArgAction};
 use log::{debug, info, trace};
+use log4rs::config;
 use pft::{
-    config::{default_log4rs_config, ClientConfig},
-    consensus::reconfiguration::{serialize_add_learner, LearnerInfo},
+    config::{default_log4rs_config, ClientConfig, NodeNetInfo},
+    consensus::reconfiguration::{serialize_add_learner, serialize_del_learner, LearnerInfo},
     crypto::KeyStore,
-    proto::{client::{self, ProtoClientReply, ProtoClientRequest}, execution::{ProtoTransaction, ProtoTransactionPhase}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, MessageRef},
+    proto::{client::{ProtoClientReply, ProtoClientRequest}, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, MessageRef},
 };
 use prost::Message;
 
@@ -98,22 +99,39 @@ async fn main() -> io::Result<()> {
     }
 
     let cfg_contents = fs::read_to_string(cfg_path).expect("Invalid file path");
-    let client_cfg = ClientConfig::deserialize(&cfg_contents);
+    let mut client_cfg = ClientConfig::deserialize(&cfg_contents);
     let mut keys = KeyStore::empty();
     keys.priv_key = KeyStore::get_privkeys(&client_cfg.rpc_config.signing_priv_key_path);
 
-    let add_learner_op = config.add_learner.iter().map(|info| {
+    let add_learner_op: Vec<ProtoTransactionOp> = config.add_learner.iter().map(|info| {
         serialize_add_learner(info)
     }).collect();
 
     info!("Add learner op: {:?}", add_learner_op);
 
+    let del_learner_op: Vec<ProtoTransactionOp> = config.del_learner.iter().map(|name| {
+        serialize_del_learner(name)
+    }).collect();
+
+    info!("Del learner op: {:?}", del_learner_op);
+
+    let crash_commit_ops: Vec<ProtoTransactionOp> = add_learner_op.into_iter()
+        .chain(del_learner_op.into_iter())
+        .collect();
+
+    let on_crash_commit = if crash_commit_ops.is_empty() {
+        None
+    } else {
+        Some(ProtoTransactionPhase {
+            ops: crash_commit_ops,
+        })
+    };
+
+
     let client_req = ProtoClientRequest {
         tx: Some(ProtoTransaction {
             on_receive: None,
-            on_crash_commit: Some(ProtoTransactionPhase { 
-                ops: add_learner_op,
-            }),
+            on_crash_commit,
             on_byzantine_commit: None,
             is_reconfiguration: true,
         }),
@@ -171,8 +189,13 @@ async fn main() -> io::Result<()> {
         break;
     }
 
+    // Update my own config file
+    for info in config.add_learner.iter() {
+        client_cfg.net_config.nodes.insert(info.name.clone(), info.info.clone());
+    }
 
-    
+    let cfg_str = serde_json::to_string_pretty(&client_cfg).expect("Invalid Config");
+    fs::write(cfg_path, cfg_str).expect("Unable to write file");
 
 
     Ok(())

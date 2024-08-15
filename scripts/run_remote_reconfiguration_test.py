@@ -235,6 +235,13 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
                 prom.join()
             except Exception as e:
                 print(e)
+
+            for c in cmd[1]:
+                if c[0] == "DEL_LEARNER":
+                    time.sleep(0.1)
+                    print("Killing extra node:", c[1])
+                    kill_nodes({c[1]: extra_node_conns[c[1]]})
+                    
         
         time.sleep(1)
         

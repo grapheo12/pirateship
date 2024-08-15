@@ -209,8 +209,7 @@ pub fn consensus_rpc_handler<'a>(
 
     match &msg {
         rpc::proto_payload::Message::ClientRequest(client_req) => {
-            let ret = 
-            if client_req.tx.as_ref().is_some() && client_req.tx.as_ref().unwrap().is_reconfiguration {
+            let ret = if client_req.tx.as_ref().is_some() && client_req.tx.as_ref().unwrap().is_reconfiguration {
                 Ok(RespType::RespAndTrackAndReconf)
             } else {
                 Ok(RespType::RespAndTrack)

@@ -234,6 +234,13 @@ fn parse_del_learner(op: &ProtoTransactionOp) -> Result<String, Error> {
     Ok(name.unwrap().to_string())
 }
 
+pub fn serialize_del_learner(name: &String) -> ProtoTransactionOp {
+    ProtoTransactionOp {
+        op_type: crate::proto::execution::ProtoTransactionOpType::DelLearner.into(),
+        operands: vec![name.as_bytes().to_vec()],
+    }
+}
+
 fn parse_full_node_op(op: &ProtoTransactionOp) -> Result<String, Error> {
     /*
         Op format: [name] (1)
