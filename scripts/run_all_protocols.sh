@@ -10,7 +10,7 @@ start_time=$(date -Ins)
 RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt scripts/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i ../cluster_key.pem -r 3 -s 120 -up 2 -down 2 $ALL_CLIENTS"
 # RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt scripts/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i ../cluster_key.pem -r 1 -s 30 -up 2 -down 2 $ALL_CLIENTS"
 
-# Run cochin
+# Run pirateship
 make
 $RUN_CMD
 
@@ -42,7 +42,7 @@ end_time=$(date -Ins)
 python3 scripts/plot_time_range_client_sweep.py \
     --path logs --end $end_time --start $start_time \
     -r 3 -c 2 -l node1 -up 2 -down 2 -o plot.png \
-    --legend "cochin-20s" \
+    --legend "pirateship-20s" \
     --legend "chained_pbft-20s" \
     --legend "diverse_raft" \
     --legend "signed_raft" \

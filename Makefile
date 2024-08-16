@@ -1,5 +1,5 @@
-.PHONY: cochin_logger
-cochin_logger:
+.PHONY: pirateship_logger
+pirateship_logger:
 	CC=clang CXX=clang++ cargo build --release
 
 .PHONY: lucky_raft_logger

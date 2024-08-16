@@ -39,7 +39,7 @@ sh scripts/run_all_protocols.sh
 
 # Current status
 
-![Performance of Cochin wrt other protocols; Non-TEE and LAN setup](perf.png)
+![Performance of Pirateship wrt other protocols; Non-TEE and LAN setup](perf.png)
 
 
 # TODO
@@ -52,4 +52,3 @@ sh scripts/run_all_protocols.sh
     
 - [ ] Implication of handling multiple platforms?
 - [ ] Handling persistence: Same disk or replicated disks?
-- [ ] Why is diverse_raft performing worse than cochin?

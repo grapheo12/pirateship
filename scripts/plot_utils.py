@@ -1,4 +1,5 @@
 import hashlib
+import random
 from typing import Dict, List
 import click
 
@@ -8,6 +9,7 @@ import datetime
 from dateutil.parser import isoparse
 from statistics import mean, median, stdev, quantiles
 
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from pprint import pprint
@@ -204,13 +206,16 @@ def convert_legend_to_rgb_color(legend: str) -> str:
         l = legend
     # SHA256 hash of the legend
     sha = hashlib.sha256(l.encode()).hexdigest()
-    # First 6 characters as hex color
-    return f"#{sha[:6]}"
+    hex_color = sha[6:6+6]
+    return f"#{hex_color}"
 
 
 def plot_tput_vs_latency_multi(stat_list: List[Dict[int, Stats]], legends: List[str], name: str):
     assert len(stat_list) == len(legends)
-    
+    font = {
+        'size'   : 22}
+
+    matplotlib.rc('font', **font)
     for i, stats in enumerate(stat_list): 
         points = list(sorted(stats.items()))
 
@@ -243,7 +248,7 @@ def plot_tput_vs_latency_multi(stat_list: List[Dict[int, Stats]], legends: List[
     # Legend to the top and horizontal
     plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=len(legends)//2)
     # Wide and short figure
-    plt.gcf().set_size_inches(20, 5)
+    plt.gcf().set_size_inches(20, 12)
 
     # Save the figure, tight layout to prevent cropping
     plt.savefig(name, bbox_inches='tight')
