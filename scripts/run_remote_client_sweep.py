@@ -10,12 +10,12 @@ import datetime
 from plot_utils import parse_log_dir_with_total_clients, plot_tput_vs_latency
 
 
-def run_with_given_client(node_template, client_template, ip_list, identity_file, repeat, seconds, git_hash, client_n):
+def run_with_given_client(node_template, client_template, ip_list, identity_file, repeat, seconds, git_hash, client_n, max_nodes=-1):
     # This is almost same as run_remote.
     # But we will modify each clients config after all the configs are generated.
     # Then we will copy them over to remote and run experiments.
-    gen_config("configs", "cluster", node_template, client_template, ip_list, -1)
-    nodes, clients = tag_all_machines(ip_list)
+    gen_config("configs", "cluster", node_template, client_template, ip_list, max_nodes)
+    nodes, clients = tag_all_machines(ip_list, start=0, max_nodes=max_nodes)
 
     # How many client goes in each machine?
     num_clients = [client_n // len(clients) for _ in range(len(clients))]
@@ -164,7 +164,13 @@ def run_with_given_client(node_template, client_template, ip_list, identity_file
     help="Ramp down seconds to ignore in plotting",
     type=click.INT
 )
-def main(node_template, client_template, ip_list, identity_file, repeat, seconds, clients, ramp_up, ramp_down):
+@click.option(
+    "-nodes", "--max_nodes",
+    default=-1,
+    help="Maximum number of nodes to use",
+    type=click.INT
+)
+def main(node_template, client_template, ip_list, identity_file, repeat, seconds, clients, ramp_up, ramp_down, max_nodes):
     # build_project()
     git_hash = get_current_git_hash()
     _, client_tags = tag_all_machines(ip_list)
@@ -176,7 +182,7 @@ def main(node_template, client_template, ip_list, identity_file, repeat, seconds
             run_with_given_client(
                 node_template, client_template, ip_list,
                 identity_file, repeat, seconds, git_hash,
-                client)
+                client, max_nodes)
         )
     dirs = [f"logs/{d}" for d in dirs]
 

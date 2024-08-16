@@ -238,7 +238,7 @@ def gen_keys_and_certs(nodelist: Dict[str, Tuple[str, str]], caname: str, client
                 print(node, addr, domain, pubk_line.decode(), file=f)
 
 # All gen_*_nodelist functions return: dict(node -> (ip, domain name)) and number of clients
-def gen_cluster_nodelist(ip_list, domain_suffix, cnt_start=0) -> Tuple[OrderedDict[str, Tuple[str, str]], int]:
+def gen_cluster_nodelist(ip_list, domain_suffix, cnt_start=0, max_nodes=-1) -> Tuple[OrderedDict[str, Tuple[str, str]], int]:
     if ip_list == "/dev/null":
         raise Exception("Ip list must be provided when using cluster mode")
     
@@ -252,6 +252,8 @@ def gen_cluster_nodelist(ip_list, domain_suffix, cnt_start=0) -> Tuple[OrderedDi
             # nodepool_vm0 <private ip address>
             if line.startswith("node"):
                 node_cnt += 1
+                if max_nodes != -1 and node_cnt > max_nodes:
+                    continue
                 ip = line.split()[1]
                 nodelist["node" + str(node_cnt)] = (ip.strip(), "node" + str(node_cnt) + domain_suffix)
             
@@ -329,7 +331,7 @@ def gen_config(outdir, mode, node_template, client_template, ip_list, num_nodes)
     elif mode == "remoteclient":
         raise NotImplementedError
     elif mode == "cluster":
-        nodelist, client_cnt = gen_cluster_nodelist(ip_list, ".pft.org")
+        nodelist, client_cnt = gen_cluster_nodelist(ip_list, ".pft.org", cnt_start=0, max_nodes=num_nodes)
     else:
         raise NotImplementedError
     

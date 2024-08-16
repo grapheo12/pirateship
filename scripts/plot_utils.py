@@ -246,7 +246,7 @@ def plot_tput_vs_latency_multi(stat_list: List[Dict[int, Stats]], legends: List[
     plt.grid()
 
     # Legend to the top and horizontal
-    plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=len(legends)//2)
+    plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=max(1, len(legends)//2))
     # Wide and short figure
     plt.gcf().set_size_inches(20, 12)
 
