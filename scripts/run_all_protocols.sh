@@ -7,12 +7,12 @@ set -o xtrace
 
 ALL_CLIENTS="-c 1 -c 10 -c 50 -c 100 -c 200 -c 500 -c 700 -c 1000"
 # ALL_CLIENTS="-c 200 -c 500 -c 700 -c 1000"
-ALL_CLIENTS="-c 50 -c 500"
+# ALL_CLIENTS="-c 50 -c 500"
 
 start_time=$(date -Ins)
 # start_time='2024-08-07T10:39:54.859389+00:00'
 RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt scripts/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i ../cluster_key.pem -r 3 -s 120 -up 2 -down 2 $ALL_CLIENTS"
-# RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt scripts/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i ../cluster_key.pem -r 1 -s 30 -up 2 -down 2 $ALL_CLIENTS"
+# RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt scripts/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i ../cluster_key.pem -r 2 -s 30 -up 2 -down 2 $ALL_CLIENTS"
 
 # Run pirateship
 make

@@ -41,7 +41,7 @@ use crate::consensus::utils::*;
 struct ForkStat {
     last_view: u64,
     last_n: u64,
-    last_qc: u64,
+    last_qc_view: u64,
     // last_signed_block: u64,
     name: String
 }
@@ -60,7 +60,7 @@ fn fork_choice_rule_get(
                 name.clone(),
                 ForkStat {
                     last_n: 0,
-                    last_qc: 0,
+                    last_qc_view: 0,
                     last_view: 0,
                     // last_signed_block: 0,
                     name: name.clone()
@@ -71,15 +71,15 @@ fn fork_choice_rule_get(
         let last_view = vc.view;
         let last_n = vc.fork_len;
 
-        let last_qc = match &vc.fork_last_qc {
-            Some(qc) => qc.n,
+        let last_qc_view = match &vc.fork_last_qc {
+            Some(qc) => qc.view,
             None => 0,
         };
         chk_stats.insert(
             name.clone(),
             ForkStat {
                 last_n,
-                last_qc,
+                last_qc_view,
                 last_view,
                 // last_signed_block,
                 name: name.clone()
@@ -87,15 +87,15 @@ fn fork_choice_rule_get(
         );
     }
 
-    // SubRule1: last_qc.n as high as possible.
-    let mut max_last_qc = 0;
+    // SubRule1: last_qc.view as high as possible.
+    let mut max_last_qc_view = 0;
     for (_name, fork) in &chk_stats {
-        if fork.last_qc > max_last_qc {
-            max_last_qc = fork.last_qc;
+        if fork.last_qc_view > max_last_qc_view {
+            max_last_qc_view = fork.last_qc_view;
         }
     }
 
-    chk_stats.retain(|_k, v| v.last_qc == max_last_qc);
+    chk_stats.retain(|_k, v| v.last_qc_view == max_last_qc_view);
 
     // SubRule 2: last_view as high as possible
     let mut max_last_view = 0;
@@ -141,12 +141,12 @@ fn sign_view_change_msg(vc: &mut ProtoViewChange, keys: &KeyStore, fork: &MutexG
     // Precondition: A correctly generated vc message will have fork.last() in its fork.
     //              OR have fork_len == 0
     let mut buf = BufWriter::new(vec![0u8; 32 + 8 + 8 + 8]);
-    // 32 for hash, 8 for view, 8 for last_n, 8 for last_qc
+    // 32 for hash, 8 for view, 8 for last_n, 8 for last_qc_view
     let _ = buf.write(&fork.last_hash());
     let _ = buf.write_u64::<BigEndian>(vc.view);
     let _ = buf.write_u64::<BigEndian>(vc.fork_len);
     let _ = buf.write_u64::<BigEndian>(match &vc.fork_last_qc {
-        Some(qc) => qc.n,
+        Some(qc) => qc.view,
         None => 0,
     });
 
@@ -156,7 +156,7 @@ fn sign_view_change_msg(vc: &mut ProtoViewChange, keys: &KeyStore, fork: &MutexG
     vc.fork_sig = sig.to_vec();
 }
 
-fn verify_view_change_msg_raw(last_hash: &Vec<u8>, view: u64, fork_len: u64, last_qc: u64, sig: &Vec<u8>, keys: &KeyStore, sender: &String) -> bool {
+fn verify_view_change_msg_raw(last_hash: &Vec<u8>, view: u64, fork_len: u64, last_qc_view: u64, sig: &Vec<u8>, keys: &KeyStore, sender: &String) -> bool {
     if sig.len() != SIGNATURE_LENGTH {
         return false;
     }
@@ -166,7 +166,7 @@ fn verify_view_change_msg_raw(last_hash: &Vec<u8>, view: u64, fork_len: u64, las
     let _ = buf.write(last_hash);
     let _ = buf.write_u64::<BigEndian>(view);
     let _ = buf.write_u64::<BigEndian>(fork_len);
-    let _ = buf.write_u64::<BigEndian>(last_qc);
+    let _ = buf.write_u64::<BigEndian>(last_qc_view);
 
     let buf = buf.into_inner().unwrap();
     keys.verify(sender, &sig.clone().try_into().unwrap(), &buf)
@@ -186,12 +186,12 @@ fn verify_view_change_msg(vc: &ProtoViewChange, keys: &KeyStore, sender: &String
     }
     let hash_last = hash(&enc_buf);
 
-    let last_qc = match &vc.fork_last_qc {
-        Some(qc) => qc.n,
+    let last_qc_view = match &vc.fork_last_qc {
+        Some(qc) => qc.view,
         None => 0,
     };
 
-    verify_view_change_msg_raw(&hash_last, vc.view, vc.fork_len, last_qc, &vc.fork_sig, keys, sender)
+    verify_view_change_msg_raw(&hash_last, vc.view, vc.fork_len, last_qc_view, &vc.fork_sig, keys, sender)
 }
 
 pub async fn do_reply_all_with_tentative_receipt(ctx: &PinnedServerContext) {
@@ -499,8 +499,11 @@ pub async fn do_init_new_leader<Engine>(
 
     {
         let mut byz_qc_pending = ctx.state.byz_qc_pending.lock().await;
+        let mut next_qc_list = ctx.state.next_qc_list.lock().await;
         byz_qc_pending.clear();
-        // We'll cause the next two blocks to be 2f + 1 voted anyway.
+        next_qc_list.clear(); // Invariant: qc.view must be same as the view of the block.
+
+        // We'll cause the next block to be 2f + 1 voted anyway.
     }
 
     info!("Fork Overwritten, new last_n = {}, last_hash = {}", last_n, last_hash.encode_hex::<String>());
@@ -540,7 +543,7 @@ pub async fn do_init_new_leader<Engine>(
             DefferedSignature {},
         )),
     };
-    if chosen_fork_stat.last_qc > 0 && chosen_fork_last_qc.is_some() {
+    if chosen_fork_stat.last_qc_view > 0 && chosen_fork_last_qc.is_some() {
         block.qc = vec![chosen_fork_last_qc.unwrap()];
     }
     profile.register("Block creation done!");
@@ -657,21 +660,21 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
         if !f.blocks[i as usize].view_is_stable {
             // This the signal that it is a New Leader message
             let mut valid_forks = 0;
-            let mut max_qc_seen = 0;
+            let mut max_qc_view_seen = 0;
 
             let mut subrule1_eligible_forks = HashMap::new();
 
             for (j, fork_validation) in f.blocks[i as usize].fork_validation.iter().enumerate() {
                 // Is this a valid fork?
                 // Check the signature on the fork.
-                let last_qc = match &fork_validation.fork_last_qc {
-                    Some(qc) => qc.n,
+                let last_qc_view = match &fork_validation.fork_last_qc {
+                    Some(qc) => qc.view,
                     None => 0
                 };
                 let chk = verify_view_change_msg_raw(
                     &fork_validation.fork_hash,
                     fork_validation.view,
-                    fork_validation.fork_len, last_qc,
+                    fork_validation.fork_len, last_qc_view,
                     &fork_validation.fork_sig, &_keys,
                     &fork_validation.name
                 );
@@ -682,15 +685,15 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
                 let fork_stat = ForkStat {
                     last_view: fork_validation.view,
                     last_n: fork_validation.fork_len,
-                    last_qc,
+                    last_qc_view,
                     name: fork_validation.name.clone(),
                 };
 
-                if last_qc > max_qc_seen {
-                    max_qc_seen = last_qc;
+                if last_qc_view > max_qc_view_seen {
+                    max_qc_view_seen = last_qc_view;
                     subrule1_eligible_forks.clear();
                     subrule1_eligible_forks.insert(j, fork_stat);
-                }else if last_qc == max_qc_seen {
+                }else if last_qc_view == max_qc_view_seen {
                     subrule1_eligible_forks.insert(j, fork_stat);
                 }
             
@@ -700,19 +703,19 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
                 return Err(Error::new(ErrorKind::InvalidData, "New Leader message with invalid fork information"))
             }
 
-            let mut max_qc_selected = 0;
+            let mut max_qc_view_selected = 0;
             for b in &f.blocks {
                 if b.qc.len() > 0 {
                     for qc in &b.qc {
-                        if qc.n > max_qc_selected {
-                            max_qc_selected = qc.n;
+                        if qc.view > max_qc_view_selected {
+                            max_qc_view_selected = qc.view;
                         }
                     }
                 }
             }
 
             // SubRule1
-            if max_qc_selected < max_qc_seen {
+            if max_qc_view_selected < max_qc_view_seen {
                 return Err(Error::new(ErrorKind::InvalidData, "New Leader message with invalid max qc; SubRule1 violated"))
             }
 

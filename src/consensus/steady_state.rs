@@ -131,6 +131,8 @@ pub fn do_create_qcs(
             }
         };
 
+        // Invariant: qc.view is the same as the view of the block which carries it.
+
         next_qc_list.insert((qc.n, qc.view), qc);
         byz_qc_pending.remove(n);
 
