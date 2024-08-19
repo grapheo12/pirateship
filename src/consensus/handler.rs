@@ -21,7 +21,7 @@ use tokio::{join, sync::{mpsc, Mutex, Semaphore}};
 use crate::{
     config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, rpc::{
         client::PinnedClient, server::{GetServerKeys, LatencyProfile, MsgAckChan, RespType}, MessageRef, PinnedMessage
-    }
+    }, utils::AtomicStruct
 };
 
 use super::{
@@ -85,8 +85,12 @@ pub enum LifecycleStage {
     Dead = 4,
 }
 
+type AtomicVec = AtomicStruct<Vec<String>>;
+
 pub struct ServerContext {
     pub config: AtomicConfig,
+    /// In all configurations, send_list = config.consensus_config.node_list - {me}
+    pub send_list: AtomicVec,
     pub i_am_leader: AtomicBool,
     pub view_is_stable: AtomicBool,
     pub lifecycle_stage: AtomicI8,
@@ -130,10 +134,12 @@ impl PinnedServerContext {
         let node_ch = mpsc::unbounded_channel();
         let client_ch = mpsc::unbounded_channel();
         let black_hole_ch = mpsc::unbounded_channel();
+        let send_list = get_everyone_except_me(&cfg.net_config.name, &cfg.consensus_config.node_list);
 
 
         let mut ctx = PinnedServerContext(Arc::new(Box::pin(ServerContext {
             config: AtomicConfig::new(cfg.clone()),
+            send_list: AtomicVec::new(send_list),
             i_am_leader: AtomicBool::new(false),
             lifecycle_stage: AtomicI8::new(LifecycleStage::Dormant as i8),
 
@@ -348,10 +354,6 @@ where
     let majority = get_majority_num(&ctx);
     let super_majority = get_super_majority_num(&ctx);
     let cfg = ctx.config.get();
-    let send_list = get_everyone_except_me(
-        &cfg.net_config.name,
-        &cfg.consensus_config.node_list,
-    );
 
     // Signed block logic: Either this timer expires.
     // Or the number of blocks crosses signature_max_delay_blocks.
@@ -432,7 +434,7 @@ where
         match do_append_entries(
             ctx.clone(), &engine.clone(), client.clone(),
             &mut curr_client_req, should_sig,
-            &send_list, majority, super_majority,
+            &ctx.send_list.get(), majority, super_majority,
         ).await {
             Ok(_) => {}
             Err(e) => {
@@ -497,15 +499,11 @@ pub async fn handle_node_messages<Engine>(
 
     let mut node_rx = ctx.0.node_queue.1.lock().await;
     let cfg = ctx.config.get();
-    let send_list = get_everyone_except_me(
-        &cfg.net_config.name,
-        &cfg.consensus_config.node_list,
-    );
 
     debug!(
         "Leader: {}, Send List: {:?}",
         ctx.i_am_leader.load(Ordering::SeqCst),
-        &send_list
+        &ctx.send_list.get()
     );
 
     let mut curr_node_req = Vec::new();

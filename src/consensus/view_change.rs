@@ -570,10 +570,7 @@ pub async fn do_init_new_leader<Engine>(
     debug!("AE has signed block? {}", fork.get(fork.last()).unwrap().has_signature());
     profile.register("AE creation done");
 
-    let send_list = get_everyone_except_me(
-        &_cfg.net_config.name,
-        &_cfg.consensus_config.node_list,
-    );
+    let send_list = ctx.send_list.get();
 
     let block_n = ae.fork.as_ref().unwrap().blocks.len();
     let block_n = ae.fork.as_ref().unwrap().blocks[block_n - 1].n;
