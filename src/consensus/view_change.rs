@@ -2,6 +2,7 @@
 // Licensed under the Apache 2.0 License.
 
 use byteorder::{BigEndian, WriteBytesExt};
+use crossbeam::atomic::AtomicConsume;
 use ed25519_dalek::SIGNATURE_LENGTH;
 use hex::ToHex;
 use log::{debug, error, info, trace, warn};
@@ -314,7 +315,7 @@ where Engine: crate::execution::Engine
     profile.prefix = String::from(format!("View change to {}", leader));
     profile.should_print = true;
     if let Err(e) =
-        PinnedClient::broadcast(client, &vec![leader.clone()], &bcast_msg, &mut profile).await
+        PinnedClient::broadcast(client, &ctx.send_list.get(), &bcast_msg, &mut profile).await
     {
         error!("Could not broadcast ViewChange: {}", e);
     }
@@ -344,12 +345,14 @@ pub async fn do_process_view_change<Engine>(
         return;
     }
 
+    info!("Processing view change for view {} from {}", vc.view, sender);
+
     if !_cfg.net_config.name
         .eq(&get_leader_str_for_view(&ctx, vc.view))
     {
         // I am not the leader for this message's intended view
         // @todo: Pacemaker: Use this as a signal to do view change
-        return;
+        info!("Not the leader for view {}, using this message for pacemaker", vc.view);
     }
 
     // Check the signature on the fork.
@@ -384,7 +387,28 @@ pub async fn do_process_view_change<Engine>(
 
     let total_forks = fork_buf.get(&vc.view).unwrap().len();
 
-    if total_forks >= super_majority as usize {
+
+    // Pacemaker logic: If I have f + 1 messages, I should initiate my own view change.
+    let my_view = ctx.state.view.load(Ordering::SeqCst);
+    if vc.view > my_view
+    && total_forks >= get_f_plus_one_num(&ctx) as usize
+    && ctx.intended_view.load(Ordering::SeqCst) < vc.view
+    {
+        // This will increment the view and broadcast the view change message
+        // But sometime in the future.
+        ctx.view_timer.fire_now().await;
+
+        info!("my_view = {}, ctx.intended_view = {}, vc.view = {}", my_view, ctx.intended_view.load(Ordering::SeqCst), vc.view);
+
+        // Reset the timer so that we don't fire it again unncecessarily.
+        ctx.view_timer.reset();
+
+        // if vc.view >= my_view + 2, we may need to fire the timer again and again until we catch up.  
+    }
+
+    if total_forks >= super_majority as usize
+    && get_leader_str_for_view(&ctx, vc.view).eq(&ctx.config.get().net_config.name)
+    {
         // Got 2f + 1 view change messages.
         // Need to update view and take over as leader.
 

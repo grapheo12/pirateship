@@ -167,8 +167,8 @@ where Engine: crate::execution::Engine
         fork.unwrap()
     };
 
-    if vote.view < ctx.state.view.load(Ordering::SeqCst) {
-        trace!("Vote for older view! Rejected");
+    if vote.view != ctx.state.view.load(Ordering::SeqCst) {
+        trace!("Vote for mismatched view {} (my view {})! Rejected", vote.view, ctx.state.view.load(Ordering::SeqCst));
         return Ok(());
     }
     if vote.n > fork.last() {
@@ -208,6 +208,8 @@ where Engine: crate::execution::Engine
                         // View is stabilised hence.
                         ctx.view_is_stable.store(true, Ordering::SeqCst);
                         info!("View stabilised!");
+                        let mut fork_buf = ctx.state.fork_buffer.lock().await;
+                        fork_buf.retain(|&v, _| v < vote.view);
                     }
                 }
             }
@@ -430,6 +432,9 @@ pub async fn do_push_append_entries_to_fork<Engine>(
     let new_stable = ctx.view_is_stable.load(Ordering::SeqCst);
     if new_stable && !old_stable {
         info!("View stabilised.");
+
+        let mut fork_buf = ctx.state.fork_buffer.lock().await;
+        fork_buf.retain(|&v, _| v < ae.view);
     }
 
 

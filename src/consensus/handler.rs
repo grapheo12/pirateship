@@ -121,6 +121,10 @@ pub struct ServerContext {
     ),
 
     pub view_timer: Arc<Pin<Box<ResettableTimer>>>,
+
+    /// Last view that was fast forwarded due to pacemaker.
+    pub intended_view: AtomicU64,
+
     pub total_client_requests: AtomicUsize,
 
     pub should_progress: Semaphore
@@ -156,6 +160,7 @@ impl PinnedServerContext {
             keys: AtomicKeyStore::new(keys.clone()),
             __client_black_hole_channel: (black_hole_ch.0, Mutex::new(black_hole_ch.1)),
             view_timer: ResettableTimer::new(Duration::from_millis(cfg.consensus_config.view_timeout_ms)),
+            intended_view: AtomicU64::new(0),
             total_client_requests: AtomicUsize::new(0),
             should_progress: Semaphore::new(1),
         })));
@@ -510,8 +515,6 @@ pub async fn handle_node_messages<Engine>(
     let mut view_timer_tick = false;
     let mut node_req_num = 0;
 
-    let mut intended_view = 0;
-
     // Start with a view change
     ctx.view_timer.fire_now().await;
 
@@ -544,8 +547,8 @@ pub async fn handle_node_messages<Engine>(
             }else {
                 if view_timer_tick {
                     info!("Timer fired");
-                    intended_view += 1;
-                    if intended_view > ctx.state.view.load(Ordering::SeqCst) {
+                    ctx.intended_view.fetch_add(1, Ordering::SeqCst);
+                    if ctx.intended_view.load(Ordering::SeqCst) > ctx.state.view.load(Ordering::SeqCst) {
                         if let Err(e) = do_init_view_change(&ctx, &engine, &client, super_majority).await {
                             error!("Error initiating view change: {}", e);
                         }

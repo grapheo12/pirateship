@@ -54,6 +54,12 @@ pub fn get_super_majority_num(ctx: &PinnedServerContext) -> u64 {
     2 * (n / 3) + 1
 }
 
+pub fn get_f_plus_one_num(ctx: &PinnedServerContext) -> u64 {
+    let _cfg = ctx.config.get();
+    let n = _cfg.consensus_config.node_list.len() as u64;
+    (n / 3) + 1
+}
+
 pub fn get_everyone_except_me(my_name: &String, node_list: &Vec<String>) -> Vec<String> {
     node_list
         .iter()
