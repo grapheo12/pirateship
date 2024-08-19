@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Copyright (c) Shubham Mishra. All rights reserved.
+# Licensed under the Apache 2.0 License.
+
+
 # Dependency: openssl jq
 
 # Generates a CA certificates and a certificate used by all nodes.

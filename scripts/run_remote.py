@@ -1,3 +1,6 @@
+# Copyright (c) Shubham Mishra. All rights reserved.
+# Licensed under the Apache 2.0 License.
+
 import os
 from fabric import Connection
 from fabric.runners import Result

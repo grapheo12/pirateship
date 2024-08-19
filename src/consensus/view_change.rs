@@ -1,3 +1,6 @@
+// Copyright (c) Shubham Mishra. All rights reserved.
+// Licensed under the Apache 2.0 License.
+
 use byteorder::{BigEndian, WriteBytesExt};
 use ed25519_dalek::SIGNATURE_LENGTH;
 use hex::ToHex;

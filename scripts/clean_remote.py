@@ -1,3 +1,6 @@
+# Copyright (c) Shubham Mishra. All rights reserved.
+# Licensed under the Apache 2.0 License.
+
 import click
 from run_remote import run_all, tag_all_machines
 from fabric import Connection

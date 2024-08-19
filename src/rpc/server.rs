@@ -1,3 +1,6 @@
+// Copyright (c) Shubham Mishra. All rights reserved.
+// Licensed under the Apache 2.0 License.
+
 use std::{fs::File, io::{self, Cursor, Error}, path, sync::Arc, time::{Duration, Instant}};
 
 use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, rpc::auth, utils::AtomicStruct};

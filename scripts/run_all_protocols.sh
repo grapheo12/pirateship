@@ -1,4 +1,8 @@
 #!/bin/bash
+
+# Copyright (c) Shubham Mishra. All rights reserved.
+# Licensed under the Apache 2.0 License.
+
 set -o xtrace
 
 ALL_CLIENTS="-c 1 -c 10 -c 50 -c 100 -c 200 -c 500 -c 700 -c 1000"

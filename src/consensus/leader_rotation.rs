@@ -1,3 +1,6 @@
+// Copyright (c) Shubham Mishra. All rights reserved.
+// Licensed under the Apache 2.0 License.
+
 fn round_robin_rotation(num_nodes: u64, view: u64) -> usize {
     ((view - 1) % num_nodes) as usize
 }

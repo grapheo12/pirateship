@@ -1,3 +1,6 @@
+// Copyright (c) Shubham Mishra. All rights reserved.
+// Licensed under the Apache 2.0 License.
+
 use std::{ops::Deref, pin::Pin, sync::Arc};
 
 pub mod auth;

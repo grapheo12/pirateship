@@ -1,3 +1,6 @@
+# Copyright (c) Shubham Mishra. All rights reserved.
+# Licensed under the Apache 2.0 License.
+
 from typing import Dict, Tuple, OrderedDict
 import click
 from cryptography.hazmat.primitives.asymmetric import rsa, ed25519

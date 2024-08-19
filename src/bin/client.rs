@@ -1,3 +1,6 @@
+// Copyright (c) Shubham Mishra. All rights reserved.
+// Licensed under the Apache 2.0 License.
+
 use log::{debug, info, trace, warn};
 use pft::{
     config::{default_log4rs_config, ClientConfig}, proto::{

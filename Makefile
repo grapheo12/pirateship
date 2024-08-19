@@ -1,3 +1,7 @@
+# Copyright (c) Shubham Mishra. All rights reserved.
+# Licensed under the Apache 2.0 License.
+
+
 .PHONY: pirateship_logger
 pirateship_logger:
 	CC=clang CXX=clang++ cargo build --release

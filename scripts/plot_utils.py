@@ -1,3 +1,6 @@
+# Copyright (c) Shubham Mishra. All rights reserved.
+# Licensed under the Apache 2.0 License.
+
 import hashlib
 import random
 from typing import Dict, List
@@ -231,6 +234,7 @@ def plot_tput_vs_latency_multi(stat_list: List[Dict[int, Stats]], legends: List[
             x=np.array(mean_tputs),
             y=np.array(mean_latencies),
             yerr=[yerr_min, yerr_max],
+            # yerr=np.array(stdev_latencies),
             xerr=np.array(stdev_tputs),
             label=legends[i],
             marker='>' if legends[i].endswith("-byz") else 'o',
@@ -239,7 +243,7 @@ def plot_tput_vs_latency_multi(stat_list: List[Dict[int, Stats]], legends: List[
             # dash-dotted if legend ends with "-byz" else solid
             linestyle='-.' if legends[i].endswith("-byz") else 'solid',
             # hex color
-            color=convert_legend_to_rgb_color(legends[i])
+            # color=convert_legend_to_rgb_color(legends[i])
         )
     plt.xlabel("Throughput (req/s)")
     plt.ylabel("Latency (us)")

@@ -1,3 +1,6 @@
+// Copyright (c) Shubham Mishra. All rights reserved.
+// Licensed under the Apache 2.0 License.
+
 use std::sync::Arc;
 
 use handler::{consensus_rpc_handler, PinnedServerContext, handle_client_messages, handle_node_messages};

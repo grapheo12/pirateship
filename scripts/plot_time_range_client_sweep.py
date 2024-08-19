@@ -1,3 +1,7 @@
+# Copyright (c) Shubham Mishra. All rights reserved.
+# Licensed under the Apache 2.0 License.
+
+
 from pprint import pprint
 import click
 from plot_utils import plot_tput_vs_latency_multi, parse_log_dir_with_total_clients, plot_tput_vs_latency

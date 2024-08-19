@@ -1,3 +1,7 @@
+// Copyright (c) Shubham Mishra. All rights reserved.
+// Licensed under the Apache 2.0 License.
+
+
 use sha2::{Digest, Sha256};
 
 pub const DIGEST_LENGTH: usize = 32;

@@ -44,6 +44,7 @@ sh scripts/run_all_protocols.sh
 
 # TODO
 
+- [ ] **View Change**: Add the last_qc.view highest clause!!!!
 - [ ] **Reconfiguration.**
     * Verifying signatures from old configs in terms of the new config
     * Reconf on byz commit, so that all correct replicas eventually (after GST) knows of this new config and joins it.

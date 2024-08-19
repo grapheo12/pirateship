@@ -1,3 +1,7 @@
+# Copyright (c) Shubham Mishra. All rights reserved.
+# Licensed under the Apache 2.0 License.
+
+
 from statistics import mean, median
 import sys
 

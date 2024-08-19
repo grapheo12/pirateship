@@ -1,3 +1,6 @@
+// Copyright (c) Shubham Mishra. All rights reserved.
+// Licensed under the Apache 2.0 License.
+
 use log::{debug, error, info};
 use pft::{config::{self, Config}, consensus, execution::engines::logger::PinnedLoggerEngine};
 use tokio::{runtime, signal};

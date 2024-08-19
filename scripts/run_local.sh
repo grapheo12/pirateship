@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Copyright (c) Shubham Mishra. All rights reserved.
+# Licensed under the Apache 2.0 License.
+
 NUM_NODES=$1
 NUM_SECONDS=$2
 CONFIG_DIR=$3

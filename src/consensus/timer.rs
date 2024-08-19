@@ -1,3 +1,6 @@
+// Copyright (c) Shubham Mishra. All rights reserved.
+// Licensed under the Apache 2.0 License.
+
 use std::{pin::Pin, sync::{atomic::AtomicBool, Arc}, time::Duration};
 
 use tokio::{sync::{mpsc, Mutex}, task::JoinHandle, time::sleep};

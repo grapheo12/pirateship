@@ -1,3 +1,6 @@
+// Copyright (c) Shubham Mishra. All rights reserved.
+// Licensed under the Apache 2.0 License.
+
 use hex::ToHex;
 use indexmap::IndexMap;
 use log::{debug, error, info, trace, warn};

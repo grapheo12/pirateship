@@ -1,3 +1,7 @@
+// Copyright (c) Shubham Mishra. All rights reserved.
+// Licensed under the Apache 2.0 License.
+
+
 use crossbeam::atomic::AtomicCell;
 use serde::{Deserialize, Serialize};
 use serde_json::Result;
