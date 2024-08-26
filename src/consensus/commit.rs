@@ -56,6 +56,51 @@ where Engine: crate::execution::Engine
     }
 }
 
+pub fn do_byzantine_commit<Engine>(
+    ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine,
+    fork: &MutexGuard<Log>, updated_bci: u64,
+    lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>
+) where Engine: crate::execution::Engine
+{
+    let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+    trace!(
+        "Updating byzantine_commit_index {} --> {}",
+        old_bci,
+        updated_bci
+    );
+
+    if updated_bci > fork.last() {
+        error!("Invariant violation: Byzantine commit index {} higher than fork.last() = {}", updated_bci, fork.last());
+    }
+    ctx.state.byz_commit_index.store(updated_bci, Ordering::SeqCst);
+    do_commit(ctx, client, engine, fork, lack_pend, updated_bci);
+    
+    engine.signal_byzantine_commit(updated_bci);
+    for bn in (old_bci + 1)..(updated_bci + 1) {
+        let entry = fork.get(bn).unwrap();
+        for _tx in &entry.block.tx {
+            if !_tx.is_reconfiguration {
+                continue;
+            }
+            match maybe_execute_reconfiguration_transaction(ctx, client, _tx, true) {
+                Ok(did_reconf) => {
+                    if did_reconf {
+                        info!("Reconfiguration transaction executed successfully!");
+                        // @todo: Increase config number.
+                    }
+                }
+                Err(e) => {
+                    warn!("Error executing reconfiguration transaction: {:?}", e);
+                }
+            }
+        }
+
+        ctx.state.num_byz_committed_txs.fetch_add(entry.block.tx.len(), Ordering::SeqCst);
+    }
+
+}
+
+
 /// Only returns false if there is an invariant violation.
 /// There was no 2-chain QC found.
 fn maybe_byzantine_commit_with_n_and_view<Engine>(
@@ -88,45 +133,8 @@ where Engine: crate::execution::Engine
             updated_bci = qc.n;
         }
     }
-    if updated_bci > old_bci {
-        
-        trace!(
-            "Updating byzantine_commit_index {} --> {}",
-            old_bci,
-            updated_bci
-        );
-
-        if updated_bci > fork.last() {
-            error!("Invariant violation: Byzantine commit index {} higher than fork.last() = {}", updated_bci, fork.last());
-        }
-        ctx.state.byz_commit_index.store(updated_bci, Ordering::SeqCst);
-        do_commit(ctx, client, engine, fork, lack_pend, updated_bci);
-        
-        engine.signal_byzantine_commit(updated_bci);
-        for bn in (old_bci + 1)..(updated_bci + 1) {
-            let entry = fork.get(bn).unwrap();
-            for _tx in &entry.block.tx {
-                if !_tx.is_reconfiguration {
-                    continue;
-                }
-                match maybe_execute_reconfiguration_transaction(ctx, client, _tx, true) {
-                    Ok(did_reconf) => {
-                        if did_reconf {
-                            info!("Reconfiguration transaction executed successfully!");
-                            // @todo: Increase config number.
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Error executing reconfiguration transaction: {:?}", e);
-                    }
-                }
-            }
-
-            ctx.state.num_byz_committed_txs.fetch_add(entry.block.tx.len(), Ordering::SeqCst);
-        }
-
-
-
+    if updated_bci > old_bci {        
+        do_byzantine_commit(ctx, client, engine, fork, updated_bci, lack_pend);
     }
 
     true

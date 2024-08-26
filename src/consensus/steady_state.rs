@@ -277,7 +277,6 @@ where Engine: crate::execution::Engine
         }
 
         if __flipped {
-            // Trying to avoid printing stuff while holding a lock (although I am holding a lock on fork :-))
             trace!(
                 "Waiting for super_majority due to quorum diversity. |byz_qc_pending| = {}",
                 __byz_qc_pending_len
