@@ -171,6 +171,13 @@ where Engine: crate::execution::Engine
         trace!("Vote for mismatched view {} (my view {})! Rejected", vote.view, ctx.state.view.load(Ordering::SeqCst));
         return Ok(());
     }
+
+    let member_list = &ctx.config.get().consensus_config.node_list;
+    if !member_list.contains(sender) {
+        warn!("Vote from non-member {} {:?}! Rejected", sender, member_list);
+        return Ok(());
+    }
+
     if vote.n > fork.last() {
         warn!("Vote({}) higher than fork.last() = {}", vote.n, fork.last());
         return Ok(());

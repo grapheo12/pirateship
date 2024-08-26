@@ -21,9 +21,7 @@ use crate::{
         client::{
             ProtoClientReply, ProtoClientRequest, ProtoTentativeReceipt
         }, consensus::{
-            DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork,
-            ProtoForkValidation,
-            ProtoViewChange,
+            DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoForkValidation, ProtoQuorumCertificate, ProtoViewChange
         }, execution::ProtoTransaction, rpc::ProtoPayload
     },
     rpc::{
@@ -259,8 +257,8 @@ where Engine: crate::execution::Engine
 
     warn!("Moved to new view {} with leader {}", view, leader);
 
-    // Send everything from bci onwards.
-    // This is equivalent to sending the sending all preprepare and prepare messages in PBFT
+    // Send everything from ci onwards.
+    // If more of the fork is needed, the next leader will backfill.
     let fork = ctx.state.fork.lock().await;
     let ci = ctx.state.commit_index.load(Ordering::SeqCst);
     info!("Sending everything from {} to {}", ci, fork.last());
@@ -286,7 +284,6 @@ where Engine: crate::execution::Engine
 
     if leader == _cfg.net_config.name {
         // I won't send the message to myself.
-        // @todo: Pacemaker: broadcast this
         drop(fork);
         do_process_view_change(
             ctx.clone(), engine,
@@ -394,6 +391,49 @@ pub async fn do_process_view_change<Engine>(
     && total_forks >= get_f_plus_one_num(&ctx) as usize
     && ctx.intended_view.load(Ordering::SeqCst) < vc.view
     {
+        // Pacemaker logic: Let's try to increase our bci as much as possible from the QCs in these view change messages.
+        let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+        let mut updated_bci = old_bci;
+        let fork = ctx.state.fork.lock().await;
+        for (_sender, vc) in fork_buf.get(&vc.view).unwrap() {
+            if vc.fork_last_qc.is_some() {
+                let qc = vc.fork_last_qc.as_ref().unwrap();
+                let mut i = qc.n;
+                if i > fork.last() {
+                    i = fork.last();
+                }
+
+                while i > old_bci {
+                    let entry = fork.get(i).unwrap();
+                    if entry.block.qc.len() > 0 {
+                        // Get the highest qc.n 
+                        let mut highest_qc: Option<&ProtoQuorumCertificate> = None;
+                        for _qc in &entry.block.qc {
+                            if highest_qc.is_none() || _qc.n > highest_qc.as_ref().unwrap().n {
+                                highest_qc = Some(_qc);
+                            }
+                        }
+
+                        let highest_qc = highest_qc.unwrap();
+                        if highest_qc.view == qc.view {
+                            let __updated_bci = highest_qc.n;
+                            if __updated_bci > updated_bci {
+                                updated_bci = __updated_bci;
+                            }
+                            break;
+                        }
+
+                    }
+                    i -= 1;
+                }
+            }
+        }
+
+        if updated_bci > old_bci {
+            info!("Pacemaker: Updating bci from {} to {}", old_bci, updated_bci);
+            let mut lack_pend = ctx.client_ack_pending.lock().await;
+            do_byzantine_commit(&ctx, &client, engine, &fork, updated_bci, &mut lack_pend);
+        }
         // This will increment the view and broadcast the view change message
         // But sometime in the future.
         ctx.view_timer.fire_now().await;
