@@ -27,6 +27,7 @@ message ProtoViewChange {
     bytes fork_sig = 3; // Signature over <H(fork.last()), view, fork_len, fork_last_qc>
     uint64 fork_len = 4;
     ProtoQuorumCertificate fork_last_qc = 5;
+    uint64 config_num = 6;
 }
 
 message ProtoForkValidation {
@@ -67,6 +68,7 @@ message ProtoAppendEntries {
     uint64 commit_index = 2;
     uint64 view = 4;
     bool view_is_stable = 5;
+    uint64 config_num = 6;
 }
 
 message ProtoSignatureArrayEntry {
@@ -79,5 +81,5 @@ message ProtoVote {
     bytes fork_digest = 2;
     uint64 n = 3;
     uint64 view = 4;
-    bool is_nack = 5;
+    uint64 config_num = 5;
 }

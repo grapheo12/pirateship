@@ -106,7 +106,7 @@ pub async fn create_vote_for_blocks(
         fork_digest: fork.hash_at_n(max_n).unwrap_or(vec![0u8; DIGEST_LENGTH]),
         n: max_n,
         view,
-        is_nack: false,
+        config_num: ctx.state.config_num.load(Ordering::SeqCst),
     })
 }
 
@@ -367,7 +367,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
         }
         info!("View fast forwarded to {}! stable? {}", ae.view, ae.view_is_stable);
         // Since moving to new view, I can no longer send proper commit responses to clients.
-        // Send tentative replies to everyone.
+        // Send tentative replies to everyone (if I am the leader in the old view).
         do_reply_all_with_tentative_receipt(&ctx).await;
         // ctx.view_timer.reset();
 
@@ -608,6 +608,7 @@ where Engine: crate::execution::Engine
         commit_index: ctx.state.commit_index.load(Ordering::SeqCst),
         view: __view,
         view_is_stable: __view_is_stable,
+        config_num: ctx.state.config_num.load(Ordering::SeqCst),
     };
 
     Ok((ae, profile))

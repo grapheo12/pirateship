@@ -57,6 +57,7 @@ pub async fn maybe_backfill_fork_till_prefix_match(ctx: PinnedServerContext, cli
         fork_sig: vc.fork_sig.clone(),
         fork_len: vc.fork_len,
         fork_last_qc: vc.fork_last_qc.clone(),
+        config_num: vc.config_num,
     })
 }
 

@@ -233,6 +233,7 @@ pub async fn do_init_view_change<Engine>(
     ctx: &PinnedServerContext, engine: &Engine,
     client: &PinnedClient,
     super_majority: u64,
+    old_super_majority: u64,
 ) -> Result<(), Error>
 where Engine: crate::execution::Engine
 {
@@ -278,6 +279,7 @@ where Engine: crate::execution::Engine
             Ok(qc) => Some(qc),
             Err(_) => None,
         },
+        config_num: ctx.state.config_num.load(Ordering::SeqCst),
     };
 
     sign_view_change_msg(&mut vc_msg, &_keys, &fork);
@@ -292,8 +294,8 @@ where Engine: crate::execution::Engine
             &vc_msg,
             &_cfg.net_config.name,
             super_majority,
-        )
-        .await;
+            old_super_majority,
+        ).await;
         return Ok(());
     }
 
@@ -338,6 +340,7 @@ pub async fn do_process_view_change<Engine>(
     vc: &ProtoViewChange,
     sender: &String,
     super_majority: u64,
+    old_super_majority: u64,
 ) where Engine: crate::execution::Engine
 {
     let _cfg = ctx.config.get();
@@ -470,7 +473,7 @@ pub async fn do_process_view_change<Engine>(
 
         drop(fork_buf);
 
-        do_init_new_leader(ctx, engine, client, vc.view, fork_set, super_majority).await;
+        do_init_new_leader(ctx, engine, client, vc.view, fork_set, super_majority, old_super_majority).await;
     }
 }
 
@@ -480,6 +483,7 @@ pub async fn do_init_new_leader<Engine>(
     view: u64,
     fork_set: HashMap<String, ProtoViewChange>,
     super_majority: u64,
+    old_super_majority: u64,
 ) where Engine: crate::execution::Engine
 {
     let _cfg = ctx.config.get();
@@ -640,7 +644,8 @@ pub async fn do_init_new_leader<Engine>(
         fork: Some(chosen_fork),
         commit_index: ctx.state.commit_index.load(Ordering::SeqCst),
         view: ctx.state.view.load(Ordering::SeqCst),
-        view_is_stable: ctx.view_is_stable.load(Ordering::SeqCst)
+        view_is_stable: ctx.view_is_stable.load(Ordering::SeqCst),
+        config_num: ctx.state.config_num.load(Ordering::SeqCst),
     };
     debug!("AE has signed block? {}", fork.get(fork.last()).unwrap().has_signature());
     profile.register("AE creation done");
@@ -653,12 +658,10 @@ pub async fn do_init_new_leader<Engine>(
     drop(fork); // create_vote_for_blocks takes lock on fork
 
     let my_vote = create_vote_for_blocks(ctx.clone(), &vec![block_n])
-        .await
-        .unwrap();
+        .await.unwrap();
 
     broadcast_append_entries(ctx.clone(), client.clone(), ae, &send_list, profile.clone())
-    .await
-    .unwrap();
+        .await.unwrap();
 
     profile.register("Broadcast done");
     do_process_vote(

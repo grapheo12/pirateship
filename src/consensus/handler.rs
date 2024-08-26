@@ -14,6 +14,7 @@ use std::{
 
 use indexmap::IndexMap;
 use log::{debug, error, info, trace, warn};
+use nix::libc::QFMT_VFS_OLD;
 use prost::Message;
 use std::time::Instant;
 use tokio::{join, sync::{mpsc, Mutex, Semaphore}};
@@ -274,6 +275,7 @@ pub async fn process_node_request<Engine>(
     client: &PinnedClient,
     majority: u64,
     super_majority: u64,
+    old_super_majority: u64,
     ms: &mut ForwardedMessageWithAckChan,
 ) -> Result<(), Error>
 where Engine: crate::execution::Engine
@@ -290,7 +292,7 @@ where Engine: crate::execution::Engine
             if updated_last_n > last_n {
                 // New block has been added. Vote for the last one.
                 let stage = ctx.lifecycle_stage.load(Ordering::SeqCst);
-                if stage == LifecycleStage::FullNode as i8 {
+                if stage == LifecycleStage::FullNode as i8 || stage == LifecycleStage::OldFullNode as i8 {
                     // Only full nodes vote.
                     let vote = create_vote_for_blocks(ctx.clone(), &seq_nums).await?;
                     profile.register("Prepare vote");
@@ -332,7 +334,7 @@ where Engine: crate::execution::Engine
         }
         crate::proto::rpc::proto_payload::Message::ViewChange(vc) => {
             profile.register("View Change chan wait");
-            let _ = do_process_view_change(ctx.clone(), engine, client.clone(), vc, sender, super_majority)
+            let _ = do_process_view_change(ctx.clone(), engine, client.clone(), vc, sender, super_majority, old_super_majority)
                 .await;
             profile.register("View change process");
         },
@@ -484,8 +486,6 @@ pub async fn handle_node_messages<Engine>(
     where Engine: crate::execution::Engine + Clone + Send + Sync + 'static
 {
     let view_timer_handle = ctx.view_timer.run().await;
-    let majority = get_majority_num(&ctx);
-    let super_majority = get_super_majority_num(&ctx);
 
     // Spawn all vote processing workers.
     // This thread will also act as one.
@@ -506,8 +506,11 @@ pub async fn handle_node_messages<Engine>(
                     break;
                 }
                 let mut msg = msg.unwrap();
+                let majority = get_majority_num(&ctx);
+                let super_majority = get_super_majority_num(&ctx);
+                let old_super_majority = get_old_super_majority_num(&ctx);
                 let _ =
-                    process_node_request(&ctx, &engine, &client, majority, super_majority, &mut msg).await;
+                    process_node_request(&ctx, &engine, &client, majority, super_majority, old_super_majority, &mut msg).await;
             }
         });
     }
@@ -526,7 +529,8 @@ pub async fn handle_node_messages<Engine>(
     let mut node_req_num = 0;
 
     // Start with a view change
-    ctx.view_timer.fire_now().await;
+    ctx.view_timer.fire_now().await;    
+    let mut majority = get_majority_num(&ctx);
 
     loop {
         tokio::select! {
@@ -548,6 +552,11 @@ pub async fn handle_node_messages<Engine>(
             break;
         }
 
+        majority = get_majority_num(&ctx);
+        let super_majority = get_super_majority_num(&ctx);
+        let old_super_majority = get_old_super_majority_num(&ctx);
+
+
         #[cfg(feature = "view_change")]
         {
             // If Dormant or Learner, don't act on view timer.
@@ -559,7 +568,7 @@ pub async fn handle_node_messages<Engine>(
                     info!("Timer fired");
                     ctx.intended_view.fetch_add(1, Ordering::SeqCst);
                     if ctx.intended_view.load(Ordering::SeqCst) > ctx.state.view.load(Ordering::SeqCst) {
-                        if let Err(e) = do_init_view_change(&ctx, &engine, &client, super_majority).await {
+                        if let Err(e) = do_init_view_change(&ctx, &engine, &client, super_majority, old_super_majority).await {
                             error!("Error initiating view change: {}", e);
                         }
                     }
@@ -580,7 +589,7 @@ pub async fn handle_node_messages<Engine>(
                         info!("Lifecycle stage: Dormant -> Learner");
                         ctx.lifecycle_stage.store(LifecycleStage::Learner as i8, Ordering::SeqCst);
                     }
-                    if let Err(e) = process_node_request(&ctx, &engine, &client, majority, super_majority, &mut req).await {
+                    if let Err(e) = process_node_request(&ctx, &engine, &client, majority, super_majority, old_super_majority, &mut req).await {
                         error!("Error processing append entries: {}", e);
                     }
                 }
@@ -596,7 +605,7 @@ pub async fn handle_node_messages<Engine>(
                 vote_worker_rr_cnt += 1;
                 if rr_cnt == 0 {
                     // Let this thread process it.
-                    if let Err(e) = process_node_request(&ctx, &engine, &client, majority, super_majority, &mut req).await {
+                    if let Err(e) = process_node_request(&ctx, &engine, &client, majority, super_majority, old_super_majority, &mut req).await {
                         error!("Error processing vote: {}", e);
                     }
                 } else {
@@ -604,7 +613,7 @@ pub async fn handle_node_messages<Engine>(
                     let _ = vote_worker_chans[(rr_cnt - 1) as usize].send(req);
                 }
             } else {
-                if let Err(e) = process_node_request(&ctx, &engine, &client, majority, super_majority, &mut req).await {
+                if let Err(e) = process_node_request(&ctx, &engine, &client, majority, super_majority, old_super_majority, &mut req).await {
                     error!("Error processing node request: {}", e);
                 }
             }
