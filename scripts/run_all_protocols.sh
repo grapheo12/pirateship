@@ -15,13 +15,13 @@ start_time=$(date -Ins)
 RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt scripts/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i ../cluster_key.pem -r 2 -s 30 -up 2 -down 2 $ALL_CLIENTS"
 
 # Run pirateship
-# make
-# $RUN_CMD
-
-
-# Run chained_pbft
-make chained_pbft_logger
+make
 $RUN_CMD
+
+
+# # Run chained_pbft
+# make chained_pbft_logger
+# $RUN_CMD
 
 # # Run diverse_raft
 # make diverse_raft_logger
@@ -46,8 +46,8 @@ end_time=$(date -Ins)
 python3 scripts/plot_time_range_client_sweep.py \
     --path logs --end $end_time --start $start_time \
     -r 2 -c 2 -l node1 -up 2 -down 2 -o plot.png \
-    --legend "chained_pbft-20s" \
-    # --legend "pirateship-20s" \
+    --legend "pirateship" \
+    # --legend "chained_pbft" \
     # --legend "diverse_raft" \
     # --legend "signed_raft" \
     # --legend "lucky_raft" \

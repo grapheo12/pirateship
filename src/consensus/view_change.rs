@@ -6,9 +6,10 @@ use crossbeam::atomic::AtomicConsume;
 use ed25519_dalek::SIGNATURE_LENGTH;
 use hex::ToHex;
 use log::{debug, error, info, trace, warn};
+use nix::libc::QFMT_VFS_OLD;
 use prost::Message;
 use std::{
-    collections::HashMap, io::{BufWriter, Error, ErrorKind, Write}, sync::atomic::Ordering
+    collections::HashMap, io::{BufWriter, Error, ErrorKind, Write}, sync::{atomic::Ordering, Arc}
 };
 use tokio::sync::MutexGuard;
 
@@ -317,6 +318,17 @@ where Engine: crate::execution::Engine
         error!("Could not broadcast ViewChange: {}", e);
     }
 
+    let old_full_nodes = ctx.old_full_nodes.get();
+    let old_full_nodes = get_everyone_except_me(&_cfg.net_config.name, &old_full_nodes);
+    if old_full_nodes.len() > 0 {
+        if let Err(e) =
+        PinnedClient::broadcast(client, &old_full_nodes, &bcast_msg, &mut profile).await
+        {
+            error!("Could not broadcast ViewChange to Old Full Nodes: {}", e);
+        }
+    }
+
+
     Ok(())
 }
 
@@ -348,7 +360,6 @@ pub async fn do_process_view_change<Engine>(
         .eq(&get_leader_str_for_view(&ctx, vc.view))
     {
         // I am not the leader for this message's intended view
-        // @todo: Pacemaker: Use this as a signal to do view change
         info!("Not the leader for view {}, using this message for pacemaker", vc.view);
     }
 

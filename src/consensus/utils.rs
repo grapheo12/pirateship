@@ -51,7 +51,13 @@ pub fn get_majority_num(ctx: &PinnedServerContext) -> u64 {
 pub fn get_super_majority_num(ctx: &PinnedServerContext) -> u64 {
     let _cfg = ctx.config.get();
     let n = _cfg.consensus_config.node_list.len() as u64;
-    2 * (n / 3) + 1
+    n - (n / 3)
+}
+
+pub fn get_old_super_majority_num(ctx: &PinnedServerContext) -> u64 {
+    let old_full_nodes = ctx.old_full_nodes.get();
+    let n = old_full_nodes.len() as u64;
+    n - (n / 3)
 }
 
 pub fn get_f_plus_one_num(ctx: &PinnedServerContext) -> u64 {
@@ -67,8 +73,6 @@ pub fn get_everyone_except_me(my_name: &String, node_list: &Vec<String>) -> Vec<
         .filter(|name| !name.eq(my_name))
         .collect()
 }
-
-
 
 
 pub fn __hash_tx_list(tx: &Vec<ProtoTransaction>) -> Vec<u8> {
