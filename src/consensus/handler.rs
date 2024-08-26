@@ -19,7 +19,7 @@ use std::time::Instant;
 use tokio::{join, sync::{mpsc, Mutex, Semaphore}};
 
 use crate::{
-    config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, rpc::{
+    config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, proto::execution::ProtoTransaction, rpc::{
         client::PinnedClient, server::{GetServerKeys, LatencyProfile, MsgAckChan, RespType}, MessageRef, PinnedMessage
     }, utils::AtomicStruct
 };
@@ -122,6 +122,11 @@ pub struct ServerContext {
         Mutex<mpsc::UnboundedReceiver<(PinnedMessage, LatencyProfile)>>,
     ),
 
+    pub reconf_channel: (
+        mpsc::UnboundedSender<ProtoTransaction>,
+        Mutex<mpsc::UnboundedReceiver<ProtoTransaction>>,
+    ),
+
     pub view_timer: Arc<Pin<Box<ResettableTimer>>>,
 
     /// Last view that was fast forwarded due to pacemaker.
@@ -140,6 +145,7 @@ impl PinnedServerContext {
         let node_ch = mpsc::unbounded_channel();
         let client_ch = mpsc::unbounded_channel();
         let black_hole_ch = mpsc::unbounded_channel();
+        let reconf_channel = mpsc::unbounded_channel();
         let send_list = get_everyone_except_me(&cfg.net_config.name, &cfg.consensus_config.node_list);
 
 
@@ -162,6 +168,7 @@ impl PinnedServerContext {
             ping_counters: std::sync::Mutex::new(HashMap::new()),
             keys: AtomicKeyStore::new(keys.clone()),
             __client_black_hole_channel: (black_hole_ch.0, Mutex::new(black_hole_ch.1)),
+            reconf_channel: (reconf_channel.0, Mutex::new(reconf_channel.1)),
             view_timer: ResettableTimer::new(Duration::from_millis(cfg.consensus_config.view_timeout_ms)),
             intended_view: AtomicU64::new(0),
             total_client_requests: AtomicUsize::new(0),

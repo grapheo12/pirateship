@@ -82,17 +82,10 @@ pub fn do_byzantine_commit<Engine>(
             if !_tx.is_reconfiguration {
                 continue;
             }
-            match maybe_execute_reconfiguration_transaction(ctx, client, _tx, true) {
-                Ok(did_reconf) => {
-                    info!("Reconfiguration transaction executed successfully!");
-                    if did_reconf {
-                        ctx.state.config_num.fetch_add(1, Ordering::SeqCst);
-                    }
-                }
-                Err(e) => {
-                    warn!("Error executing reconfiguration transaction: {:?}", e);
-                }
-            }
+            
+
+            // The byz commit phase of reconf tx is executed async.
+            let _ = ctx.reconf_channel.0.send(_tx.clone());
         }
 
         ctx.state.num_byz_committed_txs.fetch_add(entry.block.tx.len(), Ordering::SeqCst);

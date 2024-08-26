@@ -2,7 +2,7 @@
 // Licensed under the Apache 2.0 License.
 
 use core::str;
-use std::{io::Error, str::FromStr, sync::Arc};
+use std::{sync::atomic::Ordering, io::Error, str::FromStr, sync::Arc};
 
 use ed25519_dalek::{pkcs8::DecodePublicKey, VerifyingKey, PUBLIC_KEY_LENGTH};
 use log::{error, info, warn};
@@ -422,4 +422,31 @@ pub fn decide_my_lifecycle_stage(ctx: &PinnedServerContext, life_is_starting: bo
     }
 
     lifecycle_stage
+}
+
+
+pub async fn reconfiguration_worker(ctx: PinnedServerContext, client: PinnedClient) {
+    let mut reconf_rx = ctx.reconf_channel.1.lock().await;
+    while let Some(tx) = reconf_rx.recv().await {
+        // Only execute if view is stable
+        while !ctx.view_is_stable.load(Ordering::SeqCst) {
+            // Spin-wait. Isn't supposed to busy wait for long.
+        }
+
+        match maybe_execute_reconfiguration_transaction(&ctx, &client, &tx, true) {
+            Ok(did_reconf) => {
+                info!("Reconfiguration transaction executed successfully!");
+                if did_reconf {
+                    ctx.state.config_num.fetch_add(1, Ordering::SeqCst);
+
+                    // View Change on config update.
+                    ctx.view_timer.fire_now().await;
+                }
+            }
+            Err(e) => {
+                warn!("Error executing reconfiguration transaction: {:?}", e);
+            }
+        }
+
+    }
 }

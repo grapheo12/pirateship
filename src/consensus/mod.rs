@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use handler::{consensus_rpc_handler, PinnedServerContext, handle_client_messages, handle_node_messages};
+use reconfiguration::reconfiguration_worker;
 use tokio::task::JoinSet;
 
 use crate::{
@@ -67,6 +68,8 @@ where
         let node2 = node.clone();
         let node3 = node.clone();
         let node4 = node.clone();
+        let node5 = node.clone();
+
         js.spawn(async move {
             let _ = Server::<PinnedServerContext>::run(node1.server.clone(), node1.ctx.clone())
                 .await;
@@ -79,6 +82,9 @@ where
         });
         js.spawn(async move {
             let _ = handle_client_messages(node4.ctx.clone(), node4.client.clone(), node4.engine.clone()).await;
+        });
+        js.spawn(async move {
+            let _ = reconfiguration_worker(node5.ctx.clone(), node5.client.clone()).await;
         });
 
         js
