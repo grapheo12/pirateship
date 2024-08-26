@@ -82,7 +82,8 @@ pub enum LifecycleStage {
     Dormant = 1,
     Learner = 2,
     FullNode = 3,
-    Dead = 4,
+    OldFullNode = 4,
+    Dead = 5,
 }
 
 type AtomicVec = AtomicStruct<Vec<String>>;
@@ -91,6 +92,7 @@ pub struct ServerContext {
     pub config: AtomicConfig,
     /// In all configurations, send_list = config.consensus_config.node_list - {me}
     pub send_list: AtomicVec,
+    pub old_full_nodes: AtomicVec,
     pub i_am_leader: AtomicBool,
     pub view_is_stable: AtomicBool,
     pub lifecycle_stage: AtomicI8,
@@ -144,6 +146,7 @@ impl PinnedServerContext {
         let mut ctx = PinnedServerContext(Arc::new(Box::pin(ServerContext {
             config: AtomicConfig::new(cfg.clone()),
             send_list: AtomicVec::new(send_list),
+            old_full_nodes: AtomicVec::new(Vec::new()),
             i_am_leader: AtomicBool::new(false),
             lifecycle_stage: AtomicI8::new(LifecycleStage::Dormant as i8),
 

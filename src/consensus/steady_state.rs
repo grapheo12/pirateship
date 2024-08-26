@@ -174,9 +174,19 @@ where Engine: crate::execution::Engine
 
     let member_list = &ctx.config.get().consensus_config.node_list;
     if !member_list.contains(sender) {
-        warn!("Vote from non-member {} {:?}! Rejected", sender, member_list);
-        return Ok(());
+        if !ctx.view_is_stable.load(Ordering::SeqCst) {
+            // If view is not stable, then votes from old_full_nodes allowed.
+            let old_full_nodes = &ctx.old_full_nodes.get();
+            if !old_full_nodes.contains(sender) {
+                warn!("Vote from non-member {} {:?}! Rejected", sender, member_list);
+                return Ok(());
+            }
+        } else {
+            warn!("Vote from non-member {} {:?}! Rejected", sender, member_list);
+            return Ok(());
+        }
     }
+
 
     if vote.n > fork.last() {
         warn!("Vote({}) higher than fork.last() = {}", vote.n, fork.last());
@@ -452,7 +462,12 @@ pub async fn do_push_append_entries_to_fork<Engine>(
         byz_qc_pending.retain(|&n| n > last_qc);
 
         // Also the byzantine commit index may move
-        maybe_byzantine_commit(&ctx, &client, engine, &fork, &mut ctx.client_ack_pending.lock().await);
+        let did_byz_commit = maybe_byzantine_commit(&ctx, &client, engine, &fork, &mut ctx.client_ack_pending.lock().await);
+
+        if did_byz_commit {
+            // Pacemaker logic: Reset the view timer.
+            ctx.view_timer.reset();
+        }
     }
 
     (last_n, updated_last_n, seq_nums, true)
@@ -571,7 +586,12 @@ where Engine: crate::execution::Engine
             }
             profile.register("Block create");
 
-            maybe_byzantine_commit(&ctx, &client, engine, &fork, &mut ctx.client_ack_pending.lock().await);
+            let did_byz_commit = maybe_byzantine_commit(&ctx, &client, engine, &fork, &mut ctx.client_ack_pending.lock().await);
+
+            if did_byz_commit {
+                // Pacemaker logic: Reset the view timer.
+                ctx.view_timer.reset();
+            }
 
             trace!("QC link: {} --> {:?}", n, __qc_trace);
         }

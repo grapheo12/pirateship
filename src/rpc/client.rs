@@ -205,7 +205,7 @@ impl Client {
 impl PinnedClient {
     async fn connect(client: &PinnedClient, name: &String) -> Result<PinnedTlsStream, Error> {
         let cfg = client.0.config.get();
-        info!("Node list: {:?}", cfg.net_config.nodes);
+        debug!("Node list: {:?}", cfg.net_config.nodes);
         let peer = cfg
             .net_config
             .nodes
@@ -439,7 +439,7 @@ impl PinnedClient {
                     let s = match Self::get_sock(&c, &_name).await {
                         Ok(s) => s,
                         Err(e) => {
-                            error!("Broadcast worker dying: {}", e);
+                            debug!("Broadcast worker dying: {}", e);
                             continue;
                         },
                     };

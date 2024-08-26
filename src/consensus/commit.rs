@@ -84,9 +84,9 @@ pub fn do_byzantine_commit<Engine>(
             }
             match maybe_execute_reconfiguration_transaction(ctx, client, _tx, true) {
                 Ok(did_reconf) => {
+                    info!("Reconfiguration transaction executed successfully!");
                     if did_reconf {
-                        info!("Reconfiguration transaction executed successfully!");
-                        // @todo: Increase config number.
+                        ctx.state.config_num.fetch_add(1, Ordering::SeqCst);
                     }
                 }
                 Err(e) => {
@@ -140,9 +140,10 @@ where Engine: crate::execution::Engine
     true
 }
 
+/// Return true if bci was updated.
 pub fn maybe_byzantine_commit<Engine>(
     ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine, fork: &MutexGuard<Log>,
-    lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>)
+    lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>) -> bool
 where Engine: crate::execution::Engine
 {
     // Check all QCs formed during this view.
@@ -152,6 +153,7 @@ where Engine: crate::execution::Engine
     let last_qc_view = fork.last_qc_view();
     let mut check_qc = fork.last_qc();
 
+    let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
     while !maybe_byzantine_commit_with_n_and_view(ctx, client, engine, fork, check_qc, last_qc_view, lack_pend) {
         if check_qc == 0 {
             break;
@@ -160,6 +162,9 @@ where Engine: crate::execution::Engine
         trace!("Checking lower QCs: {}", check_qc);
         // view doesn't change from last_qc_view due to commit condition.
     }
+    let new_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+
+    new_bci > old_bci
 
 }
 
@@ -190,10 +195,8 @@ pub fn do_commit<Engine>(
             }
             info!("Reconfiguration transaction found in block: {}", bn);
             match maybe_execute_reconfiguration_transaction(ctx, client, _tx, false) {
-                Ok(did_reconf) => {
-                    if did_reconf {
-                        info!("Reconfiguration transaction executed successfully!");
-                    }
+                Ok(_did_reconf) => {
+                    info!("Reconfiguration transaction executed successfully!");
                 }
                 Err(e) => {
                     warn!("Error executing reconfiguration transaction: {:?}", e);

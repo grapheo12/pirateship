@@ -56,6 +56,15 @@ fn remove_node(new_cfg: &mut Box<Config>, name: &String) -> bool {
     old_len > new_len
 }
 
+fn insert_old_full_node(ctx: &PinnedServerContext, name: &String) {
+    let mut __old_full_nodes = ctx.old_full_nodes.get();
+    let old_full_nodes = Arc::make_mut(&mut __old_full_nodes);
+
+    old_full_nodes.push(name.clone());
+
+    ctx.old_full_nodes.set(old_full_nodes.clone());
+}
+
 fn insert_pub_key(new_keys: &mut Box<KeyStore>, name: &String, pub_key: &VerifyingKey) {
     new_keys.pub_keys.insert(name.clone(), pub_key.clone());
 }
@@ -154,6 +163,7 @@ pub fn do_downgrade_nodes_to_learner(ctx: &PinnedServerContext, names: &Vec<Stri
             warn!("Node {} is not a node", name);
             return;
         }
+        insert_old_full_node(ctx, name);
         insert_learner(new_cfg, name);
     }
 
@@ -244,6 +254,21 @@ pub fn serialize_del_learner(name: &String) -> ProtoTransactionOp {
     }
 }
 
+pub fn serialize_upgrade_fullnode(name: &String) -> ProtoTransactionOp {
+    ProtoTransactionOp {
+        op_type: crate::proto::execution::ProtoTransactionOpType::UpgradeFullNode.into(),
+        operands: vec![name.as_bytes().to_vec()],
+    }
+}
+
+pub fn serialize_downgrade_fullnode(name: &String) -> ProtoTransactionOp {
+    ProtoTransactionOp {
+        op_type: crate::proto::execution::ProtoTransactionOpType::DowngradeFullNode.into(),
+        operands: vec![name.as_bytes().to_vec()],
+    }
+}
+
+
 fn parse_full_node_op(op: &ProtoTransactionOp) -> Result<String, Error> {
     /*
         Op format: [name] (1)
@@ -260,32 +285,40 @@ fn parse_full_node_op(op: &ProtoTransactionOp) -> Result<String, Error> {
     Ok(name.unwrap().to_string())
 }
 
-fn is_valid_reconfiguration(ctx: &PinnedServerContext, to_upgrade: &Vec<String>, to_downgrade: &Vec<String>) -> bool {
-    // Only swapping allowed for now.
-    // Conditions: len(to_upgrade) == len(to_downgrade) (ie, net change == 0)
-    // len(new_cfg intersection old_cfg) >= supermajority
+fn is_valid_reconfiguration(ctx: &PinnedServerContext, to_upgrade: &Vec<String>, to_downgrade: &Vec<String>, to_remove: &Vec<String>) -> bool {
+    // // Only swapping allowed for now.
+    // // Conditions: len(to_upgrade) == len(to_downgrade) (ie, net change == 0)
+    // // len(new_cfg intersection old_cfg) >= supermajority
 
-    if to_upgrade.len() != to_downgrade.len() {
-        return false;
-    }
-    let _cfg = ctx.config.get();
-    let old_node_list = _cfg.consensus_config.node_list.clone();
-    let mut new_node_list = old_node_list.clone();
-    new_node_list.retain(|n| !to_downgrade.contains(n));
-    new_node_list.extend(to_upgrade.clone());
+    // if to_upgrade.len() != to_downgrade.len() {
+    //     return false;
+    // }
+    // let _cfg = ctx.config.get();
+    // let old_node_list = _cfg.consensus_config.node_list.clone();
+    // let mut new_node_list = old_node_list.clone();
+    // new_node_list.retain(|n| !to_downgrade.contains(n));
+    // new_node_list.extend(to_upgrade.clone());
 
-    let supermajority = crate::consensus::utils::get_super_majority_num(&ctx);
+    // let supermajority = crate::consensus::utils::get_super_majority_num(&ctx);
 
-    let intersection = old_node_list.iter().filter(|n| new_node_list.contains(n)).count() as u64;
-    if intersection < supermajority {
-        return false;
-    }
+    // let intersection = old_node_list.iter().filter(|n| new_node_list.contains(n)).count() as u64;
+    // if intersection < supermajority {
+    //     return false;
+    // }
     
+
+    // Arbitrary reconfiguration allowed.
+    // But upgrade/downgrade must not be mixed with deletion.
+    if to_remove.len() > 0 && (to_upgrade.len() > 0 || to_downgrade.len() > 0) {
+        return false;
+    }
+
     true
 }
 
 /// `on_byz_commit` controls whether to execute the byz_commit phase or the crash_commit phase
-/// Returns true if there was some configuration change.#
+/// Returns true if there was some configuration change, ie, upgrade/downgrade.
+/// Addition and deletion of learners do not count as configuration change.
 /// Otherwise, returns false.
 pub fn maybe_execute_reconfiguration_transaction(ctx: &PinnedServerContext, client: &PinnedClient, tx: &ProtoTransaction, on_byz_commit: bool) -> Result<bool, Error>{
     // Sanity check: Cannot be both on_crash_commit and on_byz_commit
@@ -297,41 +330,29 @@ pub fn maybe_execute_reconfiguration_transaction(ctx: &PinnedServerContext, clie
 
     if !on_byz_commit {
         if let Some(phase) = &tx.on_crash_commit {
-            let mut to_add = Vec::new();
-            let mut to_remove = Vec::new();
-    
+            let mut to_add = Vec::new();    
             for op in &phase.ops {
                 match op.op_type() {
                     crate::proto::execution::ProtoTransactionOpType::AddLearner => {
                         let learner_info = parse_add_learner(&op)?;
                         to_add.push(learner_info);
                     },
-                    crate::proto::execution::ProtoTransactionOpType::DelLearner => {
-                        let name = parse_del_learner(&op)?;
-                        to_remove.push(name);
-                    },
                     _ => { /* skip */ },
                 }
             }
 
-            if to_add.len() > 0 || to_remove.len() > 0 {
-                ret = true;
-            }
-    
             do_add_learners(ctx, client, &to_add);
-            do_delete_learners(ctx, &to_remove);
-
-            if ret {
+            if to_add.len() > 0 {
                 let lifecycle_stage = decide_my_lifecycle_stage(ctx, false);
                 info!("Lifecycle stage: {:?}", lifecycle_stage);
                 ctx.lifecycle_stage.store(lifecycle_stage as i8, std::sync::atomic::Ordering::SeqCst);
             }
         }
     } else {
-
         if let Some(phase) = &tx.on_byzantine_commit {
             let mut to_upgrade = Vec::new();
             let mut to_downgrade = Vec::new();
+            let mut to_remove = Vec::new();
     
             for op in &phase.ops {
                 match op.op_type() {
@@ -343,23 +364,28 @@ pub fn maybe_execute_reconfiguration_transaction(ctx: &PinnedServerContext, clie
                         let name = parse_full_node_op(&op)?;
                         to_downgrade.push(name);
                     },
+                    crate::proto::execution::ProtoTransactionOpType::DelLearner => {
+                        let name = parse_del_learner(&op)?;
+                        to_remove.push(name);
+                    },
                     _ => { /* skip */ },
                 }
             }
     
             
-            if !is_valid_reconfiguration(&ctx, &to_upgrade, &to_downgrade) {
+            if !is_valid_reconfiguration(&ctx, &to_upgrade, &to_downgrade, &to_remove) {
                 return Err(Error::new(std::io::ErrorKind::InvalidData, "Invalid reconfiguration"));
             }
 
             if to_upgrade.len() > 0 || to_downgrade.len() > 0 {
                 ret = true;
             }
-
+            
+            do_delete_learners(ctx, &to_remove);
             do_upgrade_learners_to_node(ctx, &to_upgrade);
             do_downgrade_nodes_to_learner(ctx, &to_downgrade);
 
-            if ret {
+            if ret || to_remove.len() > 0 {
                 let lifecycle_stage = decide_my_lifecycle_stage(ctx, false);
                 info!("Lifecycle stage: {:?}", lifecycle_stage);
                 ctx.lifecycle_stage.store(lifecycle_stage as i8, std::sync::atomic::Ordering::SeqCst);
@@ -367,23 +393,29 @@ pub fn maybe_execute_reconfiguration_transaction(ctx: &PinnedServerContext, clie
         }
     }
 
-
-
     Ok(ret)
 }
 
 pub fn decide_my_lifecycle_stage(ctx: &PinnedServerContext, life_is_starting: bool) -> LifecycleStage {
     let mut lifecycle_stage = LifecycleStage::Dormant;
     let _cfg = ctx.config.get();
-    // Am I a learner in the initial config.
+    // Am I a learner?
     if _cfg.consensus_config.learner_list.contains(&_cfg.net_config.name) {
         lifecycle_stage = LifecycleStage::Learner;
     }
     
-    // Am I a full node in the initial config.
+    // Am I a full node?
     if _cfg.consensus_config.node_list.contains(&_cfg.net_config.name) {
         lifecycle_stage = LifecycleStage::FullNode;
     }
+
+    // Am I an old full node?
+    if ctx.old_full_nodes.get().contains(&_cfg.net_config.name) {
+        lifecycle_stage = LifecycleStage::OldFullNode;
+    }
+
+    // I am not in any list. If life is starting, leave it as dormant.
+    // Otherwise I am dead.
 
     if !life_is_starting && lifecycle_stage == LifecycleStage::Dormant {
         lifecycle_stage = LifecycleStage::Dead;

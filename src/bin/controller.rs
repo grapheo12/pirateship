@@ -8,7 +8,7 @@ use log::{debug, info, trace};
 use log4rs::config;
 use pft::{
     config::{default_log4rs_config, ClientConfig, NodeNetInfo},
-    consensus::reconfiguration::{serialize_add_learner, serialize_del_learner, LearnerInfo},
+    consensus::reconfiguration::{serialize_add_learner, serialize_del_learner, serialize_downgrade_fullnode, serialize_upgrade_fullnode, LearnerInfo},
     crypto::KeyStore,
     proto::{client::{ProtoClientReply, ProtoClientRequest}, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, MessageRef},
 };
@@ -118,8 +118,15 @@ async fn main() -> io::Result<()> {
 
     info!("Del learner op: {:?}", del_learner_op);
 
+    let upgrade_fullnode_op: Vec<ProtoTransactionOp> = config.upgrade_fullnode.iter().map(|name| {
+        serialize_upgrade_fullnode(name)
+    }).collect();
+
+    let downgrade_fullnode_op: Vec<ProtoTransactionOp> = config.downgrade_fullnode.iter().map(|name| {
+        serialize_downgrade_fullnode(name)
+    }).collect();
+
     let crash_commit_ops: Vec<ProtoTransactionOp> = add_learner_op.into_iter()
-        .chain(del_learner_op.into_iter())
         .collect();
 
     let on_crash_commit = if crash_commit_ops.is_empty() {
@@ -130,12 +137,25 @@ async fn main() -> io::Result<()> {
         })
     };
 
+    let byz_commit_ops: Vec<ProtoTransactionOp> = del_learner_op.into_iter()
+        .chain(upgrade_fullnode_op.into_iter())
+        .chain(downgrade_fullnode_op.into_iter())
+        .collect();
+
+    let on_byzantine_commit = if byz_commit_ops.is_empty() {
+        None
+    } else {
+        Some(ProtoTransactionPhase {
+            ops: byz_commit_ops,
+        })
+    };
+
 
     let client_req = ProtoClientRequest {
         tx: Some(ProtoTransaction {
             on_receive: None,
             on_crash_commit,
-            on_byzantine_commit: None,
+            on_byzantine_commit,
             is_reconfiguration: true,
         }),
         origin: client_cfg.net_config.name.clone(),
