@@ -28,6 +28,8 @@ use crate::consensus::commit::*;
 use crate::consensus::view_change::*;
 use crate::consensus::utils::*;
 
+use super::reconfiguration::fast_forward_config;
+
 pub async fn create_vote_for_blocks(
     ctx: PinnedServerContext,
     seq_nums: &Vec<u64>,
@@ -334,6 +336,31 @@ pub async fn do_push_append_entries_to_fork<Engine>(
     bool      /* Should update ci */
 ) where Engine: crate::execution::Engine
 {
+    let ae = if ae.config_num < ctx.state.config_num.load(Ordering::SeqCst) {
+        trace!("Message from older config! Rejected; Sent by: {} Is New leader? {} Msg config: {} Current config {}",
+            sender, !ae.fork.as_ref().unwrap().blocks[0].view_is_stable, ae.config_num, ctx.state.config_num.load(Ordering::SeqCst));
+        
+        let fork = ctx.state.fork.lock().await;
+        let last_n = fork.last();
+        let seq_nums = Vec::new();
+
+        return (last_n, last_n, seq_nums, false);
+    } else if ae.config_num > ctx.state.config_num.load(Ordering::SeqCst) {
+        // Need to fast forward to the new config.
+        // Otherwise the View Change may not be verified.
+        info!("Fast forwarding to config {}", ae.config_num);
+
+        // This will lock on fork, let's ensure fork is not locked by the caller here.
+        &fast_forward_config(&ctx, &client, engine, ae, sender).await
+    } else {
+        debug!("Same config block: {}", ae.config_num);
+        ae
+    };
+
+    // At this point, the config matches that of the ae.
+    // ae.fork ONLY contains blocks in this config.
+    // So we can now process as if no reconfiguration happened.
+
     // let mut fork = ctx.state.fork.lock().await;
     let _cfg = ctx.config.get();
     let _keys = ctx.keys.get();
@@ -352,6 +379,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
     let last_qc = fork.last_qc();
     let mut updated_last_n = last_n;
     let mut seq_nums = Vec::new();
+
 
     if ae.view < ctx.state.view.load(Ordering::SeqCst) {
         trace!("Message from older view! Rejected; Sent by: {} Is New leader? {} Msg view: {} Current View {}",
@@ -388,6 +416,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
             info!("Got New leader message for view {}!", ae.view);
         }
         let f = maybe_backfill_fork_till_last_match(&ctx, &client, f, &fork, sender).await;
+
         let res = maybe_verify_view_change_sequence(&ctx, &f, super_majority).await;
         
         if let Err(e) = res {
@@ -466,7 +495,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
 
         if did_byz_commit {
             // Pacemaker logic: Reset the view timer.
-            ctx.view_timer.reset();
+            // ctx.view_timer.reset();
         }
     }
 
@@ -560,6 +589,7 @@ where Engine: crate::execution::Engine
         sig: Some(Sig::NoSig(DefferedSignature {})),
         fork_validation: Vec::new(),
         view_is_stable: true,
+        config_num: ctx.state.config_num.load(Ordering::SeqCst),
     };
 
     if should_sign {
@@ -590,7 +620,7 @@ where Engine: crate::execution::Engine
 
             if did_byz_commit {
                 // Pacemaker logic: Reset the view timer.
-                ctx.view_timer.reset();
+                // ctx.view_timer.reset();
             }
 
             trace!("QC link: {} --> {:?}", n, __qc_trace);

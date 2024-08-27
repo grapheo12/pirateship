@@ -22,7 +22,7 @@
     "signature_max_delay_blocks": 1000,
     "signature_max_delay_ms": 1200000,
     "vote_processing_workers": 8,
-    "view_timeout_ms": 20000
+    "view_timeout_ms": 5000
   },
   "app_config": {
     "logger_stats_report_ms": 100

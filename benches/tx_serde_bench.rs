@@ -68,6 +68,7 @@ fn main() {
             qc: Vec::new(),
             fork_validation: Vec::new(),
             view_is_stable: true,
+            config_num: 0,
             sig: Some(pft::proto::consensus::proto_block::Sig::ProposerSig(vec![0u8; 64])),
         });
     }
@@ -93,6 +94,7 @@ fn main() {
             qc: Vec::new(),
             fork_validation: Vec::new(),
             view_is_stable: true,
+            config_num: 0,
             sig: Some(pft::proto::consensus::proto_block::Sig::ProposerSig(vec![0u8; 64])),
         });
     }

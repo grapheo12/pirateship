@@ -10,9 +10,9 @@ use nix::sys::signal;
 use nix::sys::signal::Signal::SIGINT;
 use nix::unistd::Pid;
 
-use crate::{config::{Config, NodeNetInfo}, crypto::KeyStore, proto::execution::{ProtoTransaction, ProtoTransactionOp}, rpc::client::PinnedClient};
+use crate::{config::{Config, NodeNetInfo}, crypto::KeyStore, proto::{consensus::ProtoAppendEntries, execution::{ProtoTransaction, ProtoTransactionOp}}, rpc::client::PinnedClient};
 
-use super::handler::{LifecycleStage, PinnedServerContext};
+use super::{backfill::maybe_backfill_fork_till_last_match, commit::maybe_byzantine_commit, handler::{LifecycleStage, PinnedServerContext}, view_change::do_reply_all_with_tentative_receipt};
 
 /// Gracefully shut down the node
 pub async fn do_graceful_shutdown() {
@@ -427,6 +427,7 @@ pub fn decide_my_lifecycle_stage(ctx: &PinnedServerContext, life_is_starting: bo
 
 pub async fn reconfiguration_worker(ctx: PinnedServerContext, client: PinnedClient) {
     let mut reconf_rx = ctx.reconf_channel.1.lock().await;
+    let mut intended_config_num = 0;
     while let Some(tx) = reconf_rx.recv().await {
         // Only execute if view is stable
         while !ctx.view_is_stable.load(Ordering::SeqCst) {
@@ -437,10 +438,16 @@ pub async fn reconfiguration_worker(ctx: PinnedServerContext, client: PinnedClie
             Ok(did_reconf) => {
                 info!("Reconfiguration transaction executed successfully!");
                 if did_reconf {
-                    ctx.state.config_num.fetch_add(1, Ordering::SeqCst);
+                    intended_config_num += 1;
 
-                    // View Change on config update.
-                    ctx.view_timer.fire_now().await;
+                    // Config changes can happen proactively, ie, I am participating in stabilising the next config.
+                    // Or it can happen passively, ie, by learning successful config change happenend in the past.
+                    // In the later case, there is no need to trigger a view change.
+                    if ctx.state.config_num.load(Ordering::SeqCst) < intended_config_num {
+                        ctx.state.config_num.store(intended_config_num, Ordering::SeqCst);
+                        // View Change on config update.
+                        ctx.view_timer.fire_now().await;
+                    }
                 }
             }
             Err(e) => {
@@ -448,5 +455,97 @@ pub async fn reconfiguration_worker(ctx: PinnedServerContext, client: PinnedClie
             }
         }
 
+    }
+}
+
+
+pub async fn fast_forward_config<Engine>(
+    ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine,
+    ae: &ProtoAppendEntries, sender: &String
+) -> ProtoAppendEntries
+where Engine: crate::execution::Engine
+{
+    if ctx.state.config_num.load(Ordering::SeqCst) >= ae.config_num {
+        return ae.clone();
+    }
+    let curr_config_num = ctx.state.config_num.load(Ordering::SeqCst);
+    // This will make sure that executing the reconf tx only changes my config.
+    // But doesn't trigger a view change.
+    ctx.state.config_num.store(ae.config_num, Ordering::SeqCst);
+
+    // To be on the safe side, let's flush the pipeline.
+    do_reply_all_with_tentative_receipt(ctx).await;
+    if let None = ae.fork {
+        error!("Empty AppendEntries fork");
+        return ae.clone();
+    }
+
+    let mut fork = ctx.state.fork.lock().await;
+    let f = ae.fork.as_ref().unwrap();
+    let mut f = maybe_backfill_fork_till_last_match(&ctx, &client, f, &fork, sender).await;
+
+    // Indexes in fork where the config changes.
+    let mut config_change_idx = Vec::new();
+    let mut last_qc = 0;
+    let mut last_qc_view = 0;
+    for (idx, block) in f.blocks.iter().enumerate() {
+        if !block.view_is_stable // So it is a NewLeader msg
+        && block.config_num != curr_config_num {
+            config_change_idx.push(idx);
+        }
+
+        for qc in &block.qc {
+            if qc.n > last_qc {
+                last_qc = qc.n;
+                last_qc_view = qc.view;
+            }
+        }
+    }
+
+    // @todo: Verify the QC on the NewLeader msgs such that they contain the signatures from both old and new configs.
+
+    // Find the last byz committed entry.
+    let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+    let mut updated_bci = old_bci;
+    for block in &f.blocks {
+        if block.n <= last_qc {
+            // Find QC in this block.
+
+            // @todo: Verify the QCs.
+            for qc in &block.qc {
+                if qc.n > updated_bci && qc.view == last_qc_view{
+                    updated_bci = qc.n;
+                }
+            }
+        }
+    }
+
+    // Overwrite till the byz committed entry.
+    if updated_bci <= old_bci {
+        return ae.clone();
+    }
+
+    let mut bci_fork = f.clone();
+    bci_fork.blocks.retain(|b| b.n <= updated_bci);
+    f.blocks.retain(|b| b.n > updated_bci);
+
+    let overwrite_res = fork.overwrite(&bci_fork);
+    if let Err(e) = overwrite_res {
+        error!("Error overwriting fork: {:?}", e);
+        return ae.clone();
+    }
+
+    // Now byzantine commit everything till the last byz committed entry.
+    // This hopefully bring us to the newest config.
+    let mut lack_pend = ctx.client_ack_pending.lock().await;
+    maybe_byzantine_commit(ctx, client, engine, &fork, &mut lack_pend);
+
+
+    ProtoAppendEntries {
+        fork: Some(f),
+        commit_index: ae.commit_index,
+        view: ae.view,
+        view_is_stable: ae.view_is_stable,
+        config_num: ae.config_num,
     }
 }
