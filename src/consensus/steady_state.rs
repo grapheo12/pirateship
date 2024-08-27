@@ -6,13 +6,13 @@ use indexmap::IndexMap;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
 use std::{
-    collections::HashSet, io::{Error, ErrorKind}, sync::atomic::Ordering, time::Instant
+    collections::HashSet, io::{Error, ErrorKind}, sync::{atomic::Ordering, Arc}, time::Instant
 };
 use tokio::sync::MutexGuard;
 
 use crate::{
     consensus::{
-        backfill::maybe_backfill_fork_till_last_match, handler::{ForwardedMessageWithAckChan, PinnedServerContext}, log::{Log, LogEntry}
+        backfill::maybe_backfill_fork_till_last_match, handler::{ForwardedMessageWithAckChan, PinnedServerContext}, log::{Log, LogEntry}, reconfiguration::decide_my_lifecycle_stage
     }, crypto::{cmp_hash, DIGEST_LENGTH}, proto::{
         consensus::{
             proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoVote,
@@ -229,6 +229,11 @@ where Engine: crate::execution::Engine
                         info!("View stabilised!");
                         let mut fork_buf = ctx.state.fork_buffer.lock().await;
                         fork_buf.retain(|&v, _| v < vote.view);
+
+                        // Remove all old_full_nodes.
+                        ctx.old_full_nodes.set(Box::new(Vec::new()));
+                        let lifecycle_stage = decide_my_lifecycle_stage(&ctx, false);
+                        ctx.lifecycle_stage.store(lifecycle_stage as i8, Ordering::SeqCst);
                     }
                 }
             }
@@ -473,14 +478,19 @@ pub async fn do_push_append_entries_to_fork<Engine>(
     }
 
     let old_stable = ctx.view_is_stable.load(Ordering::SeqCst);
-    ctx.view_is_stable.store(ae.view_is_stable, Ordering::SeqCst);
-    let new_stable = ctx.view_is_stable.load(Ordering::SeqCst);
+    let new_stable = ae.view_is_stable;
     if new_stable && !old_stable {
         info!("View stabilised.");
-
+        
         let mut fork_buf = ctx.state.fork_buffer.lock().await;
         fork_buf.retain(|&v, _| v < ae.view);
+        
+        // View is stable. So all OldFullNodes become learners.
+        ctx.old_full_nodes.set(Box::new(Vec::new()));
+        let lifecycle_stage = decide_my_lifecycle_stage(&ctx, false);
+        ctx.lifecycle_stage.store(lifecycle_stage as i8, Ordering::SeqCst);
     }
+    ctx.view_is_stable.store(ae.view_is_stable, Ordering::SeqCst);
 
 
 

@@ -23,7 +23,7 @@ impl ResettableTimer {
 
     pub async fn fire_now(self: &Arc<Pin<Box<Self>>>) {
         let tx = self.tx.clone();
-        let _ = tx.send(true).await;
+        let _ = tx.try_send(true);
     }
 
     pub async fn run(self: &Arc<Pin<Box<Self>>>) -> JoinHandle<()>{

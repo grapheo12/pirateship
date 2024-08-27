@@ -729,11 +729,10 @@ async fn force_noop(ctx: &PinnedServerContext) {
 /// Once overwrite is done, it is safe to push/verify_and_push the blocks in ret.1.
 pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &ProtoFork, super_majority: u64) -> Result<(ProtoFork, ProtoFork), Error> {
     let mut split_point = None;
-    let mut _keys = ctx.keys.get();
-    let keys = Arc::make_mut(&mut _keys);
+    let _keys = ctx.keys.get();
     
-    let mut i = 0;
-    while i < f.blocks.len() as i64 {
+    let mut i = f.blocks.len() as i64 - 1;
+    while i >= 0 {
         if !f.blocks[i as usize].view_is_stable {
             // This the signal that it is a New Leader message
             let mut valid_forks = 0;
@@ -817,12 +816,12 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
                 }
             }
 
-            if split_point.is_none() || split_point.unwrap() < (i + 1) as usize {
+            if split_point.is_none() {
                 split_point = Some((i + 1) as usize);
             }
         }
 
-        i += 1;
+        i -= 1;
     }
 
     if split_point.is_none() {
