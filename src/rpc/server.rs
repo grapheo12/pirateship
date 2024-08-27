@@ -69,8 +69,9 @@ pub type MsgAckChan = mpsc::UnboundedSender<(PinnedMessage, LatencyProfile)>;
 pub enum RespType {
     Resp = 1,
     NoResp = 2,
-    RespAndTrack = 3,
-    RespAndTrackAndReconf = 4
+    NoRespAndReconf = 3,
+    RespAndTrack = 4,
+    RespAndTrackAndReconf = 5
 }
 
 pub type HandlerType<ServerContext> = fn(
@@ -357,6 +358,12 @@ where
                 server.key_store.set(new_keys.as_ref().clone());
 
 
+            }
+
+            if let Ok(RespType::NoRespAndReconf) = resp {
+                // Reconfigure the server to use the new public keys.
+                let new_keys = ctx.get_server_keys();
+                server.key_store.set(new_keys.as_ref().clone());
             }
         }
 

@@ -26,10 +26,13 @@ message ProtoTentativeReceipt {
     uint64 tx_n = 2;
 }
 
-message ProtoTryAgain { }
+message ProtoTryAgain { 
+    string serialized_node_infos = 1;
+}
 
 message ProtoCurrentLeader {
     string name = 1;
+    string serialized_node_infos = 2;
 }
 
 message ProtoClientReply {

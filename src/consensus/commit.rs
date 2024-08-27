@@ -10,15 +10,13 @@ use std::{
 use tokio::sync::MutexGuard;
 
 use crate::{
-    consensus::{
+    config::NodeInfo, consensus::{
         handler::PinnedServerContext, log::Log, reconfiguration::maybe_execute_reconfiguration_transaction
-    }, crypto::hash,
-    proto::{
+    }, crypto::hash, proto::{
         client::{
             ProtoClientReply, ProtoTransactionReceipt, ProtoTryAgain
         }, consensus::ProtoFork, execution::ProtoTransactionResult
-    },
-    rpc::{
+    }, rpc::{
         client::PinnedClient, server::{LatencyProfile, MsgAckChan}, PinnedMessage
     }
 };
@@ -82,8 +80,10 @@ pub fn do_byzantine_commit<Engine>(
             if !_tx.is_reconfiguration {
                 continue;
             }
-            
-
+            if _tx.on_byzantine_commit.is_none() {
+                continue;
+            }
+            info!("Reconfiguration transaction found in block: {}. Doing Byz commit", bn);
             // The byz commit phase of reconf tx is executed async.
             let _ = ctx.reconf_channel.0.send(_tx.clone());
         }
@@ -186,6 +186,9 @@ pub fn do_commit<Engine>(
             if !_tx.is_reconfiguration {
                 continue;
             }
+            if _tx.on_crash_commit.is_none() {
+                continue;
+            }
             info!("Reconfiguration transaction found in block: {}", bn);
             match maybe_execute_reconfiguration_transaction(ctx, client, _tx, false) {
                 Ok(_did_reconf) => {
@@ -225,10 +228,14 @@ pub fn do_commit<Engine>(
                     warn!("Missing transaction in stable view!");
                 }
 
+                let node_infos = NodeInfo {
+                    nodes: ctx.config.get().net_config.nodes.clone(),
+                };
+
                 ProtoClientReply {
                     reply: Some(
                         crate::proto::client::proto_client_reply::Reply::TryAgain(
-                            ProtoTryAgain{ }
+                            ProtoTryAgain{ serialized_node_infos: node_infos.serialize() }
                     )),
                 }
             }else {

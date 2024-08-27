@@ -314,6 +314,7 @@ where Engine: crate::execution::Engine
     let mut profile = LatencyProfile::new();
     profile.prefix = String::from(format!("View change to {}", leader));
     profile.should_print = true;
+    info!("Send List: {:?}", ctx.send_list.get());
     if let Err(e) =
         PinnedClient::broadcast(client, &ctx.send_list.get(), &bcast_msg, &mut profile).await
     {
@@ -322,6 +323,7 @@ where Engine: crate::execution::Engine
 
     let old_full_nodes = ctx.old_full_nodes.get();
     let old_full_nodes = get_everyone_except_me(&_cfg.net_config.name, &old_full_nodes);
+    info!("Broadcasting ViewChange to Old Full Nodes: {:?}", old_full_nodes);
     if old_full_nodes.len() > 0 {
         if let Err(e) =
         PinnedClient::broadcast(client, &old_full_nodes, &bcast_msg, &mut profile).await
@@ -348,6 +350,7 @@ pub async fn do_process_view_change<Engine>(
         return;
     } else if vc.config_num > ctx.state.config_num.load(Ordering::SeqCst) {
         // Need to fast forward the config.
+        info!("Received VC from newer config({}) [My config = {}]. Fast forwarding.", vc.config_num, ctx.state.config_num.load(Ordering::SeqCst));
         &fast_forward_config_from_vc(&ctx, &client, engine, vc, sender).await
     } else {
         vc

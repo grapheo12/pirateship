@@ -91,7 +91,7 @@ where
     let name = resp.name;
     // String::from(std::str::from_utf8(resp.name).unwrap_or(""));
     if server.key_store.get().get_pubkey(&name).is_none() {
-        return Err(Error::new(ErrorKind::InvalidData, "unknown peer"));
+        return Err(Error::new(ErrorKind::InvalidData, format!("unknown peer: {}", name)));
     }
 
     let payload = construct_payload(nonce, &name);
@@ -117,7 +117,7 @@ pub async fn handshake_client(
     debug!("Received nonce: {}", nonce);
     let cfg = client.0.config.get();
     let payload = construct_payload(nonce, &cfg.net_config.name);
-    let signature = client.0.key_store.sign(&payload.as_slice());
+    let signature = client.0.key_store.get().sign(&payload.as_slice());
     let signature = Bytes::from(Vec::from(signature));
     let name = cfg.net_config.name.clone();
     let resp = HandshakeResponse { name, signature };

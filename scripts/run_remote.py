@@ -99,7 +99,7 @@ def create_dirs_and_copy_files(node_conns, client_conns, wd, repeat, git_hash, c
         conn.put(f"{cfg['rpc_config']['allowed_keylist_path']}", remote=f"pft/{wd}/configs/")
         conn.put(f"{cfg['rpc_config']['signing_priv_key_path']}", remote=f"pft/{wd}/configs/")
         conn.put(f"configs/{node}{CONFIG_SUFFIX}", remote=f"pft/{wd}/configs/")
-        conn.put("target/release/server", remote=f"pft/{wd}/target/release")
+        conn.put("target/release/server", remote=f"pft/{wd}/target/release/server_{node}")
 
     for client, conn in client_conns.items():
         run_all([
@@ -140,7 +140,7 @@ def run_nodes(node_conns: Dict[str, Connection], repeat_num: int, wd: str) -> Li
     promises = []
     
     for node, conn in node_conns.items():
-        prom = conn.run(f"cd pft/{wd} && ./target/release/server configs/{node}{CONFIG_SUFFIX} > logs/{repeat_num}/{node}.log 2> logs/{repeat_num}/{node}.err",
+        prom = conn.run(f"cd pft/{wd} && ./target/release/server_{node} configs/{node}{CONFIG_SUFFIX} > logs/{repeat_num}/{node}.log 2> logs/{repeat_num}/{node}.err",
                  pty=True, asynchronous=True, hide=True)
         promises.append(prom)
 
@@ -168,9 +168,9 @@ def kill_clients(client_conns: Dict[str, Connection]):
 
 
 def kill_nodes(node_conns: Dict[str, Connection]):
-    for conn in node_conns.values():
+    for node, conn in node_conns.items():
         run_all([
-            "pkill -c server"       # There better not be any other process that matches this.
+            f"pkill -c server_{node}"       # There better not be any other process that matches this.
         ], conn)
 
 

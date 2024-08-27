@@ -20,7 +20,7 @@ use std::time::Instant;
 use tokio::{join, sync::{mpsc, Mutex, Semaphore}};
 
 use crate::{
-    config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, proto::execution::ProtoTransaction, rpc::{
+    config::{AtomicConfig, Config, NodeInfo}, crypto::{AtomicKeyStore, KeyStore}, proto::execution::ProtoTransaction, rpc::{
         client::PinnedClient, server::{GetServerKeys, LatencyProfile, MsgAckChan, RespType}, MessageRef, PinnedMessage
     }, utils::AtomicStruct
 };
@@ -123,6 +123,8 @@ pub struct ServerContext {
         Mutex<mpsc::UnboundedReceiver<(PinnedMessage, LatencyProfile)>>,
     ),
 
+    pub __should_server_update_keys: AtomicBool,
+
     pub reconf_channel: (
         mpsc::UnboundedSender<ProtoTransaction>,
         Mutex<mpsc::UnboundedReceiver<ProtoTransaction>>,
@@ -169,6 +171,7 @@ impl PinnedServerContext {
             ping_counters: std::sync::Mutex::new(HashMap::new()),
             keys: AtomicKeyStore::new(keys.clone()),
             __client_black_hole_channel: (black_hole_ch.0, Mutex::new(black_hole_ch.1)),
+            __should_server_update_keys: AtomicBool::new(false),
             reconf_channel: (reconf_channel.0, Mutex::new(reconf_channel.1)),
             view_timer: ResettableTimer::new(Duration::from_millis(cfg.consensus_config.view_timeout_ms)),
             intended_view: AtomicU64::new(0),
@@ -193,6 +196,7 @@ impl Deref for PinnedServerContext {
 
 impl GetServerKeys for PinnedServerContext {
     fn get_server_keys(&self) -> Arc<Box<KeyStore>> {
+        info!("Keys: {:?}", self.keys.get().pub_keys);
         self.keys.get()
     }
 }
@@ -259,6 +263,10 @@ pub fn consensus_rpc_handler<'a>(
             let msg = (body.message.unwrap(), sender, ack_tx, profile);
             if let Err(_) = ctx.node_queue.0.send(msg) {
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
+            }
+
+            if let Ok(_) = ctx.__should_server_update_keys.compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed) {
+                return Ok(RespType::NoRespAndReconf);
             }
 
             return Ok(RespType::NoResp);
@@ -421,7 +429,9 @@ where
         }
 
         if !ctx.view_is_stable.load(Ordering::SeqCst) {
-            do_respond_with_try_again(&curr_client_req).await;
+            do_respond_with_try_again(&curr_client_req, NodeInfo {
+                nodes: ctx.config.get().net_config.nodes.clone(),
+            }).await;
             // @todo: Backoff here.
             // Reset for next iteration
             curr_client_req.clear();
@@ -581,7 +591,7 @@ pub async fn handle_node_messages<Engine>(
             let mut req = curr_node_req.remove(0);
             node_req_num -= 1;
 
-            // If we are in the Dormant or Learner stage, only process AppendEntries.
+            // If we are in the Dormant or Learner stage, only process AppendEntries or ViewChange. (No votes)
             if stage == LifecycleStage::Dormant as i8 || stage == LifecycleStage::Learner as i8 {
                 if let crate::proto::rpc::proto_payload::Message::AppendEntries(_) = req.0 {
                     // If I am Dormant, by this msg, I become a learner.
@@ -593,6 +603,17 @@ pub async fn handle_node_messages<Engine>(
                         error!("Error processing append entries: {}", e);
                     }
                 }
+                if let crate::proto::rpc::proto_payload::Message::ViewChange(_) = req.0 {
+                    // If I am Dormant, by this msg, I become a learner.
+                    if stage == LifecycleStage::Dormant as i8 {
+                        info!("Lifecycle stage: Dormant -> Learner");
+                        ctx.lifecycle_stage.store(LifecycleStage::Learner as i8, Ordering::SeqCst);
+                    }
+                    if let Err(e) = process_node_request(&ctx, &engine, &client, majority, super_majority, old_super_majority, &mut req).await {
+                        error!("Error processing append entries: {}", e);
+                    }
+                }
+                
                 continue;
             }
 

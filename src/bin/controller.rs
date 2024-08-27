@@ -122,9 +122,14 @@ async fn main() -> io::Result<()> {
         serialize_upgrade_fullnode(name)
     }).collect();
 
+    info!("Upgrade fullnode op: {:?}", upgrade_fullnode_op);
+
+
     let downgrade_fullnode_op: Vec<ProtoTransactionOp> = config.downgrade_fullnode.iter().map(|name| {
         serialize_downgrade_fullnode(name)
     }).collect();
+
+    info!("Downgrade fullnode op: {:?}", downgrade_fullnode_op);
 
     let crash_commit_ops: Vec<ProtoTransactionOp> = add_learner_op.into_iter()
         .collect();

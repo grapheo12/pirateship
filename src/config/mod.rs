@@ -35,6 +35,23 @@ pub struct NetConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct NodeInfo {
+    pub nodes: HashMap<String, NodeNetInfo>,
+}
+
+impl NodeInfo {
+    pub fn serialize(self: &Self) -> String {
+        serde_json::to_string_pretty(self).expect("Invalid Config")
+    }
+
+    pub fn deserialize(s: &String) -> Self {
+        let res: Result<NodeInfo> = serde_json::from_str(s.as_str());
+        res.expect("Invalid JSON config")
+    }
+
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RpcConfig {
     pub allowed_keylist_path: String,
     pub signing_priv_key_path: String,

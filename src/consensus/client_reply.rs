@@ -4,7 +4,7 @@
 use prost::Message;
 
 use crate::{
-    consensus::handler::{ForwardedMessageWithAckChan, PinnedServerContext}, proto::client::{
+    config::NodeInfo, consensus::handler::{ForwardedMessageWithAckChan, PinnedServerContext}, proto::client::{
             ProtoClientReply, ProtoCurrentLeader, ProtoTryAgain
         }, rpc::PinnedMessage
 };
@@ -17,10 +17,12 @@ pub async fn bulk_reply_to_client(reqs: &Vec<ForwardedMessageWithAckChan>, msg: 
     }
 }
 
-pub async fn do_respond_with_try_again(reqs: &Vec<ForwardedMessageWithAckChan>) {
+pub async fn do_respond_with_try_again(reqs: &Vec<ForwardedMessageWithAckChan>, node_infos: NodeInfo) {
     let try_again = ProtoClientReply {
         reply: Some(
-            crate::proto::client::proto_client_reply::Reply::TryAgain(ProtoTryAgain {}),
+            crate::proto::client::proto_client_reply::Reply::TryAgain(ProtoTryAgain {
+                serialized_node_infos: node_infos.serialize(),
+            }),
         ),
     };
 
@@ -36,10 +38,14 @@ pub async fn do_respond_with_current_leader(
     ctx: &PinnedServerContext,
     reqs: &Vec<ForwardedMessageWithAckChan>,
 ) {
+    let node_infos = NodeInfo {
+        nodes: ctx.config.get().net_config.nodes.clone(),
+    };
     let leader = ProtoClientReply {
         reply: Some(crate::proto::client::proto_client_reply::Reply::Leader(
             ProtoCurrentLeader {
                 name: get_leader_str(ctx),
+                serialized_node_infos: node_infos.serialize(),
             },
         )),
     };

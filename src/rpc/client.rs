@@ -1,7 +1,7 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the Apache 2.0 License.
 
-use crate::{config::{AtomicConfig, Config}, crypto::KeyStore};
+use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}};
 use crossbeam::atomic::AtomicCell;
 use log::{debug, error, info, trace, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
@@ -135,7 +135,7 @@ pub struct Client {
     pub sock_map: PinnedHashMap<String, PinnedTlsStream>,
     pub chan_map: PinnedHashMap<String, UnboundedSender<(PinnedMessage, LatencyProfile)>>,
     pub worker_ready: PinnedHashSet<String>,
-    pub key_store: KeyStore,
+    pub key_store: AtomicKeyStore,
     do_auth: bool,
 }
 
@@ -182,7 +182,7 @@ impl Client {
             do_auth: true,
             chan_map: PinnedHashMap::new(),
             worker_ready: PinnedHashSet::new(),
-            key_store: key_store.to_owned(),
+            key_store: AtomicKeyStore::new(key_store.to_owned()),
         }
     }
     pub fn new_unauthenticated(cfg: &Config) -> Client {
@@ -191,7 +191,7 @@ impl Client {
             tls_ca_root_cert: Client::load_root_ca_cert(&cfg.net_config.tls_root_ca_cert_path),
             sock_map: PinnedHashMap::new(),
             do_auth: false,
-            key_store: KeyStore::empty().to_owned(),
+            key_store: AtomicKeyStore::new(KeyStore::empty().to_owned()),
             chan_map: PinnedHashMap::new(),
             worker_ready: PinnedHashSet::new(),
         }
@@ -439,7 +439,7 @@ impl PinnedClient {
                     let s = match Self::get_sock(&c, &_name).await {
                         Ok(s) => s,
                         Err(e) => {
-                            debug!("Broadcast worker dying: {}", e);
+                            warn!("Broadcast worker dying: {}", e);
                             continue;
                         },
                     };

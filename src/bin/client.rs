@@ -43,6 +43,7 @@ fn process_args() -> ClientConfig {
 }
 
 async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, config: ClientConfig) -> io::Result<()> {    
+    let mut config = config.clone();
     let mut curr_leader = String::from("node1");
     let mut i = 0;
 
@@ -102,10 +103,22 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
             }
             let resp = match resp.reply.unwrap() {
                 pft::proto::client::proto_client_reply::Reply::Receipt(r) => r,
-                pft::proto::client::proto_client_reply::Reply::TryAgain(_) => {
+                pft::proto::client::proto_client_reply::Reply::TryAgain(try_again_msg) => {
+                    let node_infos = pft::config::NodeInfo::deserialize(&try_again_msg.serialized_node_infos);
+                    for (k, v) in node_infos.nodes.iter() {
+                        config.net_config.nodes.insert(k.clone(), v.clone());
+                    }
+                    client.0.config.set(Box::new(config.fill_missing()));
+                    debug!("New Net Info: {:#?}", config.net_config.nodes);
                     continue;
                 },
                 pft::proto::client::proto_client_reply::Reply::Leader(l) => {
+                    let node_infos = pft::config::NodeInfo::deserialize(&l.serialized_node_infos);
+                    for (k, v) in node_infos.nodes.iter() {
+                        config.net_config.nodes.insert(k.clone(), v.clone());
+                    }
+                    client.0.config.set(Box::new(config.fill_missing()));
+                    debug!("New Net Info: {:#?}", config.net_config.nodes);
                     if curr_leader != l.name {
                         trace!("Switching leader: {} --> {}", curr_leader, l.name);
                         // sleep(Duration::from_millis(10)).await; // Rachel: You fell A-SLEEP?!

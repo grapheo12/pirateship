@@ -12,7 +12,7 @@ use nix::unistd::Pid;
 
 use crate::{config::{Config, NodeNetInfo}, consensus::utils::get_everyone_except_me, crypto::KeyStore, proto::{consensus::{ProtoAppendEntries, ProtoViewChange}, execution::{ProtoTransaction, ProtoTransactionOp}}, rpc::client::PinnedClient};
 
-use super::{backfill::maybe_backfill_fork_till_last_match, commit::maybe_byzantine_commit, handler::{LifecycleStage, PinnedServerContext}, view_change::do_reply_all_with_tentative_receipt};
+use super::{backfill::maybe_backfill_fork_till_last_match, commit::{do_byzantine_commit, maybe_byzantine_commit}, handler::{LifecycleStage, PinnedServerContext}, view_change::do_reply_all_with_tentative_receipt};
 
 /// Gracefully shut down the node
 pub async fn do_graceful_shutdown() {
@@ -123,6 +123,9 @@ pub fn do_add_learners(ctx: &PinnedServerContext, client: &PinnedClient, learner
     ctx.config.set(new_cfg.clone());
     client.0.config.set(new_cfg.clone());
     ctx.keys.set(new_keys.clone());
+    client.0.key_store.set(new_keys.clone());
+
+    ctx.__should_server_update_keys.store(true, Ordering::Release);
 }
 
 /// Removing a learner == removing from learner list (net config and public key are not removed)
@@ -346,6 +349,7 @@ pub fn maybe_execute_reconfiguration_transaction(ctx: &PinnedServerContext, clie
                 let lifecycle_stage = decide_my_lifecycle_stage(ctx, false);
                 info!("Lifecycle stage: {:?}", lifecycle_stage);
                 ctx.lifecycle_stage.store(lifecycle_stage as i8, std::sync::atomic::Ordering::SeqCst);
+                info!("Learners: {:?},\nKeyStore: {:#?}", ctx.config.get().consensus_config.learner_list, ctx.keys.get().pub_keys);
             }
         }
     } else {
@@ -388,6 +392,7 @@ pub fn maybe_execute_reconfiguration_transaction(ctx: &PinnedServerContext, clie
             if ret || to_remove.len() > 0 {
                 let lifecycle_stage = decide_my_lifecycle_stage(ctx, false);
                 info!("Lifecycle stage: {:?}", lifecycle_stage);
+                info!("Config Num: {},\nConfig: {:#?},\nOld Full Nodes: {:?}", ctx.state.config_num.load(Ordering::SeqCst), ctx.config.get(), &ctx.old_full_nodes.get());
                 ctx.lifecycle_stage.store(lifecycle_stage as i8, std::sync::atomic::Ordering::SeqCst);
 
                 let _cfg = ctx.config.get();
@@ -504,6 +509,7 @@ where Engine: crate::execution::Engine
         }
 
         for qc in &block.qc {
+            info!("fast_forward: qc.n = {}", qc.n);
             if qc.n > last_qc {
                 last_qc = qc.n;
                 last_qc_view = qc.view;
@@ -522,18 +528,17 @@ where Engine: crate::execution::Engine
 
             // @todo: Verify the QCs.
             for qc in &block.qc {
-                if qc.n > updated_bci && qc.view == last_qc_view{
+                info!("fast_forward: qc on qc check: qc.n = {}", qc.n);
+
+                if qc.n > updated_bci && qc.view == last_qc_view {
                     updated_bci = qc.n;
                 }
             }
         }
     }
 
+    info!("fast_forward: Updated bci: {}", updated_bci);
     // Overwrite till the byz committed entry.
-    if updated_bci <= old_bci {
-        return ae.clone();
-    }
-
     let mut bci_fork = f.clone();
     bci_fork.blocks.retain(|b| b.n <= updated_bci);
     f.blocks.retain(|b| b.n > updated_bci);
@@ -544,15 +549,31 @@ where Engine: crate::execution::Engine
         return ae.clone();
     }
 
+    // Check qc on qc again in the fork after overwriting.
+    for n in (updated_bci + 1)..(fork.last() + 1) {
+        let block = &fork.get(n).unwrap().block;
+        for qc in &block.qc {
+            info!("fast_forward: qc on qc check: qc.n = {}", qc.n);
+
+            if qc.n > updated_bci && qc.view == last_qc_view {
+                updated_bci = qc.n;
+            }
+        }
+    }
+
+    if updated_bci <= old_bci {
+        return ae.clone();
+    }
+
     // Now byzantine commit everything till the last byz committed entry.
     // This hopefully bring us to the newest config.
     let mut lack_pend = ctx.client_ack_pending.lock().await;
-    maybe_byzantine_commit(ctx, client, engine, &fork, &mut lack_pend);
+    do_byzantine_commit(ctx, client, engine, &fork, updated_bci, &mut lack_pend);
 
-
+    let len = f.blocks.len();
     ProtoAppendEntries {
         fork: Some(f),
-        commit_index: ae.commit_index,
+        commit_index: ctx.state.commit_index.load(Ordering::SeqCst),
         view: ae.view,
         view_is_stable: ae.view_is_stable,
         config_num: ae.config_num,
@@ -569,9 +590,6 @@ where Engine: crate::execution::Engine
         return vc.clone();
     }
     let curr_config_num = ctx.state.config_num.load(Ordering::SeqCst);
-    // This will make sure that executing the reconf tx only changes my config.
-    // But doesn't trigger a view change.
-    ctx.state.config_num.store(vc.config_num, Ordering::SeqCst);
 
     // To be on the safe side, let's flush the pipeline.
     do_reply_all_with_tentative_receipt(ctx).await;
@@ -595,6 +613,7 @@ where Engine: crate::execution::Engine
         }
 
         for qc in &block.qc {
+            info!("fast_forward: qc.n = {}", qc.n);
             if qc.n > last_qc {
                 last_qc = qc.n;
                 last_qc_view = qc.view;
@@ -613,18 +632,17 @@ where Engine: crate::execution::Engine
 
             // @todo: Verify the QCs.
             for qc in &block.qc {
-                if qc.n > updated_bci && qc.view == last_qc_view{
+                info!("fast_forward: qc on qc check: qc.n = {}", qc.n);
+
+                if qc.n > updated_bci && qc.view == last_qc_view {
                     updated_bci = qc.n;
                 }
             }
         }
     }
 
+    info!("fast_forward: Updated bci: {}", updated_bci);
     // Overwrite till the byz committed entry.
-    if updated_bci <= old_bci {
-        return vc.clone();
-    }
-
     let mut bci_fork = f.clone();
     bci_fork.blocks.retain(|b| b.n <= updated_bci);
     f.blocks.retain(|b| b.n > updated_bci);
@@ -635,10 +653,26 @@ where Engine: crate::execution::Engine
         return vc.clone();
     }
 
+    // Check qc on qc again in the fork after overwriting.
+    for n in (updated_bci + 1)..(fork.last() + 1) {
+        let block = &fork.get(n).unwrap().block;
+        for qc in &block.qc {
+            info!("fast_forward: qc on qc check: qc.n = {}", qc.n);
+
+            if qc.n > updated_bci && qc.view == last_qc_view {
+                updated_bci = qc.n;
+            }
+        }
+    }
+
+    if updated_bci <= old_bci {
+        return vc.clone();
+    }
+
     // Now byzantine commit everything till the last byz committed entry.
     // This hopefully bring us to the newest config.
     let mut lack_pend = ctx.client_ack_pending.lock().await;
-    maybe_byzantine_commit(ctx, client, engine, &fork, &mut lack_pend);
+    do_byzantine_commit(ctx, client, engine, &fork, updated_bci, &mut lack_pend);
 
     let len = f.blocks.len();
     ProtoViewChange {

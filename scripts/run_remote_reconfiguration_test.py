@@ -225,8 +225,12 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
                     time.sleep(0.1)
                     extra_promises.append(run_nodes({c[1]: extra_node_conns[c[1]]}, i, curr_time))
 
-            print("Running reconfiguration command", j, ": Sleeping for", cmd[0], "seconds")
-            time.sleep(cmd[0])
+            if j == 0:
+                sleep_time = cmd[0]
+            else:
+                sleep_time = cmd[0] - commands[j - 1][0]
+            print("Running reconfiguration command", j, ": Sleeping for", sleep_time, "seconds")
+            time.sleep(sleep_time)
             print(f"Running reconfiguration command {j}: {cmd[1]}")
             if len(cmd[1]) == 0 or len(cmd[1][0]) == 0 or cmd[1][0][0] == "END":
                 print("Ending")
@@ -242,8 +246,12 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
             for c in cmd[1]:
                 if c[0] == "DEL_LEARNER":
                     time.sleep(0.1)
-                    print("Killing extra node:", c[1])
-                    kill_nodes({c[1]: extra_node_conns[c[1]]})
+                    if c[1] in extra_node_conns:
+                        print("Killing extra node:", c[1])
+                        kill_nodes({c[1]: extra_node_conns[c[1]]})
+                    elif c[1] in node_conns:
+                        print("Killing node:", c[1])
+                        kill_nodes({c[1]: node_conns[c[1]]})
                     
         
         time.sleep(1)
