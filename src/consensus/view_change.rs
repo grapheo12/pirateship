@@ -15,8 +15,8 @@ use tokio::sync::MutexGuard;
 
 use crate::{
     consensus::{
-        handler::PinnedServerContext,
-        log::{Log, LogEntry},
+        handler::{LifecycleStage, PinnedServerContext},
+        log::{Log, LogEntry}, reconfiguration::{fast_forward_config, fast_forward_config_from_vc},
     }, crypto::{hash, KeyStore},
     proto::{
         client::{
@@ -343,6 +343,29 @@ pub async fn do_process_view_change<Engine>(
     old_super_majority: u64,
 ) where Engine: crate::execution::Engine
 {
+    let vc = if vc.config_num < ctx.state.config_num.load(Ordering::SeqCst) {
+        warn!("VC from older config({}) [My config = {}]. Rejected.", vc.config_num, ctx.state.config_num.load(Ordering::SeqCst));
+        return;
+    } else if vc.config_num > ctx.state.config_num.load(Ordering::SeqCst) {
+        // Need to fast forward the config.
+        &fast_forward_config_from_vc(&ctx, &client, engine, vc, sender).await
+    } else {
+        vc
+    };
+
+    // At this point, I have fast forwarded to have the same config num as the VC.
+    if ctx.state.config_num.load(Ordering::SeqCst) != vc.config_num {
+        error!("Config mismatch after fast forward. My config = {}, VC config = {}", ctx.state.config_num.load(Ordering::SeqCst), vc.config_num);
+        return;
+    }
+
+    // Don't process view change messages if I am not a FullNode or OldFullNode in the newest config.
+    let lifecycle_stage = ctx.lifecycle_stage.load(Ordering::SeqCst);
+    if lifecycle_stage != LifecycleStage::FullNode as i8 && lifecycle_stage != LifecycleStage::OldFullNode as i8 {
+        warn!("Not a FullNode or OldFullNode in the newest config. Ignoring view change message.");
+        return;
+    }
+
     let _cfg = ctx.config.get();
     let _keys = ctx.keys.get();
 
