@@ -66,6 +66,12 @@ pub fn get_f_plus_one_num(ctx: &PinnedServerContext) -> u64 {
     (n / 3) + 1
 }
 
+pub fn get_old_f_plus_one_num(ctx: &PinnedServerContext) -> u64 {
+    let old_full_nodes = ctx.old_full_nodes.get();
+    let n = old_full_nodes.len() as u64;
+    (n / 3) + 1
+}
+
 pub fn get_everyone_except_me(my_name: &String, node_list: &Vec<String>) -> Vec<String> {
     node_list
         .iter()

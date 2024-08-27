@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
 use std::{
-    collections::HashSet, io::{Error, ErrorKind}, sync::{atomic::Ordering, Arc}, time::Instant
+    collections::{HashMap, HashSet}, io::{Error, ErrorKind}, sync::{atomic::Ordering, Arc}, time::Instant
 };
 use tokio::sync::MutexGuard;
 
@@ -152,6 +152,7 @@ pub async fn do_process_vote<Engine>(
     sender: &String,
     majority: u64,
     super_majority: u64,
+    old_super_majority: u64
 ) -> Result<(), Error>
 where Engine: crate::execution::Engine
 {
@@ -216,8 +217,19 @@ where Engine: crate::execution::Engine
         }
         // Try to increase the signature after verifying against my own fork.
         match fork.inc_qc_sig(sender, &vote_sig.sig, vote_sig.n, &_keys) {
-            Ok(total_sigs) => {
-                if total_sigs >= super_majority {
+            Ok(_total_sigs) => {
+                let sigs = &fork.get(vote_sig.n).unwrap().qc_sigs;
+                let fullnode_sigs = sigs.iter().filter(|(signer, _)| {
+                    _cfg.consensus_config.node_list.contains(signer)
+                }).count();
+                let _old_full_nodes = ctx.old_full_nodes.get();
+                let oldfullnode_sigs = sigs.iter().filter(|(signer, _)| {
+                   _old_full_nodes.contains(signer)
+                }).count();
+
+                if fullnode_sigs >= super_majority as usize
+                && (old_super_majority == 0 || oldfullnode_sigs >= old_super_majority as usize)
+                {
                     qcs.push(vote_sig.n);
                     debug!("Creating QC for {}", vote_sig.n);
                     if vote_sig.n == fork.last() && !ctx.view_is_stable.load(Ordering::SeqCst)
@@ -505,7 +517,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
 
         if did_byz_commit {
             // Pacemaker logic: Reset the view timer.
-            // ctx.view_timer.reset();
+            ctx.view_timer.reset();
         }
     }
 
@@ -630,7 +642,7 @@ where Engine: crate::execution::Engine
 
             if did_byz_commit {
                 // Pacemaker logic: Reset the view timer.
-                // ctx.view_timer.reset();
+                ctx.view_timer.reset();
             }
 
             trace!("QC link: {} --> {:?}", n, __qc_trace);
@@ -716,6 +728,7 @@ pub async fn do_append_entries<Engine>(
     send_list: &Vec<String>,
     majority: u64,
     super_majority: u64,
+    old_super_majority: u64,
 ) -> Result<(), Error>
 where Engine: crate::execution::Engine
 {
@@ -742,6 +755,7 @@ where Engine: crate::execution::Engine
         &_cfg.net_config.name,
         majority,
         super_majority,
+        old_super_majority
     )
     .await?;
 

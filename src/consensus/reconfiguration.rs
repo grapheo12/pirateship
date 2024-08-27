@@ -10,7 +10,7 @@ use nix::sys::signal;
 use nix::sys::signal::Signal::SIGINT;
 use nix::unistd::Pid;
 
-use crate::{config::{Config, NodeNetInfo}, crypto::KeyStore, proto::{consensus::{ProtoAppendEntries, ProtoViewChange}, execution::{ProtoTransaction, ProtoTransactionOp}}, rpc::client::PinnedClient};
+use crate::{config::{Config, NodeNetInfo}, consensus::utils::get_everyone_except_me, crypto::KeyStore, proto::{consensus::{ProtoAppendEntries, ProtoViewChange}, execution::{ProtoTransaction, ProtoTransactionOp}}, rpc::client::PinnedClient};
 
 use super::{backfill::maybe_backfill_fork_till_last_match, commit::maybe_byzantine_commit, handler::{LifecycleStage, PinnedServerContext}, view_change::do_reply_all_with_tentative_receipt};
 
@@ -389,6 +389,9 @@ pub fn maybe_execute_reconfiguration_transaction(ctx: &PinnedServerContext, clie
                 let lifecycle_stage = decide_my_lifecycle_stage(ctx, false);
                 info!("Lifecycle stage: {:?}", lifecycle_stage);
                 ctx.lifecycle_stage.store(lifecycle_stage as i8, std::sync::atomic::Ordering::SeqCst);
+
+                let _cfg = ctx.config.get();
+                ctx.send_list.set(Box::new(get_everyone_except_me(&_cfg.net_config.name, &_cfg.consensus_config.node_list)));
             }
         }
     }

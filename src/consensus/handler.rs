@@ -329,7 +329,7 @@ where Engine: crate::execution::Engine
         }
         crate::proto::rpc::proto_payload::Message::Vote(v) => {
             profile.register("Vote chan wait");
-            let _ = do_process_vote(ctx.clone(), client.clone(), engine, v, sender, majority, super_majority).await;
+            let _ = do_process_vote(ctx.clone(), client.clone(), engine, v, sender, majority, super_majority, old_super_majority).await;
             profile.register("Vote process");
         }
         crate::proto::rpc::proto_payload::Message::ViewChange(vc) => {
@@ -451,7 +451,7 @@ where
         match do_append_entries(
             ctx.clone(), &engine.clone(), client.clone(),
             &mut curr_client_req, should_sig,
-            &ctx.send_list.get(), majority, super_majority,
+            &ctx.send_list.get(), majority, super_majority, 0 // View is stable; so no OldFullNode
         ).await {
             Ok(_) => {}
             Err(e) => {

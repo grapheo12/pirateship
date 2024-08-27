@@ -419,13 +419,27 @@ pub async fn do_process_view_change<Engine>(
         .unwrap()
         .insert(sender.clone(), vc.clone());
 
-    let total_forks = fork_buf.get(&vc.view).unwrap().len();
+    let _cfg = ctx.config.get();
+    let _old_full_nodes = ctx.old_full_nodes.get();
+    let total_fullnode_forks = fork_buf.get(&vc.view).unwrap()
+        .iter().filter(| (sender, _) | {
+            _cfg.consensus_config.node_list.contains(&sender)
+        }).count();
+
+    let total_oldfullnode_forks = fork_buf.get(&vc.view).unwrap()
+    .iter().filter(| (sender, _) | {
+        _old_full_nodes.contains(&sender)
+    }).count();
+
+    let f_new_plus_one = get_f_plus_one_num(&ctx) as usize;
+    let f_old_plus_one = get_old_f_plus_one_num(&ctx) as usize;
 
 
     // Pacemaker logic: If I have f + 1 messages, I should initiate my own view change.
     let my_view = ctx.state.view.load(Ordering::SeqCst);
     if vc.view > my_view
-    && total_forks >= get_f_plus_one_num(&ctx) as usize
+    && (total_fullnode_forks >= f_new_plus_one
+        || (old_super_majority > 0 && total_oldfullnode_forks >= f_old_plus_one)) 
     && ctx.intended_view.load(Ordering::SeqCst) < vc.view
     {
         // Pacemaker logic: Let's try to increase our bci as much as possible from the QCs in these view change messages.
@@ -483,7 +497,8 @@ pub async fn do_process_view_change<Engine>(
         // if vc.view >= my_view + 2, we may need to fire the timer again and again until we catch up.  
     }
 
-    if total_forks >= super_majority as usize
+    if (total_fullnode_forks >= super_majority as usize
+        || (old_super_majority > 0 && total_oldfullnode_forks >= old_super_majority as usize))
     && get_leader_str_for_view(&ctx, vc.view).eq(&ctx.config.get().net_config.name)
     {
         // Got 2f + 1 view change messages.
@@ -694,6 +709,7 @@ pub async fn do_init_new_leader<Engine>(
         &_cfg.net_config.name,
         super_majority, // Forcing to wait for 2f + 1
         super_majority,
+        old_super_majority,
     )
     .await
     .unwrap();
