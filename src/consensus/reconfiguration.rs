@@ -56,13 +56,10 @@ fn remove_node(new_cfg: &mut Box<Config>, name: &String) -> bool {
     old_len > new_len
 }
 
-fn insert_old_full_node(ctx: &PinnedServerContext, name: &String) {
-    let mut __old_full_nodes = ctx.old_full_nodes.get();
-    let old_full_nodes = Arc::make_mut(&mut __old_full_nodes);
+fn populate_old_full_nodes(ctx: &PinnedServerContext) {
+    let old_full_nodes = ctx.config.get().consensus_config.node_list.clone();
 
-    old_full_nodes.push(name.clone());
-
-    ctx.old_full_nodes.set(old_full_nodes.clone());
+    ctx.old_full_nodes.set(Box::new(old_full_nodes));
 }
 
 fn insert_pub_key(new_keys: &mut Box<KeyStore>, name: &String, pub_key: &VerifyingKey) {
@@ -166,7 +163,6 @@ pub fn do_downgrade_nodes_to_learner(ctx: &PinnedServerContext, names: &Vec<Stri
             warn!("Node {} is not a node", name);
             return;
         }
-        insert_old_full_node(ctx, name);
         insert_learner(new_cfg, name);
     }
 
@@ -383,6 +379,7 @@ pub fn maybe_execute_reconfiguration_transaction(ctx: &PinnedServerContext, clie
 
             if to_upgrade.len() > 0 || to_downgrade.len() > 0 {
                 ret = true;
+                populate_old_full_nodes(ctx);
             }
             
             do_delete_learners(ctx, &to_remove);
@@ -570,7 +567,6 @@ where Engine: crate::execution::Engine
     let mut lack_pend = ctx.client_ack_pending.lock().await;
     do_byzantine_commit(ctx, client, engine, &fork, updated_bci, &mut lack_pend);
 
-    let len = f.blocks.len();
     ProtoAppendEntries {
         fork: Some(f),
         commit_index: ctx.state.commit_index.load(Ordering::SeqCst),
