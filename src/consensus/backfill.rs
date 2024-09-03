@@ -1,5 +1,5 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
-// Licensed under the Apache 2.0 License.
+// Licensed under the MIT License.
 
 use log::{debug, error, info, warn};
 use prost::Message;

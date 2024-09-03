@@ -1,5 +1,5 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
-// Licensed under the Apache 2.0 License.
+// Licensed under the MIT License.
 
 use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}};
 use crossbeam::atomic::AtomicCell;

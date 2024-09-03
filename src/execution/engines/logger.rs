@@ -1,5 +1,5 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
-// Licensed under the Apache 2.0 License.
+// Licensed under the MIT License.
 
 use std::{ops::Deref, pin::Pin, sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc}, time::Duration};
 

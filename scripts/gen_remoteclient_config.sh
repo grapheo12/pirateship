@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Copyright (c) Shubham Mishra. All rights reserved.
-# Licensed under the Apache 2.0 License.
+# Licensed under the MIT License.
 
 # # This is the same as gen_local_config.
 # # Just that client has a different IP address
