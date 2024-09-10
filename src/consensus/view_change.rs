@@ -2,21 +2,19 @@
 // Licensed under the MIT License.
 
 use byteorder::{BigEndian, WriteBytesExt};
-use crossbeam::atomic::AtomicConsume;
 use ed25519_dalek::SIGNATURE_LENGTH;
 use hex::ToHex;
 use log::{debug, error, info, trace, warn};
-use nix::libc::QFMT_VFS_OLD;
 use prost::Message;
 use std::{
-    collections::HashMap, io::{BufWriter, Error, ErrorKind, Write}, sync::{atomic::Ordering, Arc}
+    collections::HashMap, io::{BufWriter, Error, ErrorKind, Write}, sync::atomic::Ordering
 };
 use tokio::sync::MutexGuard;
 
 use crate::{
     consensus::{
         handler::{LifecycleStage, PinnedServerContext},
-        log::{Log, LogEntry}, reconfiguration::{fast_forward_config, fast_forward_config_from_vc},
+        log::{Log, LogEntry}, reconfiguration::fast_forward_config_from_vc,
     }, crypto::{hash, KeyStore},
     proto::{
         client::{

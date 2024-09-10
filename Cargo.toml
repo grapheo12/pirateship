@@ -4,7 +4,7 @@
 
 [package]
 name = "pft"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -40,7 +40,7 @@ clap = { version = "4.5.15", features = ["derive", "cargo"] }
 prost-build = { version = "0.12" }
 
 [dev-dependencies]
-criterion = { version = "0.4", features = ["html_reports"] }
+criterion = { version = "0.5.1", features = ["html_reports"] }
 memory-stats = "1.2.0"
 
 [[bench]]

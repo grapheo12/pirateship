@@ -5,14 +5,16 @@ use std::{fs, io, path, str::FromStr};
 
 use clap::{arg, command, Arg, ArgAction};
 use log::{debug, info, trace};
-use log4rs::config;
 use pft::{
-    config::{default_log4rs_config, ClientConfig, NodeNetInfo},
+    config::{default_log4rs_config, ClientConfig},
     consensus::reconfiguration::{serialize_add_learner, serialize_del_learner, serialize_downgrade_fullnode, serialize_upgrade_fullnode, LearnerInfo},
     crypto::KeyStore,
     proto::{client::{ProtoClientReply, ProtoClientRequest}, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, MessageRef},
 };
 use prost::Message;
+
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 
 #[derive(Debug)]

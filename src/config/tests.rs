@@ -2,10 +2,9 @@
 // Licensed under the MIT License.
 
 use core::panic;
-use std::{borrow::BorrowMut, collections::HashMap, sync::{atomic::{AtomicI16, AtomicPtr}, Arc}, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use crossbeam::atomic::{self, AtomicCell};
-use tokio::{join, runtime, time::sleep};
+use tokio::{join, time::sleep};
 
 use crate::config::{AppConfig, Config, ConsensusConfig, NetConfig, NodeNetInfo, RpcConfig};
 

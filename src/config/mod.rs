@@ -2,10 +2,9 @@
 // Licensed under the MIT License.
 
 
-use crossbeam::atomic::AtomicCell;
 use serde::{Deserialize, Serialize};
 use serde_json::Result;
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 #[cfg(test)]
 mod tests;

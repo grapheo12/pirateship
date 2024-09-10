@@ -5,16 +5,13 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{BufRead, BufReader, Read},
-    path, sync::Arc,
+    path
 };
 
-use crossbeam::atomic::AtomicCell;
 use ed25519_dalek::{
     pkcs8::{DecodePrivateKey, DecodePublicKey},
     Signature, Signer, SigningKey, Verifier, VerifyingKey, SECRET_KEY_LENGTH, SIGNATURE_LENGTH,
 };
-use log::info;
-use rustls::crypto::hmac::Key;
 
 use crate::utils::AtomicStruct;
 

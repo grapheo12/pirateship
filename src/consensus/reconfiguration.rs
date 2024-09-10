@@ -12,7 +12,7 @@ use nix::unistd::Pid;
 
 use crate::{config::{Config, NodeNetInfo}, consensus::utils::get_everyone_except_me, crypto::KeyStore, proto::{consensus::{ProtoAppendEntries, ProtoViewChange}, execution::{ProtoTransaction, ProtoTransactionOp}}, rpc::client::PinnedClient};
 
-use super::{backfill::maybe_backfill_fork_till_last_match, commit::{do_byzantine_commit, maybe_byzantine_commit}, handler::{LifecycleStage, PinnedServerContext}, view_change::do_reply_all_with_tentative_receipt};
+use super::{backfill::maybe_backfill_fork_till_last_match, commit::do_byzantine_commit, handler::{LifecycleStage, PinnedServerContext}, view_change::do_reply_all_with_tentative_receipt};
 
 /// Gracefully shut down the node
 pub async fn do_graceful_shutdown() {
@@ -284,7 +284,7 @@ fn parse_full_node_op(op: &ProtoTransactionOp) -> Result<String, Error> {
     Ok(name.unwrap().to_string())
 }
 
-fn is_valid_reconfiguration(ctx: &PinnedServerContext, to_upgrade: &Vec<String>, to_downgrade: &Vec<String>, to_remove: &Vec<String>) -> bool {
+fn is_valid_reconfiguration(_ctx: &PinnedServerContext, to_upgrade: &Vec<String>, to_downgrade: &Vec<String>, to_remove: &Vec<String>) -> bool {
     // // Only swapping allowed for now.
     // // Conditions: len(to_upgrade) == len(to_downgrade) (ie, net change == 0)
     // // len(new_cfg intersection old_cfg) >= supermajority

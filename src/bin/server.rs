@@ -35,6 +35,7 @@ fn process_args() -> Config {
     Config::deserialize(&cfg_contents)
 }
 
+#[allow(unused_assignments)]
 fn get_feature_set() -> (&'static str, &'static str) {
     let mut app = "";
     let mut protocol = "";

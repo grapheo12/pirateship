@@ -2,8 +2,7 @@
 // Licensed under the MIT License.
 
 use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}};
-use crossbeam::atomic::AtomicCell;
-use log::{debug, error, info, trace, warn};
+use log::{debug, trace, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use std::{
     collections::{HashMap, HashSet}, fs::File, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::{Arc, RwLock}
@@ -345,14 +344,12 @@ impl PinnedClient {
             send_time
         );
 
-        // let mut resp_buf = Vec::new();
-        let mut sz = 0;
         {
             let mut lsock = sock.0.lock().await;
             lsock.flush().await?;  // Need this flush; otherwise it is a deadlock.
 
             let mut resp_buf = vec![0u8; 256];
-            sz = lsock.get_next_frame(&mut resp_buf).await? as usize;
+            let sz = lsock.get_next_frame(&mut resp_buf).await? as usize;
             if sz == 0 {
                 return Err(Error::new(
                     ErrorKind::InvalidData,
@@ -518,7 +515,7 @@ impl PinnedClient {
 
 
     pub async fn drop_connection(client: &PinnedClient, name: &String) {
-        let sock = {
+        let _sock = {
             let mut lsock = client.0.sock_map.0.write().unwrap();
             lsock.remove(name)
         };

@@ -16,7 +16,7 @@ use tokio::{
 };
 use tokio_rustls::{client, server};
 
-use super::{client::{Client, PinnedClient}, proto::auth::ProtoHandshakeResponse, server::{GetServerKeys, Server}};
+use super::{client::PinnedClient, proto::auth::ProtoHandshakeResponse, server::{GetServerKeys, Server}};
 
 #[derive(Clone, Debug)]
 pub(crate) struct HandshakeResponse {

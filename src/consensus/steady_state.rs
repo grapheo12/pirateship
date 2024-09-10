@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
 use std::{
-    collections::{HashMap, HashSet}, io::{Error, ErrorKind}, sync::{atomic::Ordering, Arc}, time::Instant
+    collections::HashSet, io::{Error, ErrorKind}, sync::atomic::Ordering, time::Instant
 };
 use tokio::sync::MutexGuard;
 

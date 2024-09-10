@@ -1,12 +1,12 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use log::{debug, info, trace, warn};
+use log::{debug, info, trace};
 use pft::{
     config::{default_log4rs_config, ClientConfig}, proto::{
         client::{ProtoClientReply, ProtoClientRequest},
         rpc::ProtoPayload,
-        execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}
+        execution::ProtoTransaction
     }, crypto::KeyStore, rpc::{
         client::{Client, PinnedClient},
         MessageRef,
@@ -18,6 +18,10 @@ use rand_chacha::ChaCha20Rng;
 use std::{env, fs, io, path};
 use tokio::task::JoinSet;
 use std::time::Instant;
+
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+
 
 fn process_args() -> ClientConfig {
     macro_rules! usage_str {

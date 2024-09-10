@@ -14,7 +14,6 @@ use std::{
 
 use indexmap::IndexMap;
 use log::{debug, error, info, trace, warn};
-use nix::libc::QFMT_VFS_OLD;
 use prost::Message;
 use std::time::Instant;
 use tokio::{join, sync::{mpsc, Mutex, Semaphore}};
@@ -152,7 +151,7 @@ impl PinnedServerContext {
         let send_list = get_everyone_except_me(&cfg.net_config.name, &cfg.consensus_config.node_list);
 
 
-        let mut ctx = PinnedServerContext(Arc::new(Box::pin(ServerContext {
+        let ctx = PinnedServerContext(Arc::new(Box::pin(ServerContext {
             config: AtomicConfig::new(cfg.clone()),
             send_list: AtomicVec::new(send_list),
             old_full_nodes: AtomicVec::new(Vec::new()),
@@ -526,7 +525,7 @@ pub async fn handle_node_messages<Engine>(
     }
 
     let mut node_rx = ctx.0.node_queue.1.lock().await;
-    let cfg = ctx.config.get();
+    let _cfg = ctx.config.get();
 
     debug!(
         "Leader: {}, Send List: {:?}",
