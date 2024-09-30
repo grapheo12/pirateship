@@ -3,8 +3,11 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    io::{Error, ErrorKind},
+    io::{Error, ErrorKind}
 };
+
+#[cfg(feature = "storage")]
+use std::collections::VecDeque;
 
 use ed25519_dalek::SIGNATURE_LENGTH;
 use log::{error, info, warn};
@@ -50,6 +53,10 @@ impl LogEntry {
 
 #[derive(Clone, Debug)]
 pub struct Log {
+    #[cfg(feature = "storage")]
+    entries: VecDeque<LogEntry>,
+
+    #[cfg(not(feature = "storage"))]
     entries: Vec<LogEntry>,
 
     /// Highest QC.n seen so far
@@ -59,13 +66,18 @@ pub struct Log {
     /// View of the qc with qc.n == last_qc.
     /// This is strictly not neccessary to track,
     /// but helps in quickly checking the 2-chain rule.
-    last_qc_view: u64
+    last_qc_view: u64,
 }
 
 impl Log {
     pub fn new() -> Log {
         Log {
+            #[cfg(feature = "storage")]
+            entries: VecDeque::new(),
+
+            #[cfg(not(feature = "storage"))]
             entries: Vec::new(),
+
             last_qc: 0,
             last_block_with_qc: 0,
             last_qc_view: 0,
@@ -109,7 +121,13 @@ impl Log {
             }
             self.last_block_with_qc = entry.block.n;
         }
+
+        #[cfg(feature = "storage")]
+        self.entries.push_back(entry);
+
+        #[cfg(not(feature = "storage"))]
         self.entries.push(entry);
+
         Ok(self.last())
     }
 

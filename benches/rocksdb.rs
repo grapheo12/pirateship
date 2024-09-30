@@ -34,7 +34,7 @@ fn put_bench(db: &Storage, cf: &ColumnFamily, key_cnt: &mut u32, val_size: usize
     let val = vec!['a' as u8; val_size];
     let val = val.as_slice();
 
-    db.put_cf(cf, key, val);
+    let _ = db.put_cf(cf, key, val);
     *key_cnt += 1;
 }
 
@@ -42,7 +42,7 @@ fn get_bench(db: &Storage, cf: &ColumnFamily, key_cnt: u32) {
     let key = format!("key:{}", key_cnt);
     let key = key.as_bytes();
 
-    db.get_cf(cf, key);
+    let _ = db.get_cf(cf, key);
 }
 
 // fn rw_bench(db: &mut Storage, cf: &ColumnFamily, write_ratio: f32, total_runs: usize) {

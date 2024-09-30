@@ -14,6 +14,10 @@ mod tests;
 mod log4rs;
 pub use log4rs::*;
 
+/// Default config for storage engines;
+mod storage;
+pub use storage::*;
+
 use crate::utils::AtomicStruct;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -67,7 +71,10 @@ pub struct ConsensusConfig {
     pub signature_max_delay_ms: u64,
     pub view_timeout_ms: u64,
     pub signature_max_delay_blocks: u64,
-    pub vote_processing_workers: u16
+    pub vote_processing_workers: u16,
+
+    #[cfg(feature="storage")]
+    pub log_storage_config: StorageConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -156,7 +163,10 @@ impl ClientConfig {
                 signature_max_delay_blocks: 128,
                 signature_max_delay_ms: 100,
                 view_timeout_ms: 150,
-                vote_processing_workers: 128
+                vote_processing_workers: 128,
+
+                #[cfg(feature = "storage")]
+                log_storage_config: StorageConfig::RocksDB(RocksDBConfig::default()),
             },
             app_config: AppConfig {
                 logger_stats_report_ms: 100,

@@ -70,6 +70,7 @@ always_sign = []
 never_sign = []
 dynamic_sign = []
 # Other features
+storage = []
 quorum_diversity = []
 view_change = []
 no_pipeline = []
@@ -84,7 +85,7 @@ jolteon = ["round_robin_leader", "always_sign", "view_change", "no_pipeline"]
 chained_pbft = ["round_robin_leader", "always_sign", "view_change"]
 pirateship = ["round_robin_leader", "dynamic_sign", "quorum_diversity", "view_change"]
 
-default = ["pirateship", "app_logger"]
+default = ["pirateship", "app_logger", "storage"]
 
 
 [profile.release]

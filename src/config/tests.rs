@@ -6,7 +6,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tokio::{join, time::sleep};
 
-use crate::config::{AppConfig, Config, ConsensusConfig, NetConfig, NodeNetInfo, RpcConfig};
+use crate::config::{AppConfig, Config, ConsensusConfig, NetConfig, NodeNetInfo, RocksDBConfig, RpcConfig};
 
 use super::AtomicConfig;
 
@@ -55,7 +55,10 @@ fn test_nodeconfig_serialize() {
         signature_max_delay_blocks: 128,
         signature_max_delay_ms: 100,
         vote_processing_workers: 128,
-        view_timeout_ms: 150
+        view_timeout_ms: 150,
+
+        #[cfg(feature = "storage")]
+        log_storage_config: crate::config::StorageConfig::RocksDB(RocksDBConfig::default()),
     };
 
     let app_config = AppConfig {
@@ -136,7 +139,10 @@ async fn test_atomic_config_access() {
         signature_max_delay_blocks: 128,
         signature_max_delay_ms: 100,
         vote_processing_workers: 128,
-        view_timeout_ms: 150
+        view_timeout_ms: 150,
+
+        #[cfg(feature = "storage")]
+        log_storage_config: crate::config::StorageConfig::RocksDB(RocksDBConfig::default())
     };
 
     let app_config = AppConfig {
