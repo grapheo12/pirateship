@@ -48,9 +48,9 @@ pub struct ConsensusState {
 }
 
 impl ConsensusState {
-    fn new() -> ConsensusState {
+    fn new(config: Config) -> ConsensusState {
         ConsensusState {
-            fork: Mutex::new(Log::new()),
+            fork: Mutex::new(Log::new(config)),
 
             #[cfg(feature = "view_change")]
             view: AtomicU64::new(0),
@@ -165,7 +165,7 @@ impl PinnedServerContext {
             
             node_queue: (node_ch.0, Mutex::new(node_ch.1)),
             client_queue: (client_ch.0, Mutex::new(client_ch.1)),
-            state: ConsensusState::new(),
+            state: ConsensusState::new(cfg.clone()),
             client_ack_pending: Mutex::new(HashMap::new()),
             ping_counters: std::sync::Mutex::new(HashMap::new()),
             keys: AtomicKeyStore::new(keys.clone()),

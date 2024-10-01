@@ -3,7 +3,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    io::{Error, ErrorKind}
+    io::{Error, ErrorKind}, sync::Arc
 };
 
 #[cfg(feature = "storage")]
@@ -13,7 +13,7 @@ use ed25519_dalek::SIGNATURE_LENGTH;
 use log::{error, info, warn};
 use prost::Message;
 
-use crate::crypto::{cmp_hash, hash, KeyStore};
+use crate::{config::Config, crypto::{cmp_hash, hash, KeyStore}, utils::{RocksDBStorageEngine, StorageEngine}};
 
 use super::super::proto::consensus::{
     proto_block::Sig, DefferedSignature, ProtoBlock, ProtoFork, ProtoNameWithSignature,
@@ -56,6 +56,10 @@ pub struct Log {
     #[cfg(feature = "storage")]
     entries: VecDeque<LogEntry>,
 
+    #[cfg(feature = "storage")]
+    storage_engine: Arc<Box<dyn StorageEngine>>,
+
+
     #[cfg(not(feature = "storage"))]
     entries: Vec<LogEntry>,
 
@@ -70,10 +74,22 @@ pub struct Log {
 }
 
 impl Log {
-    pub fn new() -> Log {
+    pub fn new(config: Config) -> Log {
+        
         Log {
             #[cfg(feature = "storage")]
             entries: VecDeque::new(),
+
+            #[cfg(feature = "storage")]
+            storage_engine: Arc::new({
+                // Only RocksDB supported for now.
+                let mut storage = Box::new(
+                    RocksDBStorageEngine::new(config.consensus_config.log_storage_config.clone())
+                );
+                storage.init();
+                storage
+            }),
+
 
             #[cfg(not(feature = "storage"))]
             entries: Vec::new(),
