@@ -151,7 +151,21 @@ impl Log {
         }
 
         #[cfg(feature = "storage")]
-        self.entries.push_back(entry);
+        {
+            let hsh = self.last_hash();
+            let mut buf = Vec::new();
+            entry.block.encode(&mut buf).unwrap();
+
+            self.entries.push_back(entry);
+
+
+            let res = self.storage_engine.put_block(&buf, &hsh);
+
+            if let Err(e) = res {
+                return Err(e)
+            }
+        }
+
 
         #[cfg(not(feature = "storage"))]
         self.entries.push(entry);

@@ -9,7 +9,7 @@ pub trait StorageEngine: Debug + Sync + Send {
     fn destroy(&mut self);
 
     /// Can't trust the storage to handle anything more than block hashes
-    fn put_block(&mut self, block_ser: &Vec<u8>, block_hash: &Vec<u8>) -> Result<(), Error>;
+    fn put_block(&self, block_ser: &Vec<u8>, block_hash: &Vec<u8>) -> Result<(), Error>;
     fn get_block(&self, block_hash: &Vec<u8>) -> Result<Vec<u8>, Error>;
 }
 
@@ -45,7 +45,7 @@ impl StorageEngine for RocksDBStorageEngine {
         let _ = self.db.flush();
     }
 
-    fn put_block(&mut self, block_ser: &Vec<u8>, block_hash: &Vec<u8>) -> Result<(), Error> {
+    fn put_block(&self, block_ser: &Vec<u8>, block_hash: &Vec<u8>) -> Result<(), Error> {
         let res = self.db.put(block_hash, block_ser);
         match res {
             Ok(_) => {
