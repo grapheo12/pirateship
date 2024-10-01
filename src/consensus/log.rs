@@ -152,11 +152,10 @@ impl Log {
 
         #[cfg(feature = "storage")]
         {
-            let hsh = self.last_hash();
             let mut buf = Vec::new();
             entry.block.encode(&mut buf).unwrap();
-
             self.entries.push_back(entry);
+            let hsh = self.last_hash();
 
 
             let res = self.storage_engine.put_block(&buf, &hsh);
@@ -173,7 +172,7 @@ impl Log {
         Ok(self.last())
     }
 
-    /// This is an slow function.
+    /// This is a slow function.
     /// This should be not be called in the critical path,
     /// except for when a slow node asks for old data.
     /// Be careful what you Garbage Collect.
@@ -215,8 +214,8 @@ impl Log {
                             if block.n == 1 {
                                 return Err(Error::new(
                                     ErrorKind::InvalidInput,
-                                    "Block doesn't exist",
-                                ))
+                                    format!("Block doesn't exist {} {} {}", block.n, n, self.entries.front().as_ref().unwrap().block.n),
+                                ));
                             }
                             fetch_hash = block.parent.clone();
                             
@@ -460,6 +459,20 @@ impl Log {
         let len = self.entries.len();
         self.entries[len - 1].block.sig = Some(Sig::ProposerSig(sig.to_vec()));
 
+        #[cfg(feature = "storage")]
+        {
+            // Need to repeat this storage code from push() (without the pushing part).
+            // Otherwise the correct block won't be pushed.
+            let mut buf = Vec::new();
+            self.get(self.last()).unwrap().block.encode(&mut buf).unwrap();
+            let hsh = self.last_hash();
+            let res = self.storage_engine.put_block(&buf, &hsh);
+
+            if let Err(e) = res {
+                return Err(e)
+            }
+        }
+
         Ok(n)
     }
 
@@ -597,6 +610,7 @@ impl Log {
 
                 self.last_qc = last_qc;
                 self.last_qc_view = last_qc_view;
+                self.last_block_with_qc = self.entries[i as usize].block.n;
                 break;
             }
             i -= 1;
@@ -743,6 +757,8 @@ impl Log {
         while self.entries.len() > 1 {
             if self.entries.front().as_ref().unwrap().block.n <= n {
                 self.entries.pop_front();
+            } else {
+                break;
             }
         }
 

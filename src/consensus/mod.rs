@@ -28,6 +28,9 @@ pub mod utils;
 pub mod client_reply;
 pub mod reconfiguration;
 
+#[cfg(test)]
+mod tests;
+
 
 /// Wrapper around rpc::{Server, Client} with this PinnedServerContext and consensus_rpc_handler
 /// One should use this to spawn a new node, instead of creating rpc::{Server, Client} separately.
