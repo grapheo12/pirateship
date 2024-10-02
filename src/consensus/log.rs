@@ -590,13 +590,20 @@ impl Log {
     }
 
     /// Truncate log such that `last() == n`
-    pub fn truncate(&mut self, n: u64) {
+    pub fn truncate(&mut self, n: u64) -> Result<u64, Error> {
+        #[cfg(feature = "storage")]
+        if n <= self.gc_hiwm {
+            return Err(Error::new(
+                ErrorKind::InvalidInput, 
+                "Invariant violated: Garbage collected blocks should not be truncated."
+            ))
+        }
         self.entries.retain(|e| {
             e.block.n <= n
         });
 
         // Reset last_qc.
-        let mut i = (self.last() - 1) as i64;
+        let mut i = (self.entries.len() - 1) as i64;
         while i >= 0 {
             if self.entries[i as usize].block.qc.len() > 0 {
                 let mut last_qc = 0;
@@ -620,6 +627,7 @@ impl Log {
             self.last_qc = 0;
             self.last_qc_view = 0;
         }
+        Ok(self.last())
     }
 
     /// Overwrites local fork with the given `fork`.
@@ -667,7 +675,8 @@ impl Log {
         }
 
         // Truncate local fork.
-        self.truncate(fork.blocks[0].n - 1);
+        self.truncate(fork.blocks[0].n - 1).unwrap(); // This should not fail!!
+        
         for block in &fork.blocks {
             let entry = LogEntry {
                 block: block.clone(),

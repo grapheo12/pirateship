@@ -1,8 +1,11 @@
+// Copyright (c) Shubham Mishra. All rights reserved.
+// Licensed under the MIT License.
+
 use std::collections::{HashMap, HashSet};
 
 use ed25519_dalek::{SigningKey, SECRET_KEY_LENGTH};
 
-use crate::{config::{AppConfig, Config, ConsensusConfig, NetConfig, NodeNetInfo, RocksDBConfig, RpcConfig}, crypto::KeyStore, proto::consensus::{DefferedSignature, ProtoBlock}};
+use crate::{config::{AppConfig, Config, ConsensusConfig, NetConfig, NodeNetInfo, RocksDBConfig, RpcConfig}, crypto::KeyStore, proto::consensus::ProtoBlock};
 
 use super::log::{Log, LogEntry};
 
@@ -115,6 +118,7 @@ macro_rules! log_push_next {
 /// Test plan:
 /// (Push 100 then push 1 signed) * 100
 /// GC till 9000
+/// Then try to truncate.
 #[test]
 fn test_log() {
     let config = gen_config();
@@ -158,6 +162,10 @@ fn test_log() {
 
     let block = log.get(1).unwrap();
     assert!(block.block.n == 1);
+
+    assert!(log.truncate(9010).unwrap() == 9010);
+
+    assert!(log.truncate(9000).is_err());
 
 
 
