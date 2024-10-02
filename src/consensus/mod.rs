@@ -28,8 +28,8 @@ pub mod utils;
 pub mod client_reply;
 pub mod reconfiguration;
 
-#[cfg(test)]
-mod tests;
+pub mod tests;
+
 
 
 /// Wrapper around rpc::{Server, Client} with this PinnedServerContext and consensus_rpc_handler

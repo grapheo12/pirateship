@@ -119,8 +119,7 @@ macro_rules! log_push_next {
 /// (Push 100 then push 1 signed) * 100
 /// GC till 9000
 /// Then try to truncate.
-#[test]
-fn test_log() {
+pub fn test_log_plan() {
     let config = gen_config();
     let mut log = Log::new(config);
     let mut n = 1;
@@ -165,8 +164,15 @@ fn test_log() {
 
     assert!(log.truncate(9010).unwrap() == 9010);
 
+    #[cfg(feature = "storage")]
     assert!(log.truncate(9000).is_err());
 
 
 
+
+}
+
+#[test]
+fn test_log() {
+    test_log_plan();
 }

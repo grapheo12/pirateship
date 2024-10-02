@@ -57,8 +57,9 @@ name = "tx_serde_bench"
 harness = false
 
 [[bench]]
-name = "rocksdb"
+name = "storage"
 harness = false
+
 
 [features]
 # Protocol specifics
