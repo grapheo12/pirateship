@@ -20,8 +20,25 @@ impl Default for RocksDBConfig {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct FileStorageConfig {
+    pub db_path: String,
+    pub memtable_size: usize
+}
+
+impl Default for FileStorageConfig {
+    fn default() -> Self {
+        Self {
+            db_path: String::from("/tmp/testdb"),
+            memtable_size: (1 << 10),
+        }
+    }
+}
+
+
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum StorageConfig {
     RocksDB(RocksDBConfig),
+    FileStorage(FileStorageConfig)
 }

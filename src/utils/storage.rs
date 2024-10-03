@@ -1,11 +1,11 @@
-use rocksdb::{Options, DB};
+use rocksdb::{DBCompactionStyle, FifoCompactOptions, Options, UniversalCompactOptions, WriteOptions, DB};
 
 use crate::config::{RocksDBConfig, StorageConfig};
 use std::{fmt::Debug, io::{Error, ErrorKind}};
 
 pub trait StorageEngine: Debug + Sync + Send {
     fn init(&mut self);
-    fn destroy(&mut self);
+    fn destroy(&self);
 
     /// Can't trust the storage to handle anything more than block hashes
     fn put_block(&self, block_ser: &Vec<u8>, block_hash: &Vec<u8>) -> Result<(), Error>;
@@ -23,7 +23,15 @@ impl RocksDBStorageEngine {
         if let StorageConfig::RocksDB(config) = config {
             let mut opts = Options::default();
             opts.create_if_missing(true);
-            opts.set_write_buffer_size(config.write_buffer_size);
+            opts.set_write_buffer_size(512 * 1024 * 1024);
+            opts.set_max_write_buffer_number(8);
+            opts.set_min_write_buffer_number_to_merge(8);
+
+            opts.set_manual_wal_flush(true);
+            opts.set_compaction_style(DBCompactionStyle::Universal);
+            opts.set_allow_mmap_reads(true);
+            opts.set_allow_mmap_writes(true);
+
             let path = config.db_path.clone();
             RocksDBStorageEngine {
                 config,
@@ -40,12 +48,25 @@ impl StorageEngine for RocksDBStorageEngine {
         // This does nothing for RocksDBStorageEngine, since it is already created when new() is called.
     }
 
-    fn destroy(&mut self) {
+    fn destroy(&self) {
         let _ = self.db.flush();
+        let mut opts = Options::default();
+        opts.set_write_buffer_size(512 * 1024 * 1024);
+        opts.set_max_write_buffer_number(8);
+        opts.set_min_write_buffer_number_to_merge(8);
+
+        opts.set_manual_wal_flush(true);
+        opts.set_compaction_style(DBCompactionStyle::Universal);
+
+        let _ = DB::destroy(&opts, &self.config.db_path);
     }
 
     fn put_block(&self, block_ser: &Vec<u8>, block_hash: &Vec<u8>) -> Result<(), Error> {
-        let res = self.db.put(block_hash, block_ser);
+        let mut wopts = WriteOptions::default();
+        wopts.disable_wal(true);
+        
+        let res = // self.db.put(block_hash, block_ser);
+            self.db.put_opt(block_hash, block_ser, &wopts);
         match res {
             Ok(_) => {
                 return Ok(())

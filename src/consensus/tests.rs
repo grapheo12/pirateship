@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use ed25519_dalek::{SigningKey, SECRET_KEY_LENGTH};
 
-use crate::{config::{AppConfig, Config, ConsensusConfig, NetConfig, NodeNetInfo, RocksDBConfig, RpcConfig}, crypto::KeyStore, proto::consensus::ProtoBlock};
+use crate::{config::{AppConfig, Config, ConsensusConfig, FileStorageConfig, NetConfig, NodeNetInfo, RocksDBConfig, RpcConfig}, crypto::KeyStore, proto::{consensus::ProtoBlock, execution::ProtoTransaction}};
 
 use super::log::{Log, LogEntry};
 
@@ -56,7 +56,8 @@ fn gen_config() -> Config {
         view_timeout_ms: 150,
 
         #[cfg(feature = "storage")]
-        log_storage_config: crate::config::StorageConfig::RocksDB(RocksDBConfig::default()),
+        log_storage_config: crate::config::StorageConfig::FileStorage(FileStorageConfig::default()),
+        // log_storage_config: crate::config::StorageConfig::RocksDB(RocksDBConfig::default()),
     };
 
     let app_config = AppConfig {
@@ -78,7 +79,12 @@ macro_rules! log_push_next {
     ( $log:expr, $n:expr, $parent:expr ) => {
         $log.push(LogEntry {
             block: ProtoBlock {
-                tx: Vec::new(),
+                tx: vec![ProtoTransaction {
+                    on_crash_commit: None,
+                    on_byzantine_commit: None,
+                    on_receive: None,
+                    is_reconfiguration: false,
+                }; 1000],
                 n: $n,
                 parent: $parent.clone(),
                 view: 1,

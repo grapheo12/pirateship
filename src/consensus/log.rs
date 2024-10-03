@@ -13,7 +13,7 @@ use ed25519_dalek::SIGNATURE_LENGTH;
 use log::{error, info, warn};
 use prost::Message;
 
-use crate::{config::Config, crypto::{cmp_hash, hash, KeyStore}, utils::{RocksDBStorageEngine, StorageEngine}};
+use crate::{config::Config, crypto::{cmp_hash, hash, KeyStore}, utils::{FileStorageEngine, RocksDBStorageEngine, StorageEngine}};
 
 use super::super::proto::consensus::{
     proto_block::Sig, DefferedSignature, ProtoBlock, ProtoFork, ProtoNameWithSignature,
@@ -87,9 +87,14 @@ impl Log {
             #[cfg(feature = "storage")]
             storage_engine: Arc::new({
                 // Only RocksDB supported for now.
-                let mut storage = Box::new(
-                    RocksDBStorageEngine::new(config.consensus_config.log_storage_config.clone())
-                );
+                let mut storage: Box<dyn StorageEngine> = match config.consensus_config.log_storage_config {
+                    crate::config::StorageConfig::RocksDB(_) => {
+                        Box::new(RocksDBStorageEngine::new(config.consensus_config.log_storage_config.clone()))
+                    },
+                    crate::config::StorageConfig::FileStorage(_) => {
+                        Box::new(FileStorageEngine::new(config.consensus_config.log_storage_config.clone()))
+                    },
+                };
                 storage.init();
                 storage
             }),
@@ -774,8 +779,10 @@ impl Log {
         self.gc_hiwm = n;
     }
 
+}
 
-
-
-
+impl Drop for Log {
+    fn drop(&mut self) {
+        self.storage_engine.destroy();
+    }
 }
