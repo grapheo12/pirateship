@@ -93,7 +93,7 @@ impl Engine for PinnedLoggerEngine {
 
 impl PinnedLoggerEngine {
     async fn log_stats(&self) {
-        let fork = self.ctx.state.fork.lock().await;
+        let mut fork = self.ctx.state.fork.lock().await;
         
         {
             let lack_pend = self.ctx.client_ack_pending.lock().await;
@@ -130,6 +130,11 @@ impl PinnedLoggerEngine {
 
         while let Ok(bci) = bci_chan.try_recv() {
             info!("byz_commit_index = {}, hash = {}", bci, fork.hash_at_n(bci).unwrap().encode_hex::<String>());
+            
+            #[cfg(feature = "storage")]
+            if bci - 1 > 0 {
+                fork.garbage_collect_upto(bci - 1);
+            }
         };
     }
 

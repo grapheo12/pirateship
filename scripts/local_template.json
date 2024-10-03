@@ -22,7 +22,15 @@
     "signature_max_delay_blocks": 1000,
     "signature_max_delay_ms": 1200000,
     "vote_processing_workers": 8,
-    "view_timeout_ms": 5000
+    "view_timeout_ms": 5000,
+    "log_storage_config": {
+      "RocksDB": {
+        "db_path": "/tmp/testdb",
+        "write_buffer_size": 2147483648,
+        "max_write_buffer_number": 1,
+        "max_write_buffers_to_merge": 1
+      }
+    }
   },
   "app_config": {
     "logger_stats_report_ms": 100

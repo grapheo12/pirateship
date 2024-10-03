@@ -3,14 +3,17 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    io::{Error, ErrorKind},
+    io::{Error, ErrorKind}, sync::Arc
 };
+
+#[cfg(feature = "storage")]
+use std::collections::VecDeque;
 
 use ed25519_dalek::SIGNATURE_LENGTH;
 use log::{error, info, warn};
 use prost::Message;
 
-use crate::crypto::{cmp_hash, hash, KeyStore};
+use crate::{config::Config, crypto::{cmp_hash, hash, KeyStore}, utils::{FileStorageEngine, RocksDBStorageEngine, StorageEngine}};
 
 use super::super::proto::consensus::{
     proto_block::Sig, DefferedSignature, ProtoBlock, ProtoFork, ProtoNameWithSignature,
@@ -50,6 +53,18 @@ impl LogEntry {
 
 #[derive(Clone, Debug)]
 pub struct Log {
+    #[cfg(feature = "storage")]
+    entries: VecDeque<LogEntry>,
+
+    #[cfg(feature = "storage")]
+    storage_engine: Arc<Box<dyn StorageEngine>>,
+
+    /// High Watermark for garbage collection
+    #[cfg(feature = "storage")]
+    gc_hiwm: u64,
+
+
+    #[cfg(not(feature = "storage"))]
     entries: Vec<LogEntry>,
 
     /// Highest QC.n seen so far
@@ -59,13 +74,38 @@ pub struct Log {
     /// View of the qc with qc.n == last_qc.
     /// This is strictly not neccessary to track,
     /// but helps in quickly checking the 2-chain rule.
-    last_qc_view: u64
+    last_qc_view: u64,
 }
 
 impl Log {
-    pub fn new() -> Log {
+    pub fn new(config: Config) -> Log {
+        
         Log {
+            #[cfg(feature = "storage")]
+            entries: VecDeque::new(),
+
+            #[cfg(feature = "storage")]
+            storage_engine: Arc::new({
+                // Only RocksDB supported for now.
+                let mut storage: Box<dyn StorageEngine> = match config.consensus_config.log_storage_config {
+                    crate::config::StorageConfig::RocksDB(_) => {
+                        Box::new(RocksDBStorageEngine::new(config.consensus_config.log_storage_config.clone()))
+                    },
+                    crate::config::StorageConfig::FileStorage(_) => {
+                        Box::new(FileStorageEngine::new(config.consensus_config.log_storage_config.clone()))
+                    },
+                };
+                storage.init();
+                storage
+            }),
+
+            #[cfg(feature = "storage")]
+            gc_hiwm: 0,
+
+
+            #[cfg(not(feature = "storage"))]
             entries: Vec::new(),
+
             last_qc: 0,
             last_block_with_qc: 0,
             last_qc_view: 0,
@@ -75,7 +115,12 @@ impl Log {
     /// The block index is 1-based.
     /// 0 is reserved for the genesis (or null) block.
     pub fn last(&self) -> u64 {
-        self.entries.len() as u64
+        #[cfg(feature = "storage")]
+        return (self.entries.len() as u64) + self.gc_hiwm;
+
+        #[cfg(not(feature = "storage"))]
+        return self.entries.len() as u64;
+
     }
 
     pub fn last_qc(&self) -> u64 {
@@ -109,15 +154,117 @@ impl Log {
             }
             self.last_block_with_qc = entry.block.n;
         }
+
+        #[cfg(feature = "storage")]
+        {
+            let mut buf = Vec::new();
+            entry.block.encode(&mut buf).unwrap();
+            self.entries.push_back(entry);
+            let hsh = self.last_hash();
+
+
+            let res = self.storage_engine.put_block(&buf, &hsh);
+
+            if let Err(e) = res {
+                return Err(e)
+            }
+        }
+
+        #[cfg(not(feature = "storage"))]
         self.entries.push(entry);
+
         Ok(self.last())
     }
 
-    pub fn get(&self, n: u64) -> Result<&LogEntry, Error> {
+    /// This is a slow function.
+    /// This should be not be called in the critical path,
+    /// except for when a slow node asks for old data.
+    /// Be careful what you Garbage Collect.
+    /// Blocks < byz_commit_index should be ok, given all of their transactions have been executed,
+    /// So there is no need to bring up that block again.
+    #[cfg(feature = "storage")]
+    pub fn get_gc_block(&self, n: u64) -> Result<LogEntry, Error> {
+        if n > self.gc_hiwm {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Block is not GCed yet",
+            ));
+        }
+
+        if self.entries.len() == 0 {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Empty log should not have been GCed at all",
+            ));
+        }
+
+        let mut fetch_hash = self.entries.front().as_ref().unwrap().block.parent.clone();
+        loop {
+            let ser_block = self.storage_engine.get_block(&fetch_hash);
+            match ser_block {
+                Ok(ser_block) => {
+                    let res = ProtoBlock::decode(ser_block.as_slice());
+
+                    match res {
+                        Ok(block) => {
+                            if block.n == n {
+                                return Ok(LogEntry {
+                                    block,
+                                    replication_votes: HashSet::new(),
+                                    qc_sigs: HashMap::new(),
+                                });
+                            }
+                            // Go back one more block
+                            if block.n == 1 {
+                                return Err(Error::new(
+                                    ErrorKind::InvalidInput,
+                                    format!("Block doesn't exist {} {} {}", block.n, n, self.entries.front().as_ref().unwrap().block.n),
+                                ));
+                            }
+                            fetch_hash = block.parent.clone();
+                            
+                        },
+                        Err(e) => {
+                            return Err(e.into());
+                        },
+                    }
+
+                },
+                Err(e) => {
+                    return Err(e);
+                },
+            }
+        }
+
+    }
+
+    pub fn get(&self, n: u64) -> Result<LogEntry, Error> {
         if n > self.last() || n == 0 {
             return Err(Error::new(ErrorKind::InvalidInput, format!("Out of bounds {}, last() = {}", n, self.last())));
         }
-        Ok(self.entries.get((n - 1) as usize).unwrap())
+
+        #[cfg(feature = "storage")]
+        if n <= self.gc_hiwm {
+            let res = self.get_gc_block(n);
+            match res {
+                Ok(entry) => {
+                    return Ok(entry)
+                },
+                Err(e) => {
+                    return Err(e)
+                },
+            }
+        }
+
+        // Since the block can be garbage collected any time after returning from here.
+        // The pointer may be invalidated. Better to return a clone.
+        // I don't know how costly this is going to be.
+        #[cfg(feature = "storage")]
+        return Ok(self.entries.get((n - self.gc_hiwm - 1) as usize).unwrap().clone());
+
+
+        #[cfg(not(feature = "storage"))]
+        Ok(self.entries.get((n - 1) as usize).unwrap().clone())
     }
 
     /// Returns current vote size
@@ -129,7 +276,20 @@ impl Log {
             ));
         }
 
-        let idx = n - 1; // Index is 1-based
+        #[cfg(feature = "storage")]
+        if n <= self.gc_hiwm {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Vote for GCed block!",
+            ));
+        }
+
+        #[cfg(feature = "storage")]
+        let idx = n - self.gc_hiwm - 1; // Index is 1-based
+
+        #[cfg(not(feature = "storage"))]
+        let idx = n - 1;
+
         let entry = self.entries.get_mut(idx as usize).unwrap();
         entry.replication_votes.insert(name.clone());
 
@@ -149,7 +309,20 @@ impl Log {
             ));
         }
 
-        let idx = n - 1; // Index is 1-based
+        #[cfg(feature = "storage")]
+        if n <= self.gc_hiwm {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Vote for GCed block!",
+            ));
+        }
+
+        #[cfg(feature = "storage")]
+        let idx = n - self.gc_hiwm - 1; // Index is 1-based
+
+        #[cfg(not(feature = "storage"))]
+        let idx = n - 1;
+
         let entry = self.entries.get_mut(idx as usize).unwrap();
         entry
             .qc_sigs
@@ -174,11 +347,24 @@ impl Log {
             ));
         }
 
+        #[cfg(feature = "storage")]
+        if n <= self.gc_hiwm {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Vote for GCed block!",
+            ));
+        }
+
         if !self.verify_signature_at_n(n, sig, name, keys) {
             return Err(Error::new(ErrorKind::InvalidInput, "Invalid signature"));
         }
 
-        let idx = n - 1; // Index is 1-based
+        #[cfg(feature = "storage")]
+        let idx = n - self.gc_hiwm - 1; // Index is 1-based
+
+        #[cfg(not(feature = "storage"))]
+        let idx = n - 1;
+
         let entry = self.entries.get_mut(idx as usize).unwrap();
         entry
             .qc_sigs
@@ -251,7 +437,7 @@ impl Log {
         let mut buf = Vec::new();
 
         if n > 0 {
-            self.entries[(n - 1) as usize]
+            self.get(n).unwrap()
                 .block
                 .encode(&mut buf)
                 .unwrap();
@@ -394,10 +580,20 @@ impl Log {
     }
 
     /// Truncate log such that `last() == n`
-    pub fn truncate(&mut self, n: u64) {
-        self.entries.truncate(n as usize);
+    pub fn truncate(&mut self, n: u64) -> Result<u64, Error> {
+        #[cfg(feature = "storage")]
+        if n <= self.gc_hiwm {
+            return Err(Error::new(
+                ErrorKind::InvalidInput, 
+                "Invariant violated: Garbage collected blocks should not be truncated."
+            ))
+        }
+        self.entries.retain(|e| {
+            e.block.n <= n
+        });
+
         // Reset last_qc.
-        let mut i = (self.last() - 1) as i64;
+        let mut i = (self.entries.len() - 1) as i64;
         while i >= 0 {
             if self.entries[i as usize].block.qc.len() > 0 {
                 let mut last_qc = 0;
@@ -411,6 +607,7 @@ impl Log {
 
                 self.last_qc = last_qc;
                 self.last_qc_view = last_qc_view;
+                self.last_block_with_qc = self.entries[i as usize].block.n;
                 break;
             }
             i -= 1;
@@ -420,6 +617,7 @@ impl Log {
             self.last_qc = 0;
             self.last_qc_view = 0;
         }
+        Ok(self.last())
     }
 
     /// Overwrites local fork with the given `fork`.
@@ -467,7 +665,8 @@ impl Log {
         }
 
         // Truncate local fork.
-        self.truncate(fork.blocks[0].n - 1);
+        self.truncate(fork.blocks[0].n - 1).unwrap(); // This should not fail!!
+        
         for block in &fork.blocks {
             let entry = LogEntry {
                 block: block.clone(),
@@ -537,5 +736,46 @@ impl Log {
 
         error!("Invariant violation: QC not found");
         Err(Error::new(ErrorKind::InvalidData, "QC not found"))
+    }
+
+    /// Delete the in memory representation of the blocks <= n
+    /// Must preserve the last ever entry in the log.
+    #[cfg(feature = "storage")]
+    pub fn garbage_collect_upto(&mut self, n: u64) {
+        let n = if n >= self.last() {
+            self.last() - 1
+        } else {
+            n
+        };
+
+        if self.gc_hiwm >= n {
+            return
+        }
+
+
+        let mut write_batch = Vec::new();
+        while self.entries.len() > 1 {
+            if self.entries.front().as_ref().unwrap().block.n <= n {
+                let entry = self.entries.pop_front().unwrap();
+                let block_hsh = self.entries.front().as_ref().unwrap().block.parent.clone();
+                let mut block_ser = Vec::new();
+                entry.block.encode(&mut block_ser).unwrap();
+                write_batch.push((block_ser, block_hsh));
+            } else {
+                break;
+            }
+        }
+
+        self.storage_engine.put_multiple_blocks(&write_batch).unwrap();
+
+        self.gc_hiwm = n;
+    }
+
+}
+
+impl Drop for Log {
+    fn drop(&mut self) {
+        #[cfg(feature = "storage")]
+        self.storage_engine.destroy();
     }
 }
