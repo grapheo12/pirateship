@@ -1,7 +1,7 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use std::collections::{HashMap, HashSet};
+use std::{collections::{HashMap, HashSet}, fs::exists};
 
 use ed25519_dalek::{SigningKey, SECRET_KEY_LENGTH};
 
@@ -56,8 +56,8 @@ fn gen_config() -> Config {
         view_timeout_ms: 150,
 
         #[cfg(feature = "storage")]
-        log_storage_config: crate::config::StorageConfig::FileStorage(FileStorageConfig::default()),
-        // log_storage_config: crate::config::StorageConfig::RocksDB(RocksDBConfig::default()),
+        // log_storage_config: crate::config::StorageConfig::FileStorage(FileStorageConfig::default()),
+        log_storage_config: crate::config::StorageConfig::RocksDB(RocksDBConfig::default()),
     };
 
     let app_config = AppConfig {
@@ -127,6 +127,9 @@ macro_rules! log_push_next {
 /// Then try to truncate.
 pub fn test_log_plan() {
     let config = gen_config();
+    if exists("/tmp/testdb").unwrap() {
+        std::fs::remove_dir_all("/tmp/testdb").unwrap();
+    }
     let mut log = Log::new(config);
     let mut n = 1;
     let mut parent = log.hash_at_n(0).unwrap();

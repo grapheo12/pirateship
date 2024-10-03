@@ -26,8 +26,9 @@
     "log_storage_config": {
       "RocksDB": {
         "db_path": "/tmp/testdb",
-        "wal_enabled": false,
-        "write_buffer_size": 32768
+        "write_buffer_size": 2147483648,
+        "max_write_buffer_number": 1,
+        "max_write_buffers_to_merge": 1
       }
     }
   },

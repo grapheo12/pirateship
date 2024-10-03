@@ -6,16 +6,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RocksDBConfig {
     pub db_path: String,
-    pub wal_enabled: bool,
     pub write_buffer_size: usize,
+    pub max_write_buffer_number: i32,
+    pub max_write_buffers_to_merge: i32,
+
+
 }
 
 impl Default for RocksDBConfig {
     fn default() -> Self {
         Self {
             db_path: String::from("/tmp/testdb"),
-            wal_enabled: false,
-            write_buffer_size: 32768
+            write_buffer_size: 512 * 1024 * 1024,
+            max_write_buffer_number: 8,
+            max_write_buffers_to_merge: 4
         }
     }
 }

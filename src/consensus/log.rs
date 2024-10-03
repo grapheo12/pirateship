@@ -170,7 +170,6 @@ impl Log {
             }
         }
 
-
         #[cfg(not(feature = "storage"))]
         self.entries.push(entry);
 
@@ -464,20 +463,6 @@ impl Log {
         let len = self.entries.len();
         self.entries[len - 1].block.sig = Some(Sig::ProposerSig(sig.to_vec()));
 
-        #[cfg(feature = "storage")]
-        {
-            // Need to repeat this storage code from push() (without the pushing part).
-            // Otherwise the correct block won't be pushed.
-            let mut buf = Vec::new();
-            self.get(self.last()).unwrap().block.encode(&mut buf).unwrap();
-            let hsh = self.last_hash();
-            let res = self.storage_engine.put_block(&buf, &hsh);
-
-            if let Err(e) = res {
-                return Err(e)
-            }
-        }
-
         Ok(n)
     }
 
@@ -768,13 +753,20 @@ impl Log {
         }
 
 
+        let mut write_batch = Vec::new();
         while self.entries.len() > 1 {
             if self.entries.front().as_ref().unwrap().block.n <= n {
-                self.entries.pop_front();
+                let entry = self.entries.pop_front().unwrap();
+                let block_hsh = self.entries.front().as_ref().unwrap().block.parent.clone();
+                let mut block_ser = Vec::new();
+                entry.block.encode(&mut block_ser).unwrap();
+                write_batch.push((block_ser, block_hsh));
             } else {
                 break;
             }
         }
+
+        self.storage_engine.put_multiple_blocks(&write_batch).unwrap();
 
         self.gc_hiwm = n;
     }
@@ -783,6 +775,7 @@ impl Log {
 
 impl Drop for Log {
     fn drop(&mut self) {
+        #[cfg(feature = "storage")]
         self.storage_engine.destroy();
     }
 }
