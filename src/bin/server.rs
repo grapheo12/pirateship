@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 use log::{debug, error, info};
-use pft::{config::{self, Config}, consensus, execution::engines::logger::PinnedLoggerEngine};
+use pft::{config::{self, Config}, consensus, execution::engines::{kvs::PinnedKVStoreEngine, logger::PinnedLoggerEngine}};
 use tokio::{runtime, signal};
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
 use std::io::Write;
@@ -41,6 +41,7 @@ fn get_feature_set() -> (&'static str, &'static str) {
     let mut protocol = "";
 
     #[cfg(feature = "app_logger")]{ app = "app_logger"; }
+    #[cfg(feature = "app_kvs")]{ app = "app_kvs"; }
 
     #[cfg(feature = "lucky_raft")]{ protocol = "lucky_raft"; }
     #[cfg(feature = "signed_raft")]{ protocol = "signed_raft"; }
@@ -55,6 +56,10 @@ fn get_feature_set() -> (&'static str, &'static str) {
 async fn run_main(cfg: Config) -> io::Result<()> {
     #[cfg(feature = "app_logger")]
     let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
+    
+    #[cfg(feature = "app_kvs")]
+    let node = Arc::new(consensus::ConsensusNode::<PinnedKVStoreEngine>::new(&cfg));
+    
     let mut handles = consensus::ConsensusNode::run(node);
 
     match signal::ctrl_c().await {
