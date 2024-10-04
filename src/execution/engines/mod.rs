@@ -2,3 +2,5 @@
 // Licensed under the MIT License.
 
 pub mod logger;
+
+pub mod kvs;

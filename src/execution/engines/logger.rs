@@ -62,7 +62,7 @@ impl Engine for PinnedLoggerEngine {
     }
 
     fn signal_quit(&self) {
-        // Do nothing here.
+        self.quit_signal.store(true, Ordering::SeqCst);
     }
 
     fn signal_crash_commit(&self, ci: u64) {
