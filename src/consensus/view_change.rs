@@ -488,6 +488,9 @@ pub async fn do_process_view_change<Engine>(
         }
         // This will increment the view and broadcast the view change message
         // But sometime in the future.
+        // if vc.view >= my_view + 2 {
+        //     ctx.state.view.store(vc.view - 1, Ordering::SeqCst);
+        // }
         ctx.view_timer.fire_now().await;
 
         info!("my_view = {}, ctx.intended_view = {}, vc.view = {}", my_view, ctx.intended_view.load(Ordering::SeqCst), vc.view);

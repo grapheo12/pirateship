@@ -436,7 +436,7 @@ impl PinnedClient {
                     let s = match Self::get_sock(&c, &_name).await {
                         Ok(s) => s,
                         Err(e) => {
-                            warn!("Broadcast worker dying: {}", e);
+                            debug!("Broadcast worker dying for {}: {}", _name, e);
                             continue;
                         },
                     };
@@ -447,6 +447,7 @@ impl PinnedClient {
                 while rx.recv_many(&mut msgs, 10).await > 0 {
                     let mut should_print_flush_time = false;
                     let mut combined_prefix = String::from("");
+                    let mut should_die = false;
                     for (msg, profile) in &mut msgs {
                         // let instant = msg.1;
                         profile.register("Broadcast chan wait");
@@ -455,6 +456,7 @@ impl PinnedClient {
                         let len = msg_ref.len() as u32;
                         if let Err(e) = Self::send_raw(&c, &_name, &sock, SendDataType::SizeType(len)).await {
                             warn!("Broadcast worker for {} dying: {}", _name, e);
+                            should_die = true;
                             break;
                         }
                         if let Err(e) = Self::send_raw(&c, &_name, &sock, SendDataType::ByteType(msg_ref)).await {
@@ -483,6 +485,10 @@ impl PinnedClient {
                     
                     
                     msgs.clear();
+
+                    if should_die {
+                        break;
+                    }
                 }
 
                 // Deregister as ready.

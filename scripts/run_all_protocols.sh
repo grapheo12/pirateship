@@ -46,7 +46,7 @@ end_time=$(date -Ins)
 python3 scripts/plot_time_range_client_sweep.py \
     --path logs --end $end_time --start $start_time \
     -r 2 -c 2 -l node1 -up 2 -down 2 -o plot.png \
-    --legend "pirateship" \
+    --legend "pirateship"
     # --legend "chained_pbft" \
     # --legend "diverse_raft" \
     # --legend "signed_raft" \

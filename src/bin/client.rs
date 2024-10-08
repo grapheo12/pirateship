@@ -48,7 +48,8 @@ fn process_args() -> ClientConfig {
 
 async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, config: ClientConfig) -> io::Result<()> {    
     let mut config = config.clone();
-    let mut curr_leader = String::from("node1");
+    let mut leader_rr = 0;
+    let mut curr_leader = config.net_config.nodes.keys().into_iter().collect::<Vec<_>>()[leader_rr].clone();
     let mut i = 0;
 
     let mut rng = ChaCha20Rng::seed_from_u64(42);
@@ -97,8 +98,15 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
                 &curr_leader,
                 MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon),
             )
-            .await
-            .unwrap();
+            .await;
+            if let Err(_) = msg {
+                leader_rr = (leader_rr + 1) % config.net_config.nodes.len();
+                curr_leader = config.net_config.nodes.keys().into_iter().collect::<Vec<_>>()[leader_rr].clone();
+                info!("Retrying with leader {}", curr_leader);
+                continue;
+            }
+
+            let msg = msg.unwrap();
             
             let sz = msg.as_ref().1;
             let resp = ProtoClientReply::decode(&msg.as_ref().0.as_slice()[..sz]).unwrap();
