@@ -6,7 +6,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tokio::{join, time::sleep};
 
-use crate::config::{AppConfig, Config, ConsensusConfig, NetConfig, NodeNetInfo, RocksDBConfig, RpcConfig};
+use crate::config::{AppConfig, ClientConfig, ClientNetConfig, ClientRpcConfig, Config, ConsensusConfig, KVReadWriteUniform, NetConfig, NodeNetInfo, RocksDBConfig, RpcConfig, WorkloadConfig};
 
 use super::AtomicConfig;
 
@@ -85,6 +85,62 @@ fn test_nodeconfig_serialize() {
         let val = opt.unwrap();
         assert!(val.addr.eq(&node_config.addr));
     }
+}
+
+#[test]
+fn test_clientconfig_serialize() {
+    let mut net_config = ClientNetConfig {
+        name: "client1".to_string(),
+        tls_root_ca_cert_path: String::from("blah"),
+        nodes: HashMap::new(),
+        client_max_retry: 10,
+    };
+
+    for n in 0..5 {
+        let mut name = "node".to_string();
+        name.push_str(n.to_string().as_str());
+        let mut addr = "127.0.0.1:300".to_string();
+        addr.push_str(n.to_string().as_str());
+        net_config.nodes.insert(
+            name,
+            NodeNetInfo {
+                addr: addr.to_owned(),
+                domain: String::from("blah.com"),
+            },
+        );
+    }
+
+    let rpc_config = ClientRpcConfig {
+        signing_priv_key_path: String::from("/tmp/test.pem"),
+    };
+
+    let config = ClientConfig {
+        net_config,
+        rpc_config,
+        workload_config: WorkloadConfig {
+            num_clients: 100,
+            num_requests: 100000,
+            request_config: crate::config::RequestConfig::KVReadWriteUniform(KVReadWriteUniform {
+                num_keys: 1000,
+                val_size: 10000,
+                read_ratio: 0.1,
+                write_byz_commit_ratio: 0.5,
+            }),
+        },
+    };
+    let s = config.serialize();
+    println!("{}", s);
+
+    // let config2 = Config::deserialize(&s);
+    // let nc2 = config2.net_config;
+    // assert!(config.net_config.name.eq(&nc2.name));
+    // assert!(config.net_config.addr.eq(&nc2.addr));
+    // for (name, node_config) in config.net_config.nodes.into_iter() {
+    //     let opt = nc2.nodes.get(&name);
+    //     assert!(opt.is_some());
+    //     let val = opt.unwrap();
+    //     assert!(val.addr.eq(&node_config.addr));
+    // }
 }
 
 #[test]

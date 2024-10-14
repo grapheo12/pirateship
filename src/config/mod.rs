@@ -18,6 +18,10 @@ pub use log4rs::*;
 mod storage;
 pub use storage::*;
 
+/// Configs for different types of client requests;
+mod workloads;
+pub use workloads::*;
+
 use crate::utils::AtomicStruct;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -107,8 +111,10 @@ pub struct ClientRpcConfig {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkloadConfig {
     pub num_clients: usize,
-    pub num_requests: usize
+    pub num_requests: usize,
+    pub request_config: RequestConfig
 }
+
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ClientConfig {

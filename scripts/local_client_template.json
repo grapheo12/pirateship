@@ -3,14 +3,21 @@
         "name": "client",
         "tls_root_ca_cert_path": "test/configs/",
         "client_max_retry": 10,
-        "nodes": {
-        }
+        "nodes": {}
     },
     "rpc_config": {
-        "signing_priv_key_path": "tests/configs/"    
+        "signing_priv_key_path": "tests/configs/"
     },
     "workload_config": {
         "num_clients": 1,
-        "num_requests": 10000000
+        "num_requests": 10000000,
+        "request_config": {
+            "KVReadWriteUniform": {
+                "num_keys": 1000,
+                "val_size": 10000,
+                "read_ratio": 0.1,
+                "write_byz_commit_ratio": 0.5
+            }
+        }
     }
 }

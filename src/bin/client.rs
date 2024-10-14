@@ -1,16 +1,14 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use log::{debug, info, trace};
+use log::{debug, error, info, trace};
 use pft::{
-    config::{default_log4rs_config, ClientConfig}, proto::{
-        client::{ProtoClientReply, ProtoClientRequest},
-        rpc::ProtoPayload,
-        execution::ProtoTransaction
-    }, crypto::KeyStore, rpc::{
+    config::{default_log4rs_config, ClientConfig}, crypto::KeyStore, proto::{
+        client::{ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload
+    }, rpc::{
         client::{Client, PinnedClient},
         MessageRef,
-    }
+    }, utils::{BlankWorkloadGenerator, KVReadWriteUniformGenerator, PerWorkerWorkloadGenerator}
 };
 use prost::Message;
 use rand::{distributions::WeightedIndex, prelude::*};
@@ -58,24 +56,15 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
 
     let weight_dist = WeightedIndex::new(sample_item.iter().map(|(_, weight)| weight)).unwrap();
 
+    let mut workload_generator: Box<dyn PerWorkerWorkloadGenerator> = match &config.workload_config.request_config {
+        pft::config::RequestConfig::Blanks => Box::new(BlankWorkloadGenerator{}),
+        pft::config::RequestConfig::KVReadWriteUniform(config) => Box::new(KVReadWriteUniformGenerator::new(config)),
+        pft::config::RequestConfig::KVReadWriteYCSB() => panic!("Unimplemented"),
+    };
+
     while i < num_requests {
         let client_req = ProtoClientRequest {
-            tx: Some(ProtoTransaction{
-                on_receive: None,
-                // on_crash_commit: Some(ProtoTransactionPhase {
-                //     ops: vec![ProtoTransactionOp {
-                //         op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-                //         operands: vec![
-                //             format!("crash_commit_{}", i).into_bytes(),
-                //             format!("Tx:{}:{}", idx, i).into_bytes()
-                //         ],
-                //         // operands: Vec::new(),
-                //     }],
-                // }),
-                on_crash_commit: None,
-                on_byzantine_commit: None,
-                is_reconfiguration: false,
-            }),
+            tx: Some(workload_generator.next()),
             // tx: None,
             origin: config.net_config.name.clone(),
             // sig: vec![0u8; SIGNATURE_LENGTH],
@@ -160,6 +149,10 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
                     // @todo: Wait to see if my txn gets committed in the tentative block.
                 },
             };
+
+            if !workload_generator.check_result(&resp.results) {
+                error!("Unexpected Transaction result!");
+            }
 
             let should_log = sample_item[weight_dist.sample(&mut rng)].0;
 
