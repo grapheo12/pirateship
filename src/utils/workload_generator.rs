@@ -35,6 +35,7 @@ impl PerWorkerWorkloadGenerator for BlankWorkloadGenerator {
     }
 }
 
+#[derive(Clone)]
 enum TxOpType {
     Read,
     WriteCrash,
@@ -47,6 +48,7 @@ pub struct KVReadWriteUniformGenerator {
     sample_item: [(TxOpType, i32); 3],
     weight_dist: WeightedIndex<i32>,
     uniform_dist: Uniform<usize>,
+    last_request_type: TxOpType,
 }
 
 impl KVReadWriteUniformGenerator {
@@ -71,7 +73,8 @@ impl KVReadWriteUniformGenerator {
             rng,
             sample_item,
             weight_dist,
-            uniform_dist
+            uniform_dist,
+            last_request_type: TxOpType::Read
         }
     
     }
@@ -86,6 +89,8 @@ impl KVReadWriteUniformGenerator {
 impl PerWorkerWorkloadGenerator for KVReadWriteUniformGenerator {
     fn next(&mut self) -> ProtoTransaction {
         let next_op = &self.sample_item[self.weight_dist.sample(&mut self.rng)].0;
+        self.last_request_type = next_op.clone();
+
         let mut ret = ProtoTransaction{
             on_receive: None,
             on_crash_commit: None,
@@ -125,10 +130,20 @@ impl PerWorkerWorkloadGenerator for KVReadWriteUniformGenerator {
             },
         }
 
+
         ret      
     }
     
-    fn check_result(&self, _result: &Option<ProtoTransactionResult>) -> bool {
+    fn check_result(&self, result: &Option<ProtoTransactionResult>) -> bool {
+        if let TxOpType::Read = self.last_request_type {
+            if result.is_none() || result.as_ref().unwrap().result.len() == 0 {
+                return false;
+            }
+            
+            return true;
+        }
+
         true
+
     }
 }

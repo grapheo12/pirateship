@@ -1,8 +1,9 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use std::{collections::HashMap, ops::Deref, pin::Pin, sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc, Mutex, MutexGuard}};
+use std::{collections::HashMap, ops::Deref, pin::Pin, sync::{atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}, Arc, Mutex, MutexGuard}};
 
+use log::info;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use crate::{consensus::{handler::PinnedServerContext, log::Log}, execution::Engine, proto::execution::{ProtoTransactionOpResult, ProtoTransactionResult}};
@@ -22,7 +23,11 @@ pub struct KVStoreEngine {
     pub ci_state: Mutex<HashMap<Vec<u8>, Vec<(u64, Vec<u8>) /* versions */>>>,
     pub bci_state: Mutex<HashMap<Vec<u8>, Vec<u8>>>,
 
-    event_chan: (UnboundedSender<Event>, Mutex<UnboundedReceiver<Event>>)
+    event_chan: (UnboundedSender<Event>, Mutex<UnboundedReceiver<Event>>),
+
+    pub num_crash_committed_writes: AtomicUsize,
+    pub num_byz_committed_writes: AtomicUsize,
+    pub num_reads: AtomicUsize,
 }
 
 #[derive(Clone)]
@@ -46,7 +51,10 @@ impl KVStoreEngine {
             quit_signal: AtomicBool::new(false),
             ci_state: Mutex::new(HashMap::new()),
             bci_state: Mutex::new(HashMap::new()),
-            event_chan: (chan.0, Mutex::new(chan.1))
+            event_chan: (chan.0, Mutex::new(chan.1)),
+            num_crash_committed_writes: AtomicUsize::new(0),
+            num_byz_committed_writes: AtomicUsize::new(0),
+            num_reads: AtomicUsize::new(0),
         }
     }
 
@@ -86,6 +94,10 @@ impl KVStoreEngine {
                 for op in ops {
                     match op.op_type() {
                         crate::proto::execution::ProtoTransactionOpType::Write => {
+                            let num_crash_writes = self.num_crash_committed_writes.fetch_add(1, Ordering::SeqCst) + 1;
+                            if num_crash_writes % 1000 == 0 {
+                                info!("Num Crash Committed Write Requests: {}", num_crash_writes);
+                            }
                             // Sanity check
                             // Format (key, val)
                             if op.operands.len() != 2 {
@@ -139,6 +151,10 @@ impl KVStoreEngine {
                 for op in ops {
                     match op.op_type() {
                         crate::proto::execution::ProtoTransactionOpType::Write => {
+                            let num_byz_writes = self.num_byz_committed_writes.fetch_add(1, Ordering::SeqCst) + 1;
+                            if num_byz_writes % 1000 == 0 {
+                                info!("Num Byz Committed Write Requests: {}", num_byz_writes);
+                            }
                             // Sanity check
                             // Format (key, val)
                             if op.operands.len() != 2 {
@@ -201,6 +217,10 @@ impl KVStoreEngine {
         bci_state: &MutexGuard<HashMap<Vec<u8>, Vec<u8>>>,
     ) -> ProtoTransactionOpResult
     {
+        let num_reads = self.num_reads.fetch_add(1, Ordering::SeqCst) + 1;
+        if num_reads % 1000 == 0 {
+            info!("Num Read Requests: {}", num_reads);
+        }
         // First find in ci_state
         let ci_res = ci_state.get(key);
         match ci_res {
