@@ -399,10 +399,17 @@ pub async fn do_push_append_entries_to_fork<Engine>(
 
 
     if ae.view < ctx.state.view.load(Ordering::SeqCst) {
-        trace!("Message from older view! Rejected; Sent by: {} Is New leader? {} Msg view: {} Current View {}",
-            sender, !ae.fork.as_ref().unwrap().blocks[0].view_is_stable, ae.view, ctx.state.view.load(Ordering::SeqCst));
-        return (last_n, last_n, seq_nums, false);
-    }else if ae.view > ctx.state.view.load(Ordering::SeqCst) {
+        if ctx.last_stable_view.load(Ordering::SeqCst) <= ae.view {
+            info!("I timed out due to network partition; Now going back to view {} from {}",
+                ctx.state.view.load(Ordering::SeqCst), ctx.last_stable_view.load(Ordering::SeqCst));
+            ctx.state.view.store(ctx.last_stable_view.load(Ordering::SeqCst), Ordering::SeqCst);
+        } else {
+            trace!("Message from older view! Rejected; Sent by: {} Is New leader? {} Msg view: {} Current View {}",
+                sender, !ae.fork.as_ref().unwrap().blocks[0].view_is_stable, ae.view, ctx.state.view.load(Ordering::SeqCst));
+            return (last_n, last_n, seq_nums, false);
+        }
+    }
+    if ae.view > ctx.state.view.load(Ordering::SeqCst) {
         ctx.state.view.store(ae.view, Ordering::SeqCst);
         if get_leader_str(&ctx) == _cfg.net_config.name {
             ctx.i_am_leader.store(true, Ordering::SeqCst);
@@ -420,6 +427,10 @@ pub async fn do_push_append_entries_to_fork<Engine>(
         // @todo: RESET VIEW TO OLD VALUE IF FORK COULD NOT BE VERIFIED
     }else{
         trace!("AppendEntries for view {} stable? {} sender {}", ae.view, ae.view_is_stable, sender);
+    }
+
+    if ae.view_is_stable && ae.view > ctx.last_stable_view.load(Ordering::SeqCst) {
+        ctx.last_stable_view.store(ae.view, Ordering::SeqCst);
     }
 
     if !sender.eq(&get_leader_str(&ctx)) {

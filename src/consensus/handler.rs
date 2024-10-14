@@ -28,7 +28,7 @@ use super::{
     super::proto::{
         consensus::{ProtoQuorumCertificate, ProtoViewChange},
         rpc::{self, ProtoPayload},
-    }, backfill::*, client_reply::*, commit::*, log::Log, reconfiguration::{decide_my_lifecycle_stage, do_graceful_shutdown}, steady_state::*, timer::ResettableTimer, utils::*, view_change::*
+    }, backfill::*, client_reply::*, commit::*, log::Log, reconfiguration::{decide_my_lifecycle_stage, do_graceful_shutdown}, steady_state::*, timer::{RandomResettableTimer, ResettableTimer}, utils::*, view_change::*
 };
 
 /// @todo: This doesn't have to be here. Unncessary Mutexes.
@@ -95,6 +95,8 @@ pub struct ServerContext {
     pub old_full_nodes: AtomicVec,
     pub i_am_leader: AtomicBool,
     pub view_is_stable: AtomicBool,
+    pub last_stable_view: AtomicU64,
+
     pub lifecycle_stage: AtomicI8,
     pub node_queue: (
         mpsc::UnboundedSender<ForwardedMessageWithAckChan>,
@@ -129,7 +131,7 @@ pub struct ServerContext {
         Mutex<mpsc::UnboundedReceiver<ProtoTransaction>>,
     ),
 
-    pub view_timer: Arc<Pin<Box<ResettableTimer>>>,
+    pub view_timer: Arc<Pin<Box<RandomResettableTimer>>>,
 
     /// Last view that was fast forwarded due to pacemaker.
     pub intended_view: AtomicU64,
@@ -162,6 +164,11 @@ impl PinnedServerContext {
             view_is_stable: AtomicBool::new(false),
             #[cfg(not(feature = "view_change"))]
             view_is_stable: AtomicBool::new(true),
+
+            #[cfg(feature = "view_change")]
+            last_stable_view: AtomicU64::new(0),
+            #[cfg(not(feature = "view_change"))]
+            last_stable_view: AtomicU64::new(1),
             
             node_queue: (node_ch.0, Mutex::new(node_ch.1)),
             client_queue: (client_ch.0, Mutex::new(client_ch.1)),
@@ -172,7 +179,7 @@ impl PinnedServerContext {
             __client_black_hole_channel: (black_hole_ch.0, Mutex::new(black_hole_ch.1)),
             __should_server_update_keys: AtomicBool::new(false),
             reconf_channel: (reconf_channel.0, Mutex::new(reconf_channel.1)),
-            view_timer: ResettableTimer::new(Duration::from_millis(cfg.consensus_config.view_timeout_ms)),
+            view_timer: RandomResettableTimer::new(Duration::from_millis(cfg.consensus_config.view_timeout_ms), Duration::from_millis(cfg.consensus_config.view_timeout_ms / 2)),
             intended_view: AtomicU64::new(0),
             total_client_requests: AtomicUsize::new(0),
             should_progress: Semaphore::new(1),
@@ -575,6 +582,7 @@ pub async fn handle_node_messages<Engine>(
             }else {
                 if view_timer_tick {
                     info!("Timer fired");
+                    PinnedClient::drop_all_connections(&client);
                     ctx.intended_view.fetch_add(1, Ordering::SeqCst);
                     if ctx.intended_view.load(Ordering::SeqCst) > ctx.state.view.load(Ordering::SeqCst) {
                         if let Err(e) = do_init_view_change(&ctx, &engine, &client, super_majority, old_super_majority).await {

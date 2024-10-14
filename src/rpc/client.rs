@@ -520,7 +520,7 @@ impl PinnedClient {
     }
 
 
-    pub async fn drop_connection(client: &PinnedClient, name: &String) {
+    pub fn drop_connection(client: &PinnedClient, name: &String) {
         let _sock = {
             let mut lsock = client.0.sock_map.0.write().unwrap();
             lsock.remove(name)
@@ -531,5 +531,17 @@ impl PinnedClient {
         //     let mut lsock = sock.0.lock().await;
         //     let _ = lsock.shutdown().await;
         // }
+    }
+
+    pub fn drop_all_connections(client: &PinnedClient) {
+        let lsock_map = client.0.sock_map.0.read().unwrap();
+        let names = lsock_map.iter().map(|(k, _v)| {
+            k.clone()
+        }).collect::<Vec<_>>();
+        drop(lsock_map);
+
+        for name in &names {
+            PinnedClient::drop_connection(client, name);
+        }
     }
 }

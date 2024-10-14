@@ -486,17 +486,25 @@ pub async fn do_process_view_change<Engine>(
             let mut lack_pend = ctx.client_ack_pending.lock().await;
             do_byzantine_commit(&ctx, &client, engine, &fork, updated_bci, &mut lack_pend);
         }
-        // This will increment the view and broadcast the view change message
-        // But sometime in the future.
-        // if vc.view >= my_view + 2 {
-        //     ctx.state.view.store(vc.view - 1, Ordering::SeqCst);
-        // }
-        ctx.view_timer.fire_now().await;
-
-        info!("my_view = {}, ctx.intended_view = {}, vc.view = {}", my_view, ctx.intended_view.load(Ordering::SeqCst), vc.view);
-
-        // Reset the timer so that we don't fire it again unncecessarily.
-        ctx.view_timer.reset();
+        
+        if vc.view > ctx.last_stable_view.load(Ordering::SeqCst) {
+            if vc.view != my_view + 1 {
+                info!("Lagging too far behind or have gone forward. Coming back to view {} from {}", vc.view, ctx.state.view.load(Ordering::SeqCst));
+                ctx.state.view.store(vc.view - 1, Ordering::SeqCst);
+                ctx.intended_view.store(vc.view - 1, Ordering::SeqCst);
+            }
+            // This will increment the view and broadcast the view change message
+            // But sometime in the future.
+            // if vc.view >= my_view + 2 {
+            //     ctx.state.view.store(vc.view - 1, Ordering::SeqCst);
+            // }
+            ctx.view_timer.fire_now().await;
+    
+            info!("my_view = {}, ctx.intended_view = {}, vc.view = {}", my_view, ctx.intended_view.load(Ordering::SeqCst), vc.view);
+    
+            // Reset the timer so that we don't fire it again unncecessarily.
+            ctx.view_timer.reset();
+        }
 
         // if vc.view >= my_view + 2, we may need to fire the timer again and again until we catch up.  
     }
