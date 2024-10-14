@@ -582,7 +582,7 @@ impl Log {
     /// Truncate log such that `last() == n`
     pub fn truncate(&mut self, n: u64) -> Result<u64, Error> {
         #[cfg(feature = "storage")]
-        if n <= self.gc_hiwm {
+        if n <= self.gc_hiwm && n > 0 {
             return Err(Error::new(
                 ErrorKind::InvalidInput, 
                 "Invariant violated: Garbage collected blocks should not be truncated."
@@ -769,6 +769,11 @@ impl Log {
         self.storage_engine.put_multiple_blocks(&write_batch).unwrap();
 
         self.gc_hiwm = n;
+    }
+
+    #[cfg(feature = "storage")]
+    pub fn gc_hiwm(&self) -> u64 {
+        return self.gc_hiwm;
     }
 
 }

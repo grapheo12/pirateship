@@ -113,6 +113,9 @@ impl PinnedLoggerEngine {
                 self.ctx.view_is_stable.load(Ordering::SeqCst),
                 self.ctx.i_am_leader.load(Ordering::SeqCst)
             );
+
+            #[cfg(feature = "storage")]
+            info!("Storage GC Hi watermark: {}", fork.gc_hiwm());
         }
 
         let mut rback_chan = self.rback_chan.1.lock().await;
