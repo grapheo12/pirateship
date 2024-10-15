@@ -312,7 +312,7 @@ impl Engine for PinnedKVStoreEngine {
                         continue;
                     }
 
-                    let key = &op.operands[1];
+                    let key = &op.operands[0];
                     let read_result = self.execute_read(key, &ci_state, &bci_state);
                     result.result.push(read_result);
                 },

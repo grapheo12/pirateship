@@ -446,7 +446,15 @@ where
             continue;
         }
 
-        // @todo: Reply to read requests (even when I am not the leader).
+        // Respond to read requests: Only leader responds for now.
+        // Removes read-only requests from curr_client_req.
+        do_respond_to_read_requests(&ctx, &engine, &mut curr_client_req).await;
+        if curr_client_req.len() == 0 {
+            curr_client_req_num = 0;
+            signature_timer_tick = false;
+            continue;
+        }
+
 
         let cfg = ctx.config.get();
         // Ok I am the leader.
