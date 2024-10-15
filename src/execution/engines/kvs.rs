@@ -96,7 +96,7 @@ impl KVStoreEngine {
                         crate::proto::execution::ProtoTransactionOpType::Write => {
                             let num_crash_writes = self.num_crash_committed_writes.fetch_add(1, Ordering::SeqCst) + 1;
                             if num_crash_writes % 1000 == 0 {
-                                info!("Num Crash Committed Write Requests: {}", num_crash_writes);
+                                info!("Num Crash Committed Write Requests: {}; Num Keys only crash committed: {}", num_crash_writes, ci_state.len());
                             }
                             // Sanity check
                             // Format (key, val)
@@ -153,7 +153,7 @@ impl KVStoreEngine {
                         crate::proto::execution::ProtoTransactionOpType::Write => {
                             let num_byz_writes = self.num_byz_committed_writes.fetch_add(1, Ordering::SeqCst) + 1;
                             if num_byz_writes % 1000 == 0 {
-                                info!("Num Byz Committed Write Requests: {}", num_byz_writes);
+                                info!("Num Byz Committed Write Requests: {}; Num keys byz committed: {}", num_byz_writes, bci_state.len());
                             }
                             // Sanity check
                             // Format (key, val)
