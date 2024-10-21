@@ -335,10 +335,9 @@ where Engine: crate::execution::Engine
                     debug!("process_node_request: Fork locked");
                     fork.unwrap()
                 };
-                let mut lack_pend = ctx.client_ack_pending.lock().await;
                 // Followers should not have pending client requests.
                 // But this same interface is good for refactoring.
-                do_commit(ctx, client, engine, &mut fork, &mut lack_pend, new_ci);
+                do_commit(ctx, client, engine, &mut fork, new_ci).await;
             }
         }
         crate::proto::rpc::proto_payload::Message::Vote(v) => {

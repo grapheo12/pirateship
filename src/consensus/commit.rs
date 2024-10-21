@@ -54,10 +54,9 @@ where Engine: crate::execution::Engine
     }
 }
 
-pub fn do_byzantine_commit<Engine>(
+pub async fn do_byzantine_commit<'a, Engine>(
     ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine,
-    fork: &MutexGuard<Log>, updated_bci: u64,
-    lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>
+    fork: &'a MutexGuard<'a, Log>, updated_bci: u64,
 ) where Engine: crate::execution::Engine
 {
     let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
@@ -71,7 +70,7 @@ pub fn do_byzantine_commit<Engine>(
         error!("Invariant violation: Byzantine commit index {} higher than fork.last() = {}", updated_bci, fork.last());
     }
     ctx.state.byz_commit_index.store(updated_bci, Ordering::SeqCst);
-    do_commit(ctx, client, engine, fork, lack_pend, updated_bci);
+    do_commit(ctx, client, engine, fork, updated_bci).await;
     
     engine.signal_byzantine_commit(updated_bci);
     for bn in (old_bci + 1)..(updated_bci + 1) {
@@ -96,10 +95,9 @@ pub fn do_byzantine_commit<Engine>(
 
 /// Only returns false if there is an invariant violation.
 /// There was no 2-chain QC found.
-fn maybe_byzantine_commit_with_n_and_view<Engine>(
+async fn maybe_byzantine_commit_with_n_and_view<'a, Engine>(
     ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine,
-    fork: &MutexGuard<Log>, n: u64, view: u64,
-    lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>
+    fork: &'a MutexGuard<'a, Log>, n: u64, view: u64
 ) -> bool 
 where Engine: crate::execution::Engine
 {
@@ -127,16 +125,15 @@ where Engine: crate::execution::Engine
         }
     }
     if updated_bci > old_bci {        
-        do_byzantine_commit(ctx, client, engine, fork, updated_bci, lack_pend);
+        do_byzantine_commit(ctx, client, engine, fork, updated_bci).await;
     }
 
     true
 }
 
 /// Return true if bci was updated.
-pub fn maybe_byzantine_commit<Engine>(
-    ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine, fork: &MutexGuard<Log>,
-    lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>) -> bool
+pub async fn maybe_byzantine_commit<'a, Engine>(
+    ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine, fork: &'a MutexGuard<'a, Log>) -> bool
 where Engine: crate::execution::Engine
 {
     // Check all QCs formed during this view.
@@ -147,7 +144,8 @@ where Engine: crate::execution::Engine
     let mut check_qc = fork.last_qc();
 
     let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
-    while !maybe_byzantine_commit_with_n_and_view(ctx, client, engine, fork, check_qc, last_qc_view, lack_pend) {
+
+    while !maybe_byzantine_commit_with_n_and_view(ctx, client, engine, fork, check_qc, last_qc_view).await {
         if check_qc == 0 {
             break;
         }
@@ -161,10 +159,9 @@ where Engine: crate::execution::Engine
 
 }
 
-pub fn do_commit<Engine>(
+pub async fn do_commit<'a, Engine>(
     ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine,
-    fork: &MutexGuard<Log>,
-    lack_pend: &mut MutexGuard<HashMap<(u64, usize), (MsgAckChan, LatencyProfile)>>,
+    fork: &'a MutexGuard<'a, Log>,
     n: u64,
 ) where Engine: crate::execution::Engine 
 {
@@ -204,8 +201,8 @@ pub fn do_commit<Engine>(
     #[cfg(feature = "no_pipeline")]
     ctx.should_progress.add_permits(1);
 
-    let mut del_list = Vec::new();
     for i in (ci + 1)..(n + 1) {
+        
         let num_txs = match fork.get(i) {
             Ok(entry) => entry.block.tx.len(),
             Err(_) => {
@@ -217,60 +214,69 @@ pub fn do_commit<Engine>(
             .fetch_add(num_txs, Ordering::SeqCst);
     }
 
-    for ((bn, txn), chan) in lack_pend.iter() {
-        if *bn <= n {
-            let entry = fork.get(*bn).unwrap();
-            let response = if entry.block.tx.len() <= *txn {
-                if ctx.i_am_leader.load(Ordering::SeqCst) {
-                    warn!("Missing transaction as a leader!");
-                }
-                if entry.block.view_is_stable {
-                    warn!("Missing transaction in stable view!");
-                }
+    #[cfg(not(feature = "reply_from_app"))]
+    {
 
-                let node_infos = NodeInfo {
-                    nodes: ctx.config.get().net_config.nodes.clone(),
-                };
-
-                ProtoClientReply {
-                    reply: Some(
-                        crate::proto::client::proto_client_reply::Reply::TryAgain(
-                            ProtoTryAgain{ serialized_node_infos: node_infos.serialize() }
-                    )),
-                }
-            }else {
-                let h = hash(&entry.block.tx[*txn].encode_to_vec());
+        let mut del_list = Vec::new();
+        let mut lack_pend = ctx.client_ack_pending.lock().await;
+        for ((bn, txn), chan) in lack_pend.iter() {
+            info!("Replying to {}", *bn);
+            
+            if *bn <= n {
+                let entry = fork.get(*bn).unwrap();
+                let response = if entry.block.tx.len() <= *txn {
+                    if ctx.i_am_leader.load(Ordering::SeqCst) {
+                        warn!("Missing transaction as a leader!");
+                    }
+                    if entry.block.view_is_stable {
+                        warn!("Missing transaction in stable view!");
+                    }
     
-                ProtoClientReply {
-                    reply: Some(
-                        crate::proto::client::proto_client_reply::Reply::Receipt(
-                            ProtoTransactionReceipt {
-                                req_digest: h,
-                                block_n: (*bn) as u64,
-                                tx_n: (*txn) as u64,
-                                results: Some(ProtoTransactionResult::default()),
-                            },
-                    )),
+                    let node_infos = NodeInfo {
+                        nodes: ctx.config.get().net_config.nodes.clone(),
+                    };
+    
+                    ProtoClientReply {
+                        reply: Some(
+                            crate::proto::client::proto_client_reply::Reply::TryAgain(
+                                ProtoTryAgain{ serialized_node_infos: node_infos.serialize() }
+                        )),
+                    }
+                }else {
+                    let h = hash(&entry.block.tx[*txn].encode_to_vec());
+                    
+    
+                    ProtoClientReply {
+                        reply: Some(
+                            crate::proto::client::proto_client_reply::Reply::Receipt(
+                                ProtoTransactionReceipt {
+                                    req_digest: h,
+                                    block_n: (*bn) as u64,
+                                    tx_n: (*txn) as u64,
+                                    results: Some(engine.get_execution_result((*bn) as u64, (*txn) as u64).await),
+                                },
+                        )),
+                    }
+                };
+    
+                let v = response.encode_to_vec();
+                let vlen = v.len();
+    
+                let msg = PinnedMessage::from(v, vlen, crate::rpc::SenderType::Anon);
+    
+                let mut profile = chan.1.clone();
+                profile.register("Init Sending Client Response");
+                if *bn % 1000 == 0 {
+                    profile.should_print = true;
+                    profile.prefix = String::from(format!("Block: {}, Txn: {}", *bn, *txn));
                 }
-            };
-
-            let v = response.encode_to_vec();
-            let vlen = v.len();
-
-            let msg = PinnedMessage::from(v, vlen, crate::rpc::SenderType::Anon);
-
-            let mut profile = chan.1.clone();
-            profile.register("Init Sending Client Response");
-            if *bn % 1000 == 0 {
-                profile.should_print = true;
-                profile.prefix = String::from(format!("Block: {}, Txn: {}", *bn, *txn));
+                let _ = chan.0.send((msg, profile));
+                del_list.push((*bn, *txn));
             }
-            let _ = chan.0.send((msg, profile));
-            del_list.push((*bn, *txn));
         }
-    }
-    for d in del_list {
-        lack_pend.remove(&d);
+        for d in del_list {
+            lack_pend.remove(&d);
+        }
     }
 
     // Every thousandth block is added in ping_counters.

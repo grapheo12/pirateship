@@ -483,8 +483,7 @@ pub async fn do_process_view_change<Engine>(
 
         if updated_bci > old_bci {
             info!("Pacemaker: Updating bci from {} to {}", old_bci, updated_bci);
-            let mut lack_pend = ctx.client_ack_pending.lock().await;
-            do_byzantine_commit(&ctx, &client, engine, &fork, updated_bci, &mut lack_pend);
+            do_byzantine_commit(&ctx, &client, engine, &fork, updated_bci).await;
         }
         
         if vc.view > ctx.last_stable_view.load(Ordering::SeqCst) {

@@ -1,14 +1,15 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use std::{collections::HashMap, ops::Deref, pin::Pin, sync::{atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}, Arc, Mutex, MutexGuard}};
+use std::{collections::HashMap, ops::Deref, pin::Pin, sync::{atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering}, Arc, Mutex, MutexGuard}};
 
 use futures::FutureExt;
 use gluesql::prelude::{Glue, SharedMemoryStorage};
 use log::{error, info, warn};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use prost::Message;
+use tokio::{sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, task::yield_now};
 
-use crate::{consensus::{handler::PinnedServerContext, log::Log}, execution::Engine, proto::execution::{ProtoTransactionOpResult, ProtoTransactionResult}};
+use crate::{config::NodeInfo, consensus::{handler::PinnedServerContext, log::Log}, crypto::hash, execution::Engine, proto::{client::{ProtoClientReply, ProtoTransactionReceipt, ProtoTryAgain}, execution::{ProtoTransactionOpResult, ProtoTransactionResult}}, rpc::PinnedMessage};
 
 enum Event {
     CiUpd(u64),
@@ -19,7 +20,11 @@ enum Event {
 pub struct SQLEngine {
     pub ctx: PinnedServerContext,
     pub last_ci: AtomicU64,
+    pub last_executed_tx_id: AtomicI64,
     pub last_bci: AtomicU64,
+
+    pub results: tokio::sync::Mutex<HashMap<(u64, u64), ProtoTransactionResult>>,
+
     quit_signal: AtomicBool,
 
     glue: tokio::sync::Mutex<Glue<SharedMemoryStorage>>,
@@ -48,6 +53,8 @@ impl SQLEngine {
             ctx,
             last_ci: AtomicU64::new(0),
             last_bci: AtomicU64::new(0),
+            last_executed_tx_id: AtomicI64::new(-1),
+            results: tokio::sync::Mutex::new(HashMap::new()),
             quit_signal: AtomicBool::new(false),
             glue: tokio::sync::Mutex::new(Glue::new(storage)),
             event_chan: (chan.0, tokio::sync::Mutex::new(chan.1)),
@@ -59,7 +66,7 @@ impl SQLEngine {
         fork: &'a tokio::sync::MutexGuard<'a, Log>,
         mut event_recv: tokio::sync::MutexGuard<'a, UnboundedReceiver<Event>>
     ) {
-        while let Ok(msg) = event_recv.try_recv() {
+        if let Ok(msg) = event_recv.try_recv() {
             match msg {
                 Event::CiUpd(ci) => self.execute_crash_commit(ci, fork).await,
                 Event::BciUpd(bci) => self.execute_byz_commit(bci, fork).await,
@@ -75,9 +82,11 @@ impl SQLEngine {
         if old_ci >= ci {
             return;
         }
-
+        
         for pos in (old_ci + 1)..(ci + 1) {
             let block = &fork.get(pos).unwrap().block;
+            let mut txn = 0;
+            self.last_executed_tx_id.store(-1, Ordering::SeqCst);
             for tx in &block.tx {
                 let ops = match &tx.on_crash_commit {
                     Some(ops) => &ops.ops,
@@ -104,9 +113,22 @@ impl SQLEngine {
                             let res = glue.execute(&q).now_or_never();
                             match res {
                                 Some(r) => {
-                                    if let Err(e) = r {
+                                    if let Err(e) = &r {
                                         error!("SQL Error: {}", e);
                                     }
+                                    let mut res_store = self.results.lock().await;
+                                    
+                                    let final_res = ProtoTransactionResult {
+                                        result: r.unwrap().iter().map(|payload| {
+                                            let ser = serde_json::to_string(payload).unwrap();
+                                            ProtoTransactionOpResult {
+                                                success: true,
+                                                values: vec![ser.into()],
+                                            }
+                                        }).collect(),
+                                    };
+                                    
+                                    res_store.insert((pos, txn), final_res);
                                 },
                                 None => {
                                     error!("Query did not execute!");
@@ -121,12 +143,80 @@ impl SQLEngine {
                         }
                     }
                 }
+
+                self.last_executed_tx_id.fetch_add(1, Ordering::SeqCst);
+                txn += 1;
             }
 
         }
 
         self.last_ci.store(ci, Ordering::SeqCst);
 
+        #[cfg(feature = "reply_from_app")]
+        {
+
+            let mut del_list = Vec::new();
+            let mut lack_pend = self.ctx.client_ack_pending.lock().await;
+            for ((bn, txn), chan) in lack_pend.iter() {
+                
+                if *bn <= ci {
+                    let entry = fork.get(*bn).unwrap();
+                    let response = if entry.block.tx.len() <= *txn {
+                        if self.ctx.i_am_leader.load(Ordering::SeqCst) {
+                            warn!("Missing transaction as a leader!");
+                        }
+                        if entry.block.view_is_stable {
+                            warn!("Missing transaction in stable view!");
+                        }
+        
+                        let node_infos = NodeInfo {
+                            nodes: self.ctx.config.get().net_config.nodes.clone(),
+                        };
+        
+                        ProtoClientReply {
+                            reply: Some(
+                                crate::proto::client::proto_client_reply::Reply::TryAgain(
+                                    ProtoTryAgain{ serialized_node_infos: node_infos.serialize() }
+                            )),
+                        }
+                    }else {
+                        let h = hash(&entry.block.tx[*txn].encode_to_vec());
+                        
+                        let mut res_store = self.results.lock().await;
+                        let res = res_store.remove(&((*bn) as u64, (*txn) as u64));
+        
+                        ProtoClientReply {
+                            reply: Some(
+                                crate::proto::client::proto_client_reply::Reply::Receipt(
+                                    ProtoTransactionReceipt {
+                                        req_digest: h,
+                                        block_n: (*bn) as u64,
+                                        tx_n: (*txn) as u64,
+                                        results: res,
+                                    },
+                            )),
+                        }
+                    };
+        
+                    let v = response.encode_to_vec();
+                    let vlen = v.len();
+        
+                    let msg = PinnedMessage::from(v, vlen, crate::rpc::SenderType::Anon);
+        
+                    let mut profile = chan.1.clone();
+                    profile.register("Init Sending Client Response");
+                    if *bn % 1000 == 0 {
+                        profile.should_print = true;
+                        profile.prefix = String::from(format!("Block: {}, Txn: {}", *bn, *txn));
+                    }
+                    let _ = chan.0.send((msg, profile));
+                    del_list.push((*bn, *txn));
+                }
+            }
+            for d in del_list {
+                lack_pend.remove(&d);
+            }
+        }
 
     }
 
@@ -195,19 +285,6 @@ impl Engine for PinnedSQLEngine {
         Self(Arc::new(Box::pin(SQLEngine::new(ctx))))
     }
 
-    /// Application logic:
-    /// Run all rollbacks first
-    /// Then insert all writes from ci-ed blocks to ci_state.
-    /// Then insert all writes from bci-ed blocks to bci_state.
-    /// Iterate through ci_state, popping results and inserting them in bci_state if seq_num is <= bci
-    /// (Stop at first > bci entry, it is an IndexMap)
-    /// 
-    /// Rollback logic: Logical undo
-    /// Remove rollbacked versions from ci_state.
-    /// 
-    /// Read logic: Acquire locks in same order.
-    /// fork -> ci_state -> bci_state -> event_chan receiver. Helps avoid deadlocks.
-    /// First check key in ci_state, if not found, check bci_state.
     async fn run(&self) {
         while !self.quit_signal.load(Ordering::SeqCst) {
             let fork = self.ctx.state.fork.lock().await;

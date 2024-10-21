@@ -331,9 +331,7 @@ where Engine: crate::execution::Engine
     }
 
     {
-        let mut lack_pend = ctx.client_ack_pending.lock().await;
-
-        do_commit(&ctx, &client, engine, &mut fork, &mut lack_pend, updated_ci);
+        do_commit(&ctx, &client, engine, &mut fork, updated_ci).await;
     }
 
     Ok(())
@@ -524,7 +522,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
         byz_qc_pending.retain(|&n| n > last_qc);
 
         // Also the byzantine commit index may move
-        let did_byz_commit = maybe_byzantine_commit(&ctx, &client, engine, &fork, &mut ctx.client_ack_pending.lock().await);
+        let did_byz_commit = maybe_byzantine_commit(&ctx, &client, engine, &fork).await;
 
         if did_byz_commit {
             // Pacemaker logic: Reset the view timer.
@@ -649,7 +647,7 @@ where Engine: crate::execution::Engine
             }
             profile.register("Block create");
 
-            let did_byz_commit = maybe_byzantine_commit(&ctx, &client, engine, &fork, &mut ctx.client_ack_pending.lock().await);
+            let did_byz_commit = maybe_byzantine_commit(&ctx, &client, engine, &fork).await;
 
             if did_byz_commit {
                 // Pacemaker logic: Reset the view timer.

@@ -564,8 +564,7 @@ where Engine: crate::execution::Engine
 
     // Now byzantine commit everything till the last byz committed entry.
     // This hopefully bring us to the newest config.
-    let mut lack_pend = ctx.client_ack_pending.lock().await;
-    do_byzantine_commit(ctx, client, engine, &fork, updated_bci, &mut lack_pend);
+    do_byzantine_commit(ctx, client, engine, &fork, updated_bci).await;
 
     ProtoAppendEntries {
         fork: Some(f),
@@ -667,8 +666,7 @@ where Engine: crate::execution::Engine
 
     // Now byzantine commit everything till the last byz committed entry.
     // This hopefully bring us to the newest config.
-    let mut lack_pend = ctx.client_ack_pending.lock().await;
-    do_byzantine_commit(ctx, client, engine, &fork, updated_bci, &mut lack_pend);
+    do_byzantine_commit(ctx, client, engine, &fork, updated_bci).await;
 
     let len = f.blocks.len();
     ProtoViewChange {

@@ -30,11 +30,6 @@ pub trait Engine {
     /// Execute a transaction without including it in the log.
     /// Only applicable for read-only transactions.
     fn get_unlogged_execution_result(&self, request: ProtoTransactionPhase) -> ProtoTransactionResult;
-
-    // The write transactions will only get a receipt from the consensus protocol.
-    // There is no need (for now) to send a separate execution result.
-    // It can be retrived by making a read request.
-
 }
 
 pub mod engines;

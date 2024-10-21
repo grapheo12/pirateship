@@ -53,7 +53,6 @@ impl Engine for PinnedLoggerEngine {
         Self(Arc::new(Box::pin(LoggerEngine::new(ctx))))
     }
 
-
     async fn run(&self) {
         while !self.quit_signal.load(Ordering::SeqCst) {
             sleep(Duration::from_millis(self.ctx.config.get().app_config.logger_stats_report_ms)).await;
