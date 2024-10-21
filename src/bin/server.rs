@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 use log::{debug, error, info};
-use pft::{config::{self, Config}, consensus, execution::engines::{kvs::PinnedKVStoreEngine, logger::PinnedLoggerEngine}};
+use pft::{config::{self, Config}, consensus, execution::engines::{kvs::PinnedKVStoreEngine, logger::PinnedLoggerEngine, sql::PinnedSQLEngine}};
 use tokio::{runtime, signal};
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
 use std::io::Write;
@@ -59,6 +59,9 @@ async fn run_main(cfg: Config) -> io::Result<()> {
     
     #[cfg(feature = "app_kvs")]
     let node = Arc::new(consensus::ConsensusNode::<PinnedKVStoreEngine>::new(&cfg));
+    
+    #[cfg(feature = "app_sql")]
+    let node = Arc::new(consensus::ConsensusNode::<PinnedSQLEngine>::new(&cfg));
     
     let mut handles = consensus::ConsensusNode::run(node);
 

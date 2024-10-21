@@ -16,6 +16,9 @@ enum ProtoTransactionOpType {
     UPGRADE_FULL_NODE = 4;
     DEL_LEARNER = 5;
     DOWNGRADE_FULL_NODE = 6;
+
+    // For SQL and other operations
+    CUSTOM = 7;
 }
 
 message ProtoTransactionOp {

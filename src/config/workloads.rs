@@ -13,4 +13,5 @@ pub enum RequestConfig {
     Blanks,
     KVReadWriteUniform(KVReadWriteUniform),
     KVReadWriteYCSB(), /* Todo */
+    MockSQL(),
 }

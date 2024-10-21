@@ -147,3 +147,51 @@ impl PerWorkerWorkloadGenerator for KVReadWriteUniformGenerator {
 
     }
 }
+
+
+pub struct MockSQLGenerator { 
+    pub query_num: usize
+}
+
+impl MockSQLGenerator {
+    pub fn new() -> Self {
+        Self {
+            query_num: 0
+        }
+    }
+}
+
+impl PerWorkerWorkloadGenerator for MockSQLGenerator {
+    fn next(&mut self) -> ProtoTransaction {
+        let query = match self.query_num {
+            0 => String::from("CREATE TABLE foo(id INT PRIMARY KEY, num INT);"),
+            1 => String::from("INSERT INTO foo VALUES (1, 1);"),
+            n => {
+                match n % 2 {
+                    0 => format!("UPDATE foo SET num = num + 1;"),
+                    1 => format!("SELECT * FROM foo;"),
+                    _ => panic!("Unreachable")
+                }
+            }
+        };
+        self.query_num += 1;
+
+        let query_vec = query.as_bytes().to_vec();
+
+        ProtoTransaction{
+            on_receive: None,
+            on_crash_commit: Some(ProtoTransactionPhase {
+                ops: vec![ProtoTransactionOp {
+                    op_type: ProtoTransactionOpType::Custom.into(),
+                    operands: vec![query_vec],
+                }],
+            }),
+            on_byzantine_commit: None,
+            is_reconfiguration: false,
+        }
+    }
+    
+    fn check_result(&self, _result: &Option<ProtoTransactionResult>) -> bool {
+        true
+    }
+}
