@@ -7,5 +7,4 @@ pub use storage::*;
 mod file_storage;
 pub use file_storage::*;
 
-mod workload_generator;
-pub use workload_generator::*;
+pub mod workload_generators;

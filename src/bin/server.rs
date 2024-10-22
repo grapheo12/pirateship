@@ -42,6 +42,7 @@ fn get_feature_set() -> (&'static str, &'static str) {
 
     #[cfg(feature = "app_logger")]{ app = "app_logger"; }
     #[cfg(feature = "app_kvs")]{ app = "app_kvs"; }
+    #[cfg(feature = "app_sql")]{ app = "app_sql"; }
 
     #[cfg(feature = "lucky_raft")]{ protocol = "lucky_raft"; }
     #[cfg(feature = "signed_raft")]{ protocol = "signed_raft"; }

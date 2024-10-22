@@ -1,39 +1,10 @@
+use rand::distributions::{Uniform, WeightedIndex};
 use rand_chacha::ChaCha20Rng;
-use rand::{distributions::{Uniform, WeightedIndex}, prelude::*};
+use rand::prelude::*;
 
-use crate::{config::KVReadWriteUniform, proto::{client::ProtoTransactionReceipt, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}}};
+use crate::{config::KVReadWriteUniform, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}};
 
-pub trait PerWorkerWorkloadGenerator: Send {
-    fn next(&mut self) -> ProtoTransaction;
-    fn check_result(&self, result: &Option<ProtoTransactionResult>) -> bool;
-}
-
-pub struct BlankWorkloadGenerator { }
-
-impl PerWorkerWorkloadGenerator for BlankWorkloadGenerator {
-    fn next(&mut self) -> ProtoTransaction {
-        ProtoTransaction{
-            on_receive: None,
-            // on_crash_commit: Some(ProtoTransactionPhase {
-            //     ops: vec![ProtoTransactionOp {
-            //         op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-            //         operands: vec![
-            //             format!("crash_commit_{}", i).into_bytes(),
-            //             format!("Tx:{}:{}", idx, i).into_bytes()
-            //         ],
-            //         // operands: Vec::new(),
-            //     }],
-            // }),
-            on_crash_commit: None,
-            on_byzantine_commit: None,
-            is_reconfiguration: false,
-        }
-    }
-    
-    fn check_result(&self, _result: &Option<ProtoTransactionResult>) -> bool {
-        true
-    }
-}
+use super::PerWorkerWorkloadGenerator;
 
 #[derive(Clone)]
 enum TxOpType {
@@ -145,53 +116,5 @@ impl PerWorkerWorkloadGenerator for KVReadWriteUniformGenerator {
 
         true
 
-    }
-}
-
-
-pub struct MockSQLGenerator { 
-    pub query_num: usize
-}
-
-impl MockSQLGenerator {
-    pub fn new() -> Self {
-        Self {
-            query_num: 0
-        }
-    }
-}
-
-impl PerWorkerWorkloadGenerator for MockSQLGenerator {
-    fn next(&mut self) -> ProtoTransaction {
-        let query = match self.query_num {
-            0 => String::from("CREATE TABLE foo(id INT PRIMARY KEY, num INT);"),
-            1 => String::from("INSERT INTO foo VALUES (1, 1);"),
-            n => {
-                match n % 2 {
-                    0 => format!("UPDATE foo SET num = num + 1;"),
-                    1 => format!("SELECT * FROM foo;"),
-                    _ => panic!("Unreachable")
-                }
-            }
-        };
-        self.query_num += 1;
-
-        let query_vec = query.as_bytes().to_vec();
-
-        ProtoTransaction{
-            on_receive: None,
-            on_crash_commit: Some(ProtoTransactionPhase {
-                ops: vec![ProtoTransactionOp {
-                    op_type: ProtoTransactionOpType::Custom.into(),
-                    operands: vec![query_vec],
-                }],
-            }),
-            on_byzantine_commit: None,
-            is_reconfiguration: false,
-        }
-    }
-    
-    fn check_result(&self, _result: &Option<ProtoTransactionResult>) -> bool {
-        true
     }
 }

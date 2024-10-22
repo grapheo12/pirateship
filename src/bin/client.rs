@@ -8,7 +8,7 @@ use pft::{
     }, rpc::{
         client::{Client, PinnedClient},
         MessageRef,
-    }, utils::{BlankWorkloadGenerator, KVReadWriteUniformGenerator, MockSQLGenerator, PerWorkerWorkloadGenerator}
+    }, utils::workload_generators::{BlankWorkloadGenerator, KVReadWriteUniformGenerator, MockSQLGenerator, KVReadWriteYCSBGenerator, PerWorkerWorkloadGenerator}
 };
 use prost::Message;
 use rand::{distributions::WeightedIndex, prelude::*};
@@ -59,7 +59,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
     let mut workload_generator: Box<dyn PerWorkerWorkloadGenerator> = match &config.workload_config.request_config {
         pft::config::RequestConfig::Blanks => Box::new(BlankWorkloadGenerator{}),
         pft::config::RequestConfig::KVReadWriteUniform(config) => Box::new(KVReadWriteUniformGenerator::new(config)),
-        pft::config::RequestConfig::KVReadWriteYCSB() => panic!("Unimplemented"),
+        pft::config::RequestConfig::KVReadWriteYCSB(config) => Box::new(KVReadWriteYCSBGenerator::new(config)),
         pft::config::RequestConfig::MockSQL() => Box::new(MockSQLGenerator::new()),
     };
 

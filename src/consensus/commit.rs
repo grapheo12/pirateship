@@ -220,7 +220,6 @@ pub async fn do_commit<'a, Engine>(
         let mut del_list = Vec::new();
         let mut lack_pend = ctx.client_ack_pending.lock().await;
         for ((bn, txn), chan) in lack_pend.iter() {
-            info!("Replying to {}", *bn);
             
             if *bn <= n {
                 let entry = fork.get(*bn).unwrap();
@@ -253,7 +252,7 @@ pub async fn do_commit<'a, Engine>(
                                     req_digest: h,
                                     block_n: (*bn) as u64,
                                     tx_n: (*txn) as u64,
-                                    results: Some(engine.get_execution_result((*bn) as u64, (*txn) as u64).await),
+                                    results: Some(ProtoTransactionResult::default()),
                                 },
                         )),
                     }

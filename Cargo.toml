@@ -38,6 +38,7 @@ clap = { version = "4.5.15", features = ["derive", "cargo"] }
 rocksdb = "0.22.0"
 lz4_flex = { version = "0.11" }
 gluesql = "0.15"
+zipf = "7.0.1"
 
 [build-dependencies]
 prost-build = { version = "0.12" }
@@ -91,7 +92,7 @@ jolteon = ["round_robin_leader", "always_sign", "view_change", "no_pipeline"]
 chained_pbft = ["round_robin_leader", "always_sign", "view_change"]
 pirateship = ["round_robin_leader", "dynamic_sign", "quorum_diversity", "view_change"]
 
-default = ["pirateship", "app_sql", "storage"]
+default = ["pirateship", "app_kvs", "storage"]
 
 
 [profile.release]

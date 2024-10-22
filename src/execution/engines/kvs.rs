@@ -3,10 +3,11 @@
 
 use std::{collections::HashMap, ops::Deref, pin::Pin, sync::{atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}, Arc, Mutex, MutexGuard}};
 
-use log::info;
+use log::{info, warn};
+use prost::Message;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use crate::{consensus::{handler::PinnedServerContext, log::Log}, execution::Engine, proto::execution::{ProtoTransactionOpResult, ProtoTransactionResult}};
+use crate::{config::NodeInfo, consensus::{handler::PinnedServerContext, log::Log}, crypto::hash, execution::Engine, proto::{client::{ProtoClientReply, ProtoTryAgain}, execution::{ProtoTransactionOpResult, ProtoTransactionResult}}, rpc::PinnedMessage};
 
 enum Event {
     CiUpd(u64),

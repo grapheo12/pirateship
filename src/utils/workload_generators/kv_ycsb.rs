@@ -1,0 +1,293 @@
+use rand::distributions::{Uniform, WeightedIndex};
+use rand_chacha::ChaCha20Rng;
+use rand::prelude::*;
+use zipf::ZipfDistribution;
+
+use crate::{config::KVReadWriteYCSB, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}};
+
+use super::PerWorkerWorkloadGenerator;
+
+/// This is enough for YCSB-A, B, C
+#[derive(Clone)]
+enum TxOpType {
+    Read,
+    Update,
+}
+
+#[derive(Clone)]
+enum TxPhaseType {
+    Crash,
+    Byz
+}
+
+pub struct KVReadWriteYCSBGenerator { 
+    config: KVReadWriteYCSB,
+    rng: ChaCha20Rng,
+
+    read_write_weights: [(TxOpType, i32); 2],
+    read_write_dist: WeightedIndex<i32>,
+
+    crash_byz_weights: [(TxPhaseType, i32); 2],
+    crash_byz_dist: WeightedIndex<i32>,
+
+    key_selection_dist: ZipfDistribution,
+
+    val_gen_dist: Uniform<u8>,
+    
+    last_request_type: TxOpType,
+    load_phase_cnt: usize,
+}
+
+impl KVReadWriteYCSBGenerator {
+    pub fn new(config: &KVReadWriteYCSB) -> KVReadWriteYCSBGenerator {
+        #[cfg(not(feature = "reply_from_app"))]
+        {
+            if config.linearizable_reads {
+                panic!("Linearizable reads not supported if response doesn't come from app");
+            }
+        }
+
+        let rng = ChaCha20Rng::seed_from_u64(210);
+
+        let read_write_weights = [
+            (TxOpType::Read, (config.read_ratio * 1000.0) as i32),
+            (TxOpType::Update, ((1.0 - config.read_ratio) * 1000.0) as i32),
+        ];
+        for item in &read_write_weights {
+            if item.1 < 0 || item.1 > 1000 {
+                panic!("Invalid config");
+            }
+        }
+
+        let crash_byz_weights = [
+            (TxPhaseType::Byz, (config.byz_commit_ratio * 1000.0) as i32),
+            (TxPhaseType::Crash, ((1.0 - config.byz_commit_ratio) * 1000.0) as i32),
+        ];
+        for item in &crash_byz_weights {
+            if item.1 < 0 || item.1 > 1000 {
+                panic!("Invalid config");
+            }
+        }
+
+        let read_write_dist = WeightedIndex::new(read_write_weights.iter().map(|(_, weight)| weight)).unwrap();
+        let crash_byz_dist = WeightedIndex::new(crash_byz_weights.iter().map(|(_, weight)| weight)).unwrap();
+        
+        let key_selection_dist = ZipfDistribution::new(config.num_keys, config.zipf_exponent).unwrap();
+        
+        let val_gen_dist = Uniform::new('a' as u8, 'z' as u8);
+        KVReadWriteYCSBGenerator {
+            config: config.clone(),
+            rng,
+            read_write_dist,
+            read_write_weights,
+            crash_byz_dist,
+            crash_byz_weights,
+            key_selection_dist,
+            val_gen_dist,
+            last_request_type: TxOpType::Read,
+            load_phase_cnt: 0
+        }
+    
+    }
+
+    fn get_key_str_from_num(&self, num: usize) -> String {
+        format!("user{}", num)
+    }
+
+    fn get_field_str_from_num(&self, num: usize) -> String {
+        format!(":field{}", num)
+    }
+
+    fn get_next_val(&mut self) -> Vec<u8> {
+        (0..self.config.val_size)
+            .map(|_| self.val_gen_dist.sample(&mut self.rng))
+            .collect()
+    }
+
+    fn transform_key_num(&self, key_num: usize) -> usize {
+        let mut key_num = key_num;
+        if key_num >= self.config.num_keys {
+            key_num = self.config.num_keys - 1;
+        }
+
+        key_num += 1_000_000;
+
+        key_num
+    }
+
+    fn get_next_key(&mut self) -> String {
+        let key_num = self.key_selection_dist.sample(&mut self.rng);
+        let key_num = self.transform_key_num(key_num);
+
+        self.get_key_str_from_num(key_num)
+    }
+
+    fn load_phase_next(&mut self) -> ProtoTransaction {
+        // Write Transaction with the next key to be loaded.
+        // Always write on crash commit
+
+        let key = self.get_key_str_from_num(self.transform_key_num(self.load_phase_cnt));
+        self.load_phase_cnt += 1;
+
+        let mut ops = Vec::new();
+        for i in 0..self.config.num_fields {
+            let key = key.clone() + &self.get_field_str_from_num(i);
+            let val = self.get_next_val();
+
+            ops.push(ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::Write.into(),
+                operands: vec![key.into_bytes(), val]
+            });
+            
+        }
+
+        self.last_request_type = TxOpType::Update;
+
+        ProtoTransaction {
+            on_receive: None,
+            on_crash_commit: Some(ProtoTransactionPhase {
+                ops,
+            }),
+            on_byzantine_commit: None,
+            is_reconfiguration: false,
+        }
+    }
+
+    fn read_next(&mut self) -> ProtoTransactionPhase {
+        let key = self.get_next_key();
+        let mut ops = Vec::new();
+        for i in 0..self.config.num_fields {
+            let key = key.clone() + &self.get_field_str_from_num(i);
+            ops.push(ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::Read.into(),
+                operands: vec![key.into_bytes()]
+            });
+        }
+
+        ProtoTransactionPhase{ ops }
+    }
+
+    fn update_next(&mut self) -> ProtoTransactionPhase {
+        let key = self.get_next_key();
+        let mut ops = Vec::new();
+        for i in 0..self.config.num_fields {
+            let key = key.clone() + &self.get_field_str_from_num(i);
+            let val = self.get_next_val();
+
+            ops.push(ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::Write.into(),
+                operands: vec![key.into_bytes(), val]
+            });
+            
+        }
+        ProtoTransactionPhase{ ops }
+    }
+
+    fn read_crash_next(&mut self) -> ProtoTransaction {
+        let ops = self.read_next();
+        ProtoTransaction {
+            on_receive: None,
+            on_crash_commit: Some(ops),
+            on_byzantine_commit: None,
+            is_reconfiguration: false,
+        }
+    }
+
+    fn read_byz_next(&mut self) -> ProtoTransaction {
+        let ops = self.read_next();
+        ProtoTransaction {
+            on_receive: None,
+            on_crash_commit: None,
+            on_byzantine_commit: Some(ops),
+            is_reconfiguration: false,
+        }
+    }
+
+    fn read_unlogged_next(&mut self) -> ProtoTransaction {
+        let ops = self.read_next();
+        ProtoTransaction {
+            on_receive: Some(ops),
+            on_crash_commit: None,
+            on_byzantine_commit: None,
+            is_reconfiguration: false,
+        }
+    }
+
+    fn update_crash_next(&mut self) -> ProtoTransaction {
+        let ops = self.update_next();
+        ProtoTransaction {
+            on_receive: None,
+            on_crash_commit: Some(ops),
+            on_byzantine_commit: None,
+            is_reconfiguration: false,
+        }
+    }
+
+    fn update_byz_next(&mut self) -> ProtoTransaction {
+        let ops = self.update_next();
+        ProtoTransaction {
+            on_receive: None,
+            on_crash_commit: None,
+            on_byzantine_commit: Some(ops),
+            is_reconfiguration: false,
+        }
+    }
+
+    fn run_phase_next(&mut self) -> ProtoTransaction {
+        let next_op = &self.read_write_weights[self.read_write_dist.sample(&mut self.rng)].0;
+
+        match next_op {
+            TxOpType::Read => {
+                self.last_request_type = TxOpType::Read;
+                if self.config.linearizable_reads {
+                    let crash_or_byz = &self.crash_byz_weights[self.crash_byz_dist.sample(&mut self.rng)].0;
+                    match crash_or_byz {
+                        TxPhaseType::Crash => self.read_crash_next(),
+                        TxPhaseType::Byz => self.read_byz_next(),
+                    }
+                } else {
+                    self.read_unlogged_next()
+                }
+
+            },
+            TxOpType::Update => {
+                self.last_request_type = TxOpType::Update;
+                let crash_or_byz = &self.crash_byz_weights[self.crash_byz_dist.sample(&mut self.rng)].0;
+                    match crash_or_byz {
+                        TxPhaseType::Crash => self.update_crash_next(),
+                        TxPhaseType::Byz => self.update_byz_next(),
+                    }
+            },
+        }
+
+    }
+}
+
+impl PerWorkerWorkloadGenerator for KVReadWriteYCSBGenerator {
+    fn next(&mut self) -> ProtoTransaction {
+        if self.config.load_phase && self.load_phase_cnt < self.config.num_keys {
+            return self.load_phase_next();
+        } else {
+            return self.run_phase_next();
+        }
+    }
+    
+    fn check_result(&self, result: &Option<ProtoTransactionResult>) -> bool {
+        if let TxOpType::Read = self.last_request_type {
+            if result.is_none() || result.as_ref().unwrap().result.len() != self.config.num_fields {
+                return false;
+            }
+
+            for res in &result.as_ref().unwrap().result {
+                if res.values.len() == 0 || res.values[0].len() != self.config.val_size {
+                    return false;
+                }
+            }
+            
+            return true;
+        }
+
+        true
+
+    }
+}
