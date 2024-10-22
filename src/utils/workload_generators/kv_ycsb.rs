@@ -161,10 +161,10 @@ impl KVReadWriteYCSBGenerator {
 
         ProtoTransaction {
             on_receive: None,
-            on_crash_commit: Some(ProtoTransactionPhase {
+            on_byzantine_commit: Some(ProtoTransactionPhase {
                 ops,
             }),
-            on_byzantine_commit: None,
+            on_crash_commit: None,
             is_reconfiguration: false,
         }
     }

@@ -195,7 +195,7 @@ fn verify_view_change_msg(vc: &ProtoViewChange, keys: &KeyStore, sender: &String
 pub async fn do_reply_all_with_tentative_receipt(ctx: &PinnedServerContext) {
     let mut lack_pend = ctx.client_ack_pending.lock().await;
 
-    for ((bn, txn), (chan, profile)) in lack_pend.iter_mut() {
+    for ((_, bn, txn), (chan, profile)) in lack_pend.iter_mut() {
         profile.register("Tentative chan wait");
         let response = ProtoClientReply {
             reply: Some(

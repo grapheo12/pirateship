@@ -4,33 +4,43 @@
 use hex::ToHex;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
-use std::{
-    collections::HashMap, sync::atomic::Ordering
-};
+use std::{collections::HashMap, sync::atomic::Ordering};
 use tokio::sync::MutexGuard;
 
 use crate::{
-    config::NodeInfo, consensus::{
-        handler::PinnedServerContext, log::Log, reconfiguration::maybe_execute_reconfiguration_transaction
-    }, crypto::hash, proto::{
-        client::{
-            ProtoClientReply, ProtoTransactionReceipt, ProtoTryAgain
-        }, consensus::ProtoFork, execution::ProtoTransactionResult
-    }, rpc::{
-        client::PinnedClient, server::{LatencyProfile, MsgAckChan}, PinnedMessage
-    }
+    config::NodeInfo,
+    consensus::{
+        client_reply::do_reply_transaction_receipt, handler::PinnedServerContext, log::Log,
+        reconfiguration::maybe_execute_reconfiguration_transaction,
+    },
+    crypto::hash,
+    proto::{
+        client::{ProtoClientReply, ProtoTransactionReceipt, ProtoTryAgain},
+        consensus::ProtoFork,
+        execution::ProtoTransactionResult,
+    },
+    rpc::{
+        client::PinnedClient,
+        server::{LatencyProfile, MsgAckChan},
+        PinnedMessage,
+    },
 };
 
 /// Rollback such that the commit index is at max (n - 1)
-pub fn maybe_rollback<Engine>(ctx: &PinnedServerContext, engine: &Engine, overwriting_fork: &ProtoFork, _fork: &MutexGuard<Log>)
-where Engine: crate::execution::Engine
+pub fn maybe_rollback<Engine>(
+    ctx: &PinnedServerContext,
+    engine: &Engine,
+    overwriting_fork: &ProtoFork,
+    _fork: &MutexGuard<Log>,
+) where
+    Engine: crate::execution::Engine,
 {
     if overwriting_fork.blocks.len() == 0 {
         return;
     }
 
     let n = overwriting_fork.blocks[0].n;
-    
+
     if n == 0 {
         // This is invalid. No block has n == 0
     }
@@ -50,14 +60,22 @@ where Engine: crate::execution::Engine
     if bci > n - 1 {
         // This should not be happening, EVER!
         ctx.state.byz_commit_index.store(n - 1, Ordering::SeqCst);
-        error!("Invariant violation: Byzantine commit index rolled back from {} to {}", bci, n - 1);
+        error!(
+            "Invariant violation: Byzantine commit index rolled back from {} to {}",
+            bci,
+            n - 1
+        );
     }
 }
 
 pub async fn do_byzantine_commit<'a, Engine>(
-    ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine,
-    fork: &'a MutexGuard<'a, Log>, updated_bci: u64,
-) where Engine: crate::execution::Engine
+    ctx: &PinnedServerContext,
+    client: &PinnedClient,
+    engine: &Engine,
+    fork: &'a MutexGuard<'a, Log>,
+    updated_bci: u64,
+) where
+    Engine: crate::execution::Engine,
 {
     let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
     trace!(
@@ -67,11 +85,17 @@ pub async fn do_byzantine_commit<'a, Engine>(
     );
 
     if updated_bci > fork.last() {
-        error!("Invariant violation: Byzantine commit index {} higher than fork.last() = {}", updated_bci, fork.last());
+        error!(
+            "Invariant violation: Byzantine commit index {} higher than fork.last() = {}",
+            updated_bci,
+            fork.last()
+        );
     }
-    ctx.state.byz_commit_index.store(updated_bci, Ordering::SeqCst);
+    ctx.state
+        .byz_commit_index
+        .store(updated_bci, Ordering::SeqCst);
     do_commit(ctx, client, engine, fork, updated_bci).await;
-    
+
     engine.signal_byzantine_commit(updated_bci);
     for bn in (old_bci + 1)..(updated_bci + 1) {
         let entry = fork.get(bn).unwrap();
@@ -82,24 +106,40 @@ pub async fn do_byzantine_commit<'a, Engine>(
             if _tx.on_byzantine_commit.is_none() {
                 continue;
             }
-            info!("Reconfiguration transaction found in block: {}. Doing Byz commit", bn);
+            info!(
+                "Reconfiguration transaction found in block: {}. Doing Byz commit",
+                bn
+            );
             // The byz commit phase of reconf tx is executed async.
             let _ = ctx.reconf_channel.0.send(_tx.clone());
         }
 
-        ctx.state.num_byz_committed_txs.fetch_add(entry.block.tx.len(), Ordering::SeqCst);
+        ctx.state
+            .num_byz_committed_txs
+            .fetch_add(entry.block.tx.len(), Ordering::SeqCst);
     }
 
+    #[cfg(not(feature = "reply_from_app"))]
+    {
+        do_reply_transaction_receipt(ctx, fork, true, updated_bci, |_, _| {
+            ProtoTransactionResult::default()
+        })
+        .await;
+    }
 }
-
 
 /// Only returns false if there is an invariant violation.
 /// There was no 2-chain QC found.
 async fn maybe_byzantine_commit_with_n_and_view<'a, Engine>(
-    ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine,
-    fork: &'a MutexGuard<'a, Log>, n: u64, view: u64
-) -> bool 
-where Engine: crate::execution::Engine
+    ctx: &PinnedServerContext,
+    client: &PinnedClient,
+    engine: &Engine,
+    fork: &'a MutexGuard<'a, Log>,
+    n: u64,
+    view: u64,
+) -> bool
+where
+    Engine: crate::execution::Engine,
 {
     // 2-chain commit rule.
 
@@ -124,7 +164,7 @@ where Engine: crate::execution::Engine
             updated_bci = qc.n;
         }
     }
-    if updated_bci > old_bci {        
+    if updated_bci > old_bci {
         do_byzantine_commit(ctx, client, engine, fork, updated_bci).await;
     }
 
@@ -133,8 +173,13 @@ where Engine: crate::execution::Engine
 
 /// Return true if bci was updated.
 pub async fn maybe_byzantine_commit<'a, Engine>(
-    ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine, fork: &'a MutexGuard<'a, Log>) -> bool
-where Engine: crate::execution::Engine
+    ctx: &PinnedServerContext,
+    client: &PinnedClient,
+    engine: &Engine,
+    fork: &'a MutexGuard<'a, Log>,
+) -> bool
+where
+    Engine: crate::execution::Engine,
 {
     // Check all QCs formed during this view.
     // Since the last_qc need not have link to another qc,
@@ -145,7 +190,9 @@ where Engine: crate::execution::Engine
 
     let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
 
-    while !maybe_byzantine_commit_with_n_and_view(ctx, client, engine, fork, check_qc, last_qc_view).await {
+    while !maybe_byzantine_commit_with_n_and_view(ctx, client, engine, fork, check_qc, last_qc_view)
+        .await
+    {
         if check_qc == 0 {
             break;
         }
@@ -156,18 +203,24 @@ where Engine: crate::execution::Engine
     let new_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
 
     new_bci > old_bci
-
 }
 
 pub async fn do_commit<'a, Engine>(
-    ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine,
+    ctx: &PinnedServerContext,
+    client: &PinnedClient,
+    engine: &Engine,
     fork: &'a MutexGuard<'a, Log>,
     n: u64,
-) where Engine: crate::execution::Engine 
+) where
+    Engine: crate::execution::Engine,
 {
     let ci = ctx.state.commit_index.load(Ordering::SeqCst);
     if fork.last() < n {
-        error!("Invariant violation: Committing a block that doesn't exist! new ci {}, fork.last() {}", n, fork.last());
+        error!(
+            "Invariant violation: Committing a block that doesn't exist! new ci {}, fork.last() {}",
+            n,
+            fork.last()
+        );
         return;
     }
     if n <= ci {
@@ -195,14 +248,13 @@ pub async fn do_commit<'a, Engine>(
                     warn!("Error executing reconfiguration transaction: {:?}", e);
                 }
             }
-        } 
+        }
     }
 
     #[cfg(feature = "no_pipeline")]
     ctx.should_progress.add_permits(1);
 
     for i in (ci + 1)..(n + 1) {
-        
         let num_txs = match fork.get(i) {
             Ok(entry) => entry.block.tx.len(),
             Err(_) => {
@@ -216,66 +268,10 @@ pub async fn do_commit<'a, Engine>(
 
     #[cfg(not(feature = "reply_from_app"))]
     {
-
-        let mut del_list = Vec::new();
-        let mut lack_pend = ctx.client_ack_pending.lock().await;
-        for ((bn, txn), chan) in lack_pend.iter() {
-            
-            if *bn <= n {
-                let entry = fork.get(*bn).unwrap();
-                let response = if entry.block.tx.len() <= *txn {
-                    if ctx.i_am_leader.load(Ordering::SeqCst) {
-                        warn!("Missing transaction as a leader!");
-                    }
-                    if entry.block.view_is_stable {
-                        warn!("Missing transaction in stable view!");
-                    }
-    
-                    let node_infos = NodeInfo {
-                        nodes: ctx.config.get().net_config.nodes.clone(),
-                    };
-    
-                    ProtoClientReply {
-                        reply: Some(
-                            crate::proto::client::proto_client_reply::Reply::TryAgain(
-                                ProtoTryAgain{ serialized_node_infos: node_infos.serialize() }
-                        )),
-                    }
-                }else {
-                    let h = hash(&entry.block.tx[*txn].encode_to_vec());
-                    
-    
-                    ProtoClientReply {
-                        reply: Some(
-                            crate::proto::client::proto_client_reply::Reply::Receipt(
-                                ProtoTransactionReceipt {
-                                    req_digest: h,
-                                    block_n: (*bn) as u64,
-                                    tx_n: (*txn) as u64,
-                                    results: Some(ProtoTransactionResult::default()),
-                                },
-                        )),
-                    }
-                };
-    
-                let v = response.encode_to_vec();
-                let vlen = v.len();
-    
-                let msg = PinnedMessage::from(v, vlen, crate::rpc::SenderType::Anon);
-    
-                let mut profile = chan.1.clone();
-                profile.register("Init Sending Client Response");
-                if *bn % 1000 == 0 {
-                    profile.should_print = true;
-                    profile.prefix = String::from(format!("Block: {}, Txn: {}", *bn, *txn));
-                }
-                let _ = chan.0.send((msg, profile));
-                del_list.push((*bn, *txn));
-            }
-        }
-        for d in del_list {
-            lack_pend.remove(&d);
-        }
+        do_reply_transaction_receipt(ctx, fork, false, n, |_, _| {
+            ProtoTransactionResult::default()
+        })
+        .await;
     }
 
     // Every thousandth block is added in ping_counters.

@@ -109,7 +109,7 @@ pub struct ServerContext {
     pub state: ConsensusState,
     pub client_ack_pending: Mutex<
         HashMap<
-            (u64, usize), // (block_id, tx_id)
+            (bool, u64, usize), // (is_byz, block_id, tx_id)
             (MsgAckChan, LatencyProfile),
         >,
     >,
