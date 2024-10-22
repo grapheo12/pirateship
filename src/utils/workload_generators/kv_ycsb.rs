@@ -1,3 +1,6 @@
+use std::process::exit;
+
+use log::info;
 use rand::distributions::{Uniform, WeightedIndex};
 use rand_chacha::ChaCha20Rng;
 use rand::prelude::*;
@@ -20,6 +23,19 @@ enum TxPhaseType {
     Byz
 }
 
+/// This version of YCSB is directly adapted from the original paper: https://courses.cs.duke.edu/fall13/cps296.4/838-CloudPapers/ycsb.pdf
+/// YCSB-A, B and C only deal with read and update operations,
+/// With record to be updated selected using Zipfian distribution.
+/// Records are virtually identified with a key of the format `user<num>`.
+/// I choose num from a Zipfian distribution, I clip the chosen value so that it falls within the number of keys I have specified in config.
+/// I add an offset of 1_000_000, so the keys have more or less same size in bytes.
+/// Finally for each field, we deal with kv pairs of the form `user<num>:field<fieldnum> --> random val`.
+/// All fields for a key are read or updated together.
+/// 
+/// If the config.load_phase is set, the client will force exit after the load phase completes.
+/// For load phase, it is advised to run with num_clients = 1.
+/// Once the load phase finishes, the run phase (with config.load_phase = false) can be run with however many num_clients as needed.
+/// Load phase can be used for warmup, make sure to remove the load phase time from throughput calculations.
 pub struct KVReadWriteYCSBGenerator { 
     config: KVReadWriteYCSB,
     rng: ChaCha20Rng,
@@ -285,6 +301,11 @@ impl PerWorkerWorkloadGenerator for KVReadWriteYCSBGenerator {
             }
             
             return true;
+        }
+
+        if self.config.load_phase && self.load_phase_cnt == self.config.num_keys {
+            info!("End of Load phase");
+            exit(0);
         }
 
         true
