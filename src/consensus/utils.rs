@@ -6,11 +6,10 @@ use prost::Message;
 use std::sync::atomic::Ordering;
 
 use crate::{
-    consensus::{
+    config::ClientConfig, consensus::{
         handler::PinnedServerContext,
         leader_rotation::get_current_leader,
-    }, crypto::hash,
-    proto::{
+    }, crypto::hash, proto::{
         consensus::{
             ProtoFork, ProtoQuorumCertificate,
         }, execution::ProtoTransaction
@@ -64,6 +63,23 @@ pub fn get_f_plus_one_num(ctx: &PinnedServerContext) -> u64 {
     let _cfg = ctx.config.get();
     let n = _cfg.consensus_config.node_list.len() as u64;
     (n / 3) + 1
+}
+
+pub fn get_f_plus_one_send_list(config: &ClientConfig) -> Vec<String> {
+    let n = config.net_config.nodes.len();
+    let f_plus_one = (n / 3) + 1;
+
+    let mut first_f_plus_one = Vec::new();
+    let mut i = 0;
+
+    config.net_config.nodes.iter().for_each(|(k, _)| {
+        if i < f_plus_one {
+            first_f_plus_one.push(k.clone());
+            i += 1;
+        }
+    });
+
+    first_f_plus_one
 }
 
 pub fn get_old_f_plus_one_num(ctx: &PinnedServerContext) -> u64 {

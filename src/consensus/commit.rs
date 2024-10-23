@@ -10,7 +10,7 @@ use tokio::sync::MutexGuard;
 use crate::{
     config::NodeInfo,
     consensus::{
-        client_reply::do_reply_transaction_receipt, handler::PinnedServerContext, log::Log,
+        client_reply::{do_reply_byz_poll, do_reply_transaction_receipt}, handler::PinnedServerContext, log::Log,
         reconfiguration::maybe_execute_reconfiguration_transaction,
     },
     crypto::hash,
@@ -121,11 +121,9 @@ pub async fn do_byzantine_commit<'a, Engine>(
 
     #[cfg(not(feature = "reply_from_app"))]
     {
-        do_reply_transaction_receipt(ctx, fork, true, updated_bci, |_, _| {
-            ProtoTransactionResult::default()
-        })
-        .await;
+        do_reply_byz_poll(ctx, fork, updated_bci, |_, _| ProtoTransactionResult::default()).await;
     }
+
 }
 
 /// Only returns false if there is an invariant violation.
@@ -268,7 +266,7 @@ pub async fn do_commit<'a, Engine>(
 
     #[cfg(not(feature = "reply_from_app"))]
     {
-        do_reply_transaction_receipt(ctx, fork, false, n, |_, _| {
+        do_reply_transaction_receipt(ctx, fork, n, |_, _| {
             ProtoTransactionResult::default()
         })
         .await;

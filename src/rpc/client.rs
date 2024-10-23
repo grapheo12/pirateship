@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}};
-use log::{debug, trace, warn};
+use log::{debug, info, trace, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use std::{
     collections::{HashMap, HashSet}, fs::File, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::{Arc, RwLock}
@@ -364,6 +364,48 @@ impl PinnedClient {
             ))
         }
     }
+
+    pub async fn broadcast_and_await_reply<'b>(
+        client: &PinnedClient,
+        send_list: &Vec<String>,
+        data: &PinnedMessage,
+    ) -> Result<Vec<PinnedMessage>, Error> {
+        let mut result = Vec::new();
+        for name in send_list {
+            let res = PinnedClient::send_and_await_reply(client, name, data.as_ref()).await?;
+            result.push(res);
+        }
+        // let mut profile = LatencyProfile::new();
+        // PinnedClient::broadcast(client, send_list, data, &mut profile).await?;
+
+
+        // for name in send_list {
+        //     info!("Attempting to get response from {} yo1", name);
+        //     let sock = PinnedClient::get_sock(client, name).await?;
+        //     info!("Attempting to get response from {} yo2", name);
+        //     let mut lsock = sock.0.lock().await;
+        //     info!("Attempting to get response from {} yo3", name);
+        //     lsock.flush().await?;  // Need this flush; otherwise it is a deadlock.
+
+        //     let mut resp_buf = vec![0u8; 256];
+        //     let sz = lsock.get_next_frame(&mut resp_buf).await? as usize;
+        //     if sz == 0 {
+        //         return Err(Error::new(
+        //             ErrorKind::InvalidData,
+        //             "socket probably closed!",
+        //         ));
+        //     }
+            
+        //     result.push(PinnedMessage::from(
+        //         resp_buf,
+        //         sz as usize,
+        //         super::SenderType::Auth(name.clone()),
+        //     ))
+        // }
+
+        Ok(result)
+    }
+
 
     pub async fn reliable_send<'b>(
         client: &PinnedClient,

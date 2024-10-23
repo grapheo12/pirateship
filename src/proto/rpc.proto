@@ -15,7 +15,8 @@ message ProtoPayload {
         proto.consensus.ProtoAppendEntries append_entries = 2;
         proto.consensus.ProtoVote vote = 3;
         proto.client.ProtoClientRequest client_request = 4;
-        proto.checkpoint.ProtoBackFillRequest backfill_request = 5;   
-        proto.checkpoint.ProtoBackFillResponse backfill_response = 6;   
+        proto.client.ProtoByzPollRequest byz_poll_request = 5;
+        proto.checkpoint.ProtoBackFillRequest backfill_request = 6;   
+        proto.checkpoint.ProtoBackFillResponse backfill_response = 7;   
     }
 }

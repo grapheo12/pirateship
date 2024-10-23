@@ -19,7 +19,7 @@ use std::time::Instant;
 use tokio::{join, sync::{mpsc, Mutex, Semaphore}};
 
 use crate::{
-    config::{AtomicConfig, Config, NodeInfo}, crypto::{AtomicKeyStore, KeyStore}, proto::execution::ProtoTransaction, rpc::{
+    config::{AtomicConfig, Config, NodeInfo}, crypto::{AtomicKeyStore, KeyStore}, proto::{client::{ProtoByzPollRequest, ProtoClientRequest}, execution::ProtoTransaction, rpc::proto_payload}, rpc::{
         client::PinnedClient, server::{GetServerKeys, LatencyProfile, MsgAckChan, RespType}, MessageRef, PinnedMessage
     }, utils::AtomicStruct
 };
@@ -106,13 +106,26 @@ pub struct ServerContext {
         mpsc::UnboundedSender<ForwardedMessageWithAckChan>,
         Mutex<mpsc::UnboundedReceiver<ForwardedMessageWithAckChan>>,
     ),
+    pub byz_poll_queue: (
+        mpsc::UnboundedSender<ForwardedMessageWithAckChan>,
+        Mutex<mpsc::UnboundedReceiver<ForwardedMessageWithAckChan>>,
+    ),
+    
     pub state: ConsensusState,
     pub client_ack_pending: Mutex<
         HashMap<
-            (bool, u64, usize), // (is_byz, block_id, tx_id)
+            (u64, usize), // (block_id, tx_id)
             (MsgAckChan, LatencyProfile),
         >,
     >,
+
+    pub client_byz_ack_pending: Mutex<
+        HashMap<
+            (u64, usize), // (block_id, tx_id)
+            (MsgAckChan, LatencyProfile),
+        >,
+    >,
+
     pub ping_counters: std::sync::Mutex<HashMap<u64, Instant>>,
     pub keys: AtomicKeyStore,
 
@@ -147,6 +160,7 @@ pub struct PinnedServerContext(pub Arc<Pin<Box<ServerContext>>>);
 impl PinnedServerContext {
     pub fn new(cfg: &Config, keys: &KeyStore) -> PinnedServerContext {
         let node_ch = mpsc::unbounded_channel();
+        let byz_poll_ch = mpsc::unbounded_channel();
         let client_ch = mpsc::unbounded_channel();
         let black_hole_ch = mpsc::unbounded_channel();
         let reconf_channel = mpsc::unbounded_channel();
@@ -172,8 +186,10 @@ impl PinnedServerContext {
             
             node_queue: (node_ch.0, Mutex::new(node_ch.1)),
             client_queue: (client_ch.0, Mutex::new(client_ch.1)),
+            byz_poll_queue: (byz_poll_ch.0, Mutex::new(byz_poll_ch.1)),
             state: ConsensusState::new(cfg.clone()),
             client_ack_pending: Mutex::new(HashMap::new()),
+            client_byz_ack_pending: Mutex::new(HashMap::new()),
             ping_counters: std::sync::Mutex::new(HashMap::new()),
             keys: AtomicKeyStore::new(keys.clone()),
             __client_black_hole_channel: (black_hole_ch.0, Mutex::new(black_hole_ch.1)),
@@ -260,6 +276,14 @@ pub fn consensus_rpc_handler<'a>(
         rpc::proto_payload::Message::BackfillRequest(_) => {
             let msg = (body.message.unwrap(), sender, ack_tx, profile);
             if let Err(_) = ctx.node_queue.0.send(msg) {
+                return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
+            }
+
+            return Ok(RespType::RespAndTrack);
+        }
+        rpc::proto_payload::Message::ByzPollRequest(_) => {
+            let msg = (body.message.unwrap(), sender, ack_tx, profile);
+            if let Err(_) = ctx.byz_poll_queue.0.send(msg) {
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }
 
@@ -483,7 +507,7 @@ where
         #[cfg(feature = "no_pipeline")]
         ctx.should_progress.acquire().await.unwrap().forget();
 
-        info!("AppendEntries with {} entries", curr_client_req.len());
+        trace!("AppendEntries with {} entries", curr_client_req.len());
         match do_append_entries(
             ctx.clone(), &engine.clone(), client.clone(),
             &mut curr_client_req, should_sig,
@@ -675,4 +699,19 @@ pub async fn handle_node_messages<Engine>(
 
     let _ = join!(view_timer_handle);
     Ok(())
+}
+
+pub async fn handle_byz_poll(
+    ctx: PinnedServerContext,
+) {
+    let mut byz_poll_rx = ctx.byz_poll_queue.1.lock().await;
+
+    while let Some(query) = byz_poll_rx.recv().await {
+        
+        if let proto_payload::Message::ByzPollRequest(byz_req) = &query.0 {
+            let mut lbyz_ackpend = ctx.client_byz_ack_pending.lock().await;
+            lbyz_ackpend.insert((byz_req.block_n, byz_req.tx_n as usize), (query.2, query.3));
+        }
+
+    }
 }

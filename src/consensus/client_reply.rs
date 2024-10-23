@@ -120,24 +120,12 @@ pub async fn do_respond_to_read_requests<Engine>(
 pub async fn do_reply_transaction_receipt<'a, F>(
     ctx: &PinnedServerContext,
     fork: &'a MutexGuard<'a, Log>,
-    clear_byz: bool,
-    n: u64,     // ci or bci
+    n: u64,     // ci
     result_getter: F
 ) where F: Fn(u64 /* bn */, usize /* txn */) -> ProtoTransactionResult
 {
     let mut lack_pend = ctx.client_ack_pending.lock().await;
-    if clear_byz {
-        info!("Responding to Byz commits: {} Pending requests: {}", n, lack_pend.len());
-    } else {
-        info!("Responding to Crash commits: {} Pending requests: {}", n, lack_pend.len());
-    }
-    lack_pend.retain(|(is_byz, bn, txn), chan| {
-        if clear_byz != *is_byz {
-            // If is_byz == true then only clear if clear_byz == true
-            // If is_byz == false then only clear if clear_byz == false
-            return true;
-        }
-
+    lack_pend.retain(|(bn, txn), chan| {
         if *bn > n {
             return true;
         }
@@ -190,16 +178,61 @@ pub async fn do_reply_transaction_receipt<'a, F>(
             profile.prefix = String::from(format!("Block: {}, Txn: {}", *bn, *txn));
         }
         let send_res = chan.0.send((msg, profile));
-        if let Err(e) = send_res {
-            error!("Error in sending response: {}", e);
+        match send_res {
+            Ok(_) => false,
+            Err(e) => {
+                error!("Error sending response: {}", e);
+                true
+            },
+        }
+    });
+}
+
+pub async fn do_reply_byz_poll<'a, F>(
+    ctx: &PinnedServerContext,
+    fork: &'a MutexGuard<'a, Log>,
+    n: u64,     // bci
+    result_getter: F
+) where F: Fn(u64 /* bn */, usize /* txn */) -> ProtoTransactionResult
+{
+    let mut lbyz_ackpend = ctx.client_byz_ack_pending.lock().await;
+    lbyz_ackpend.retain(|(bn, txn), chan| {
+        if *bn > n {
             return true;
-        } else {
-            info!("Response sent");
         }
 
+        let entry = fork.get(*bn).unwrap();
+        let h = hash(&entry.block.tx[*txn].encode_to_vec());
+        let response = ProtoClientReply {
+            reply: Some(
+                crate::proto::client::proto_client_reply::Reply::Receipt(
+                    ProtoTransactionReceipt {
+                        req_digest: h,
+                        block_n: (*bn) as u64,
+                        tx_n: (*txn) as u64,
+                        results: Some(result_getter(*bn, *txn)),
+                    },
+            )),
+        };
 
+        let v = response.encode_to_vec();
+        let vlen = v.len();
 
+        let msg = PinnedMessage::from(v, vlen, crate::rpc::SenderType::Anon);
 
-        false
+        let mut profile = chan.1.clone();
+        profile.register("Init Sending Client Response");
+        if *bn % 1000 == 0 {
+            profile.should_print = true;
+            profile.prefix = String::from(format!("Block: {}, Txn: {}", *bn, *txn));
+        }
+        let send_res = chan.0.send((msg, profile));
+        match send_res {
+            Ok(_) => false,
+            Err(e) => {
+                error!("Error sending response: {}", e);
+                true
+            },
+        }
     });
 }

@@ -3,7 +3,7 @@
 
 use std::{collections::HashMap, ops::Deref, pin::Pin, sync::{atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}, Arc, Mutex, MutexGuard}};
 
-use log::{info, warn};
+use log::{info, trace, warn};
 use prost::Message;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
@@ -97,7 +97,7 @@ impl KVStoreEngine {
                         crate::proto::execution::ProtoTransactionOpType::Write => {
                             let num_crash_writes = self.num_crash_committed_writes.fetch_add(1, Ordering::SeqCst) + 1;
                             if num_crash_writes % 1000 == 0 {
-                                info!("Num Crash Committed Write Requests: {}; Num Keys only crash committed: {}", num_crash_writes, ci_state.len());
+                                trace!("Num Crash Committed Write Requests: {}; Num Keys only crash committed: {}", num_crash_writes, ci_state.len());
                             }
                             // Sanity check
                             // Format (key, val)
@@ -154,7 +154,8 @@ impl KVStoreEngine {
                         crate::proto::execution::ProtoTransactionOpType::Write => {
                             let num_byz_writes = self.num_byz_committed_writes.fetch_add(1, Ordering::SeqCst) + 1;
                             if num_byz_writes % 1000 == 0 {
-                                info!("Num Byz Committed Write Requests: {}; Num keys byz committed: {}", num_byz_writes, bci_state.len());
+                                info!("Num Byz Committed Write Requests: {}; Num keys byz committed: {}; BCI: {}",
+                                    num_byz_writes, bci_state.len(), self.last_bci.load(Ordering::SeqCst));
                             }
                             // Sanity check
                             // Format (key, val)
@@ -220,7 +221,7 @@ impl KVStoreEngine {
     {
         let num_reads = self.num_reads.fetch_add(1, Ordering::SeqCst) + 1;
         if num_reads % 1000 == 0 {
-            info!("Num Read Requests: {}", num_reads);
+            trace!("Num Read Requests: {}", num_reads);
         }
         // First find in ci_state
         let ci_res = ci_state.get(key);

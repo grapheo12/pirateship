@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use handler::{consensus_rpc_handler, PinnedServerContext, handle_client_messages, handle_node_messages};
+use handler::{consensus_rpc_handler, handle_byz_poll, handle_client_messages, handle_node_messages, PinnedServerContext};
 use reconfiguration::reconfiguration_worker;
 use tokio::task::JoinSet;
 
@@ -72,6 +72,7 @@ where
         let node3 = node.clone();
         let node4 = node.clone();
         let node5 = node.clone();
+        let node6 = node.clone();
 
         js.spawn(async move {
             let _ = Server::<PinnedServerContext>::run(node1.server.clone(), node1.ctx.clone())
@@ -88,6 +89,9 @@ where
         });
         js.spawn(async move {
             let _ = reconfiguration_worker(node5.ctx.clone(), node5.client.clone()).await;
+        });
+        js.spawn(async move {
+            let _ = handle_byz_poll(node6.ctx.clone()).await;
         });
 
         js

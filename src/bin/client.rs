@@ -1,20 +1,21 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use log::{debug, error, info, trace};
 use pft::{
-    config::{default_log4rs_config, ClientConfig}, crypto::KeyStore, proto::{
-        client::{ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload
+    config::{default_log4rs_config, ClientConfig}, consensus::utils::get_f_plus_one_send_list, crypto::KeyStore, proto::{
+        client::{self, ProtoByzPollRequest, ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload
     }, rpc::{
         client::{Client, PinnedClient},
-        MessageRef,
-    }, utils::workload_generators::{BlankWorkloadGenerator, KVReadWriteUniformGenerator, MockSQLGenerator, KVReadWriteYCSBGenerator, PerWorkerWorkloadGenerator}
+        MessageRef, PinnedMessage,
+    }, utils::workload_generators::{BlankWorkloadGenerator, KVReadWriteUniformGenerator, KVReadWriteYCSBGenerator, MockSQLGenerator, PerWorkerWorkloadGenerator}
 };
 use prost::Message;
 use rand::{distributions::WeightedIndex, prelude::*};
 use rand_chacha::ChaCha20Rng;
 use std::{env, fs, io, path, time::Duration};
-use tokio::{task::JoinSet, time::sleep};
+use tokio::{sync::mpsc, task::JoinSet, time::sleep};
 use std::time::Instant;
 
 #[global_allocator]
@@ -44,7 +45,7 @@ fn process_args() -> ClientConfig {
     ClientConfig::deserialize(&cfg_contents)
 }
 
-async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, config: ClientConfig) -> io::Result<()> {    
+async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, config: ClientConfig, byz_poll_tx: UnboundedSender<(u64, u64, Instant, bool)>) -> io::Result<()> {    
     sleep(Duration::from_millis(10) * (idx as u32)).await;
     
     let mut config = config.clone();
@@ -73,6 +74,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
             // sig: vec![0u8; SIGNATURE_LENGTH],
             sig: vec![0u8; 1]
         };
+        let is_byz = client_req.tx.as_ref().unwrap().on_byzantine_commit.is_some();
 
         let rpc_msg_body = ProtoPayload {
             message: Some(
@@ -161,8 +163,12 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
                 error!("Unexpected Transaction result!");
             }
 
+            
             let should_log = sample_item[weight_dist.sample(&mut rng)].0;
-
+            
+            if is_byz {
+                let _ = byz_poll_tx.send((resp.block_n, resp.tx_n, start, should_log));
+            }
             if should_log {
                 info!("Client Id: {}, Msg Id: {}, Block num: {}, Tx num: {}, Latency: {} us, Current Leader: {}",
                     idx, i, resp.block_n, resp.tx_n,
@@ -181,20 +187,64 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
 }
 
 
+async fn byz_poll_worker(client: &PinnedClient, config: &ClientConfig, mut byz_poll_rx: UnboundedReceiver<(u64, u64, Instant, bool)>)  -> io::Result<()> {
+    // TODO: Send list needs to expand if (f + 1) responses are not received.
+    // Send list will change when reconfiguration happens.
+    // Check for matching responses.
+    
+    let send_list = get_f_plus_one_send_list(config);
+    while let Some((block_n, tx_n, start, should_log)) = byz_poll_rx.recv().await {
+        let req = ProtoPayload {
+            message: Some(pft::proto::rpc::proto_payload::Message::ByzPollRequest(
+                ProtoByzPollRequest { block_n, tx_n }
+            ))
+        };
+
+        let v = req.encode_to_vec();
+        let vlen = v.len();
+        let msg = PinnedMessage::from(v, vlen, pft::rpc::SenderType::Anon);
+
+        let res = PinnedClient::broadcast_and_await_reply(client, &send_list, &msg).await;
+        match res {
+            Ok(_) => {
+                if should_log || true {
+                    info!("Byz Poll: Block num: {}, Tx num: {}, Latency: {} us",
+                        block_n, tx_n,
+                        start.elapsed().as_micros()
+                    );
+                }
+            },
+            Err(e) => {
+                error!("Error in Byz poll: {}", e);
+            },
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 50)]
 async fn main() -> io::Result<()> {
     log4rs::init_config(default_log4rs_config()).unwrap();
     let config = process_args();
     let mut keys = KeyStore::empty();
     keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
+    let (tx, mut rx) = mpsc::unbounded_channel();
 
     let mut client_handles = JoinSet::new();
     for i in 0..config.workload_config.num_clients {
         let client_config = config.clone();
         let net_config = client_config.fill_missing();
         let c = Client::new(&net_config, &keys).into();
-        client_handles.spawn(async move { client_runner(i, &c, config.workload_config.num_requests, client_config.clone()).await });
+        let _tx = tx.clone();
+        client_handles.spawn(async move { client_runner(i, &c, config.workload_config.num_requests, client_config.clone(), _tx).await });
     }
+
+    let client_config = config.clone();
+    let net_config = client_config.fill_missing();
+    let c = Client::new(&net_config, &keys).into();
+    client_handles.spawn(async move {
+        byz_poll_worker(&c, &client_config, rx).await
+    });
 
     while let Some(_) = client_handles.join_next().await {}
 

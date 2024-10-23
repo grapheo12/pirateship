@@ -44,4 +44,7 @@ message ProtoClientReply {
     }
 }
 
-
+message ProtoByzPollRequest {
+    uint64 block_n = 1;
+    uint64 tx_n = 2;
+}
