@@ -125,68 +125,67 @@ pub async fn do_reply_transaction_receipt<'a, F>(
     result_getter: F
 ) where F: Fn(u64 /* bn */, usize /* txn */) -> ProtoTransactionResult
 {
-    let mut del_list = Vec::new();
     let mut lack_pend = ctx.client_ack_pending.lock().await;
-    for ((is_byz, bn, txn), chan) in lack_pend.iter() {
+    lack_pend.retain(|(is_byz, bn, txn), chan| {
         if clear_byz != *is_byz {
             // If is_byz == true then only clear if clear_byz == true
             // If is_byz == false then only clear if clear_byz == false
-            continue;
+            return true;
         }
 
-        if *bn <= n {
-            let entry = fork.get(*bn).unwrap();
-            let response = if entry.block.tx.len() <= *txn {
-                if ctx.i_am_leader.load(Ordering::SeqCst) {
-                    warn!("Missing transaction as a leader!");
-                }
-                if entry.block.view_is_stable {
-                    warn!("Missing transaction in stable view!");
-                }
+        if *bn > n {
+            return true;
+        }
 
-                let node_infos = NodeInfo {
-                    nodes: ctx.config.get().net_config.nodes.clone(),
-                };
+        let entry = fork.get(*bn).unwrap();
+        let response = if entry.block.tx.len() <= *txn {
+            if ctx.i_am_leader.load(Ordering::SeqCst) {
+                warn!("Missing transaction as a leader!");
+            }
+            if entry.block.view_is_stable {
+                warn!("Missing transaction in stable view!");
+            }
 
-                ProtoClientReply {
-                    reply: Some(
-                        crate::proto::client::proto_client_reply::Reply::TryAgain(
-                            ProtoTryAgain{ serialized_node_infos: node_infos.serialize() }
-                    )),
-                }
-            }else {
-                let h = hash(&entry.block.tx[*txn].encode_to_vec());
-                
-
-                ProtoClientReply {
-                    reply: Some(
-                        crate::proto::client::proto_client_reply::Reply::Receipt(
-                            ProtoTransactionReceipt {
-                                req_digest: h,
-                                block_n: (*bn) as u64,
-                                tx_n: (*txn) as u64,
-                                results: Some(result_getter(*bn, *txn)),
-                            },
-                    )),
-                }
+            let node_infos = NodeInfo {
+                nodes: ctx.config.get().net_config.nodes.clone(),
             };
 
-            let v = response.encode_to_vec();
-            let vlen = v.len();
-
-            let msg = PinnedMessage::from(v, vlen, crate::rpc::SenderType::Anon);
-
-            let mut profile = chan.1.clone();
-            profile.register("Init Sending Client Response");
-            if *bn % 1000 == 0 {
-                profile.should_print = true;
-                profile.prefix = String::from(format!("Block: {}, Txn: {}", *bn, *txn));
+            ProtoClientReply {
+                reply: Some(
+                    crate::proto::client::proto_client_reply::Reply::TryAgain(
+                        ProtoTryAgain{ serialized_node_infos: node_infos.serialize() }
+                )),
             }
-            let _ = chan.0.send((msg, profile));
-            del_list.push((*is_byz, *bn, *txn));
+        }else {
+            let h = hash(&entry.block.tx[*txn].encode_to_vec());
+            
+
+            ProtoClientReply {
+                reply: Some(
+                    crate::proto::client::proto_client_reply::Reply::Receipt(
+                        ProtoTransactionReceipt {
+                            req_digest: h,
+                            block_n: (*bn) as u64,
+                            tx_n: (*txn) as u64,
+                            results: Some(result_getter(*bn, *txn)),
+                        },
+                )),
+            }
+        };
+
+        let v = response.encode_to_vec();
+        let vlen = v.len();
+
+        let msg = PinnedMessage::from(v, vlen, crate::rpc::SenderType::Anon);
+
+        let mut profile = chan.1.clone();
+        profile.register("Init Sending Client Response");
+        if *bn % 1000 == 0 {
+            profile.should_print = true;
+            profile.prefix = String::from(format!("Block: {}, Txn: {}", *bn, *txn));
         }
-    }
-    for d in del_list {
-        lack_pend.remove(&d);
-    }
+        let _ = chan.0.send((msg, profile));
+
+        false
+    });
 }

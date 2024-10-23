@@ -13,8 +13,8 @@ use pft::{
 use prost::Message;
 use rand::{distributions::WeightedIndex, prelude::*};
 use rand_chacha::ChaCha20Rng;
-use std::{env, fs, io, path};
-use tokio::task::JoinSet;
+use std::{env, fs, io, path, time::Duration};
+use tokio::{task::JoinSet, time::sleep};
 use std::time::Instant;
 
 #[global_allocator]
@@ -45,6 +45,8 @@ fn process_args() -> ClientConfig {
 }
 
 async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, config: ClientConfig) -> io::Result<()> {    
+    sleep(Duration::from_millis(10) * (idx as u32)).await;
+    
     let mut config = config.clone();
     let mut leader_rr = 0;
     let mut curr_leader = config.net_config.nodes.keys().into_iter().collect::<Vec<_>>()[leader_rr].clone();

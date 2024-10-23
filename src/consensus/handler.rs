@@ -424,15 +424,6 @@ where
         ctx.total_client_requests.fetch_add(curr_client_req_num, Ordering::SeqCst);
         trace!("Client handler: {} client requests", ctx.total_client_requests.load(Ordering::SeqCst));
         
-        if !ctx.i_am_leader.load(Ordering::SeqCst) {
-            do_respond_with_current_leader(&ctx, &curr_client_req).await;
-            // Reset for next iteration
-            curr_client_req.clear();
-            curr_client_req_num = 0;
-            signature_timer_tick = false;
-            continue;
-        }
-
         if !ctx.view_is_stable.load(Ordering::SeqCst) {
             do_respond_with_try_again(&curr_client_req, NodeInfo {
                 nodes: ctx.config.get().net_config.nodes.clone(),
@@ -444,15 +435,27 @@ where
             signature_timer_tick = false;
             continue;
         }
-
-        // Respond to read requests: Only leader responds for now.
+        
+        // Respond to read requests: Any replica can reply.
         // Removes read-only requests from curr_client_req.
         do_respond_to_read_requests(&ctx, &engine, &mut curr_client_req).await;
-        if curr_client_req.len() == 0 {
+        // if curr_client_req.len() == 0 {
+        //     curr_client_req_num = 0;
+        //     signature_timer_tick = false;
+        //     continue;
+        // }
+
+        if !ctx.i_am_leader.load(Ordering::SeqCst) {
+            if curr_client_req.len() > 0 {
+                do_respond_with_current_leader(&ctx, &curr_client_req).await;
+            }
+            // Reset for next iteration
+            curr_client_req.clear();
             curr_client_req_num = 0;
             signature_timer_tick = false;
             continue;
         }
+
 
 
         let cfg = ctx.config.get();
@@ -467,10 +470,20 @@ where
             || (pending_signatures >= cfg.consensus_config.signature_max_delay_blocks);
         // Or I actually got some transactions and I really need to sign
 
+        if signature_timer_tick && curr_client_req.len() == 0 {
+            trace!("Blank heartbeat");
+            force_noop(&ctx).await;
+            curr_client_req_num = 0;
+            signature_timer.reset();
+            continue;
+        }
+
+
         // Semaphore will be released in `do_commit` when a commit happens.
         #[cfg(feature = "no_pipeline")]
         ctx.should_progress.acquire().await.unwrap().forget();
 
+        trace!("AppendEntries with {} entries", curr_client_req.len());
         match do_append_entries(
             ctx.clone(), &engine.clone(), client.clone(),
             &mut curr_client_req, should_sig,

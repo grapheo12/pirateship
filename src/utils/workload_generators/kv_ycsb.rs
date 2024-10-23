@@ -1,4 +1,4 @@
-use std::process::exit;
+use std::{process::exit, time::Instant};
 
 use log::info;
 use rand::distributions::{Uniform, WeightedIndex};
@@ -63,7 +63,7 @@ impl KVReadWriteYCSBGenerator {
             }
         }
 
-        let rng = ChaCha20Rng::seed_from_u64(210);
+        let rng = ChaCha20Rng::from_entropy();
 
         let read_write_weights = [
             (TxOpType::Read, (config.read_ratio * 1000.0) as i32),
@@ -161,10 +161,10 @@ impl KVReadWriteYCSBGenerator {
 
         ProtoTransaction {
             on_receive: None,
-            on_byzantine_commit: Some(ProtoTransactionPhase {
+            on_crash_commit: Some(ProtoTransactionPhase {
                 ops,
             }),
-            on_crash_commit: None,
+            on_byzantine_commit: None,
             is_reconfiguration: false,
         }
     }
