@@ -483,7 +483,7 @@ where
         #[cfg(feature = "no_pipeline")]
         ctx.should_progress.acquire().await.unwrap().forget();
 
-        trace!("AppendEntries with {} entries", curr_client_req.len());
+        info!("AppendEntries with {} entries", curr_client_req.len());
         match do_append_entries(
             ctx.clone(), &engine.clone(), client.clone(),
             &mut curr_client_req, should_sig,

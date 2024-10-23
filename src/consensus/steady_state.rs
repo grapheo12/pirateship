@@ -595,8 +595,8 @@ where Engine: crate::execution::Engine
 
             if let crate::proto::rpc::proto_payload::Message::ClientRequest(req) = ms {
                 if req.tx.is_some() {
-                    // let is_byz = req.tx.as_ref().unwrap().on_byzantine_commit.is_some();
-                    let is_byz = false;
+                    let is_byz = req.tx.as_ref().unwrap().on_byzantine_commit.is_some();
+                    // let is_byz = false;
                     tx.push(req.tx.clone().unwrap());
                     lack_pend.insert((is_byz, block_n, tx.len() - 1), (chan.clone(), profile.to_owned()));
                 }

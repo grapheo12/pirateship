@@ -3,7 +3,7 @@
 
 use std::sync::atomic::Ordering;
 
-use log::warn;
+use log::{error, info, warn};
 use prost::Message;
 use tokio::{fs::read, sync::MutexGuard};
 
@@ -126,6 +126,11 @@ pub async fn do_reply_transaction_receipt<'a, F>(
 ) where F: Fn(u64 /* bn */, usize /* txn */) -> ProtoTransactionResult
 {
     let mut lack_pend = ctx.client_ack_pending.lock().await;
+    if clear_byz {
+        info!("Responding to Byz commits: {} Pending requests: {}", n, lack_pend.len());
+    } else {
+        info!("Responding to Crash commits: {} Pending requests: {}", n, lack_pend.len());
+    }
     lack_pend.retain(|(is_byz, bn, txn), chan| {
         if clear_byz != *is_byz {
             // If is_byz == true then only clear if clear_byz == true
@@ -184,7 +189,16 @@ pub async fn do_reply_transaction_receipt<'a, F>(
             profile.should_print = true;
             profile.prefix = String::from(format!("Block: {}, Txn: {}", *bn, *txn));
         }
-        let _ = chan.0.send((msg, profile));
+        let send_res = chan.0.send((msg, profile));
+        if let Err(e) = send_res {
+            error!("Error in sending response: {}", e);
+            return true;
+        } else {
+            info!("Response sent");
+        }
+
+
+
 
         false
     });

@@ -85,12 +85,16 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
 
         let start = Instant::now();
         loop {          // Retry loop
+            // info!("Client {}: Sending request", idx);
             let msg = PinnedClient::send_and_await_reply(
                 &client,
                 &curr_leader,
                 MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon),
             )
             .await;
+            // info!("Client {}: Received response", idx);
+
+
             if let Err(_) = msg {
                 leader_rr = (leader_rr + 1) % config.net_config.nodes.len();
                 curr_leader = config.net_config.nodes.keys().into_iter().collect::<Vec<_>>()[leader_rr].clone();
