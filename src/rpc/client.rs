@@ -371,37 +371,11 @@ impl PinnedClient {
         data: &PinnedMessage,
     ) -> Result<Vec<PinnedMessage>, Error> {
         let mut result = Vec::new();
+
         for name in send_list {
             let res = PinnedClient::send_and_await_reply(client, name, data.as_ref()).await?;
             result.push(res);
         }
-        // let mut profile = LatencyProfile::new();
-        // PinnedClient::broadcast(client, send_list, data, &mut profile).await?;
-
-
-        // for name in send_list {
-        //     info!("Attempting to get response from {} yo1", name);
-        //     let sock = PinnedClient::get_sock(client, name).await?;
-        //     info!("Attempting to get response from {} yo2", name);
-        //     let mut lsock = sock.0.lock().await;
-        //     info!("Attempting to get response from {} yo3", name);
-        //     lsock.flush().await?;  // Need this flush; otherwise it is a deadlock.
-
-        //     let mut resp_buf = vec![0u8; 256];
-        //     let sz = lsock.get_next_frame(&mut resp_buf).await? as usize;
-        //     if sz == 0 {
-        //         return Err(Error::new(
-        //             ErrorKind::InvalidData,
-        //             "socket probably closed!",
-        //         ));
-        //     }
-            
-        //     result.push(PinnedMessage::from(
-        //         resp_buf,
-        //         sz as usize,
-        //         super::SenderType::Auth(name.clone()),
-        //     ))
-        // }
 
         Ok(result)
     }
