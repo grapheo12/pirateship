@@ -252,6 +252,7 @@ where Engine: crate::execution::Engine
                    _old_full_nodes.contains(signer)
                 }).count();
 
+                #[cfg(feature = "fast_path")]
                 if !ctx.view_is_stable.load(Ordering::SeqCst) {
                     // Fast path can't be done if the view is not stable.
                     info!("For fast path: {} {}", fullnode_sigs, get_all_nodes_num(&ctx));
@@ -259,6 +260,7 @@ where Engine: crate::execution::Engine
                         fast_path_qcs.push(vote_sig.n);
                     }
                 }
+
                 if fullnode_sigs >= super_majority as usize
                 && (old_super_majority == 0 || oldfullnode_sigs >= old_super_majority as usize)
                 {

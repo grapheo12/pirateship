@@ -227,6 +227,7 @@ where
 
     let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
 
+    #[cfg(feature = "fast_path")]
     maybe_byzantine_commit_by_fast_path(ctx, client, engine, fork).await;
 
     while !maybe_byzantine_commit_with_n_and_view(ctx, client, engine, fork, check_qc, last_qc_view)

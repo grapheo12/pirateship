@@ -8,27 +8,27 @@ pirateship_logger:
 
 .PHONY: lucky_raft_logger
 lucky_raft_logger:
-	CC=clang CXX=clang++ cargo build --release --features lucky_raft,app_logger --no-default-features
+	CC=clang CXX=clang++ cargo build --release --features lucky_raft,app_logger,storage --no-default-features
 
 
 .PHONY: signed_raft_logger
 signed_raft_logger:
-	CC=clang CXX=clang++ cargo build --release --features signed_raft,app_logger --no-default-features
+	CC=clang CXX=clang++ cargo build --release --features signed_raft,app_logger,storage --no-default-features
 
 
 .PHONY: diverse_raft_logger
 diverse_raft_logger:
-	CC=clang CXX=clang++ cargo build --release --features diverse_raft,app_logger --no-default-features
+	CC=clang CXX=clang++ cargo build --release --features diverse_raft,app_logger,storage --no-default-features
 
 
 .PHONY: jolteon_logger
 jolteon_logger:
-	CC=clang CXX=clang++ cargo build --release --features jolteon,app_logger --no-default-features
+	CC=clang CXX=clang++ cargo build --release --features jolteon,app_logger,storage,fast_path --no-default-features
 
 
 .PHONY: chained_pbft_logger
 chained_pbft_logger:
-	CC=clang CXX=clang++ cargo build --release --features chained_pbft,app_logger --no-default-features
+	CC=clang CXX=clang++ cargo build --release --features chained_pbft,app_logger,storage,fast_path --no-default-features
 
 .PHONY: bench
 bench:
