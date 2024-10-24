@@ -3,6 +3,7 @@
 
 use hex::ToHex;
 use prost::Message;
+use rand_chacha::ChaCha20Rng;
 use std::sync::atomic::Ordering;
 
 use crate::{
@@ -65,21 +66,23 @@ pub fn get_f_plus_one_num(ctx: &PinnedServerContext) -> u64 {
     (n / 3) + 1
 }
 
-pub fn get_f_plus_one_send_list(config: &ClientConfig) -> Vec<String> {
+pub fn get_f_plus_one_send_list(config: &ClientConfig, rng: &mut ChaCha20Rng) -> Vec<String> {
     let n = config.net_config.nodes.len();
     let f_plus_one = (n / 3) + 1;
 
-    let mut first_f_plus_one = Vec::new();
+    let mut rand_f_plus_one = Vec::new();
+    let rand_idx = rand::seq::index::sample(rng, config.net_config.nodes.len(), f_plus_one)
+        .into_vec();
     let mut i = 0;
 
     config.net_config.nodes.iter().for_each(|(k, _)| {
-        if i < f_plus_one {
-            first_f_plus_one.push(k.clone());
-            i += 1;
+        if rand_idx.contains(&i) {
+            rand_f_plus_one.push(k.clone());
         }
+        i += 1;
     });
 
-    first_f_plus_one
+    rand_f_plus_one
 }
 
 pub fn get_old_f_plus_one_num(ctx: &PinnedServerContext) -> u64 {

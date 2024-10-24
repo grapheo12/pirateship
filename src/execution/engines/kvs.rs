@@ -96,8 +96,8 @@ impl KVStoreEngine {
                     match op.op_type() {
                         crate::proto::execution::ProtoTransactionOpType::Write => {
                             let num_crash_writes = self.num_crash_committed_writes.fetch_add(1, Ordering::SeqCst) + 1;
-                            if num_crash_writes % 1000 == 0 {
-                                trace!("Num Crash Committed Write Requests: {}; Num Keys only crash committed: {}", num_crash_writes, ci_state.len());
+                            if num_crash_writes % 10000 == 0 {
+                                info!("Num Crash Committed Write Requests: {}; Num Keys only crash committed: {}", num_crash_writes, ci_state.len());
                             }
                             // Sanity check
                             // Format (key, val)
@@ -153,7 +153,7 @@ impl KVStoreEngine {
                     match op.op_type() {
                         crate::proto::execution::ProtoTransactionOpType::Write => {
                             let num_byz_writes = self.num_byz_committed_writes.fetch_add(1, Ordering::SeqCst) + 1;
-                            if num_byz_writes % 1000 == 0 {
+                            if num_byz_writes % 10000 == 0 {
                                 info!("Num Byz Committed Write Requests: {}; Num keys byz committed: {}; BCI: {}",
                                     num_byz_writes, bci_state.len(), self.last_bci.load(Ordering::SeqCst));
                             }
@@ -220,7 +220,7 @@ impl KVStoreEngine {
     ) -> ProtoTransactionOpResult
     {
         let num_reads = self.num_reads.fetch_add(1, Ordering::SeqCst) + 1;
-        if num_reads % 1000 == 0 {
+        if num_reads % 10000 == 0 {
             trace!("Num Read Requests: {}", num_reads);
         }
         // First find in ci_state

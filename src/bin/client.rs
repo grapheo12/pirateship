@@ -4,7 +4,7 @@
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use log::{debug, error, info, trace};
 use pft::{
-    config::{default_log4rs_config, ClientConfig}, consensus::utils::get_f_plus_one_send_list, crypto::KeyStore, proto::{
+    config::{default_log4rs_config, ClientConfig}, consensus::utils::get_f_plus_one_send_list, crypto::{cmp_hash, KeyStore}, proto::{
         client::{self, ProtoByzPollRequest, ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload
     }, rpc::{
         client::{Client, PinnedClient},
@@ -14,6 +14,7 @@ use pft::{
 use prost::Message;
 use rand::{distributions::WeightedIndex, prelude::*};
 use rand_chacha::ChaCha20Rng;
+use core::error;
 use std::{env, fs, io, path, time::Duration};
 use tokio::{sync::mpsc, task::JoinSet, time::sleep};
 use std::time::Instant;
@@ -188,35 +189,85 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
 
 
 async fn byz_poll_worker(idx: usize, client: &PinnedClient, config: &ClientConfig, mut byz_poll_rx: UnboundedReceiver<(u64, u64, Instant)>)  -> io::Result<()> {
-    // TODO: Send list needs to expand if (f + 1) responses are not received.
+    // TODO: In retry loop, reuse already received messages.
     // Send list will change when reconfiguration happens.
-    // Check for matching responses.
-    
-    let send_list = get_f_plus_one_send_list(config);
+
+    let mut rng = ChaCha20Rng::from_entropy();
     let mut req_buf = Vec::new();
     while byz_poll_rx.recv_many(&mut req_buf, 1).await > 0 {
-        let (block_n,tx_n, start) = req_buf[0];
-        let req = ProtoPayload {
-            message: Some(pft::proto::rpc::proto_payload::Message::ByzPollRequest(
-                ProtoByzPollRequest { block_n, tx_n }
-            ))
-        };
+        loop { // Retry loop
+            let send_list = get_f_plus_one_send_list(config, &mut rng);
+            let (block_n,tx_n, start) = req_buf[0];
+            let req = ProtoPayload {
+                message: Some(pft::proto::rpc::proto_payload::Message::ByzPollRequest(
+                    ProtoByzPollRequest { block_n, tx_n }
+                ))
+            };
+    
+            let v = req.encode_to_vec();
+            let vlen = v.len();
+            let msg = PinnedMessage::from(v, vlen, pft::rpc::SenderType::Anon);
+    
+            let res = PinnedClient::broadcast_and_await_reply(client, &send_list, &msg).await;
+            match res {
+                Ok(_) => {
+                    info!("Byz Poll {}: Block num: {}, Tx num: {}, Latency: {} us",
+                        idx, block_n, tx_n,
+                        start.elapsed().as_micros()
+                    );
+                },
+                Err(e) => {
+                    error!("Error in Byz poll: {}", e);
+                    continue;
+                },
+            }
 
-        let v = req.encode_to_vec();
-        let vlen = v.len();
-        let msg = PinnedMessage::from(v, vlen, pft::rpc::SenderType::Anon);
+            // Check if responses match.
+            let res = res.unwrap();
+            let msg = res[0].as_ref().0;
+            let sz = res[0].as_ref().1;
 
-        let res = PinnedClient::broadcast_and_await_reply(client, &send_list, &msg).await;
-        match res {
-            Ok(_) => {
-                info!("Byz Poll {}: Block num: {}, Tx num: {}, Latency: {} us",
-                    idx, block_n, tx_n,
-                    start.elapsed().as_micros()
-                );
-            },
-            Err(e) => {
-                error!("Error in Byz poll: {}", e);
-            },
+            let cmp_reply = ProtoClientReply::decode(&msg.as_slice()[..sz]).unwrap();
+            let cmp_hsh = match cmp_reply.reply {
+                Some(client::proto_client_reply::Reply::Receipt(receipt)) => {
+                    receipt.req_digest.clone()
+                },
+                _ => {
+                    error!("Malformed response!");
+                    continue;
+                },
+            };
+
+            let mut malformed_responses = false;
+
+            for _r in &res {
+                let msg = res[0].as_ref().0;
+                let sz = res[0].as_ref().1;
+
+                let cmp_reply = ProtoClientReply::decode(&msg.as_slice()[..sz]).unwrap();
+                let chk_hsh = match cmp_reply.reply {
+                    Some(client::proto_client_reply::Reply::Receipt(receipt)) => {
+                        receipt.req_digest.clone()
+                    },
+                    _ => {
+                        error!("Malformed response!");
+                        malformed_responses = true;
+                        break;
+                    },
+                };
+
+                if !cmp_hash(&chk_hsh, &cmp_hsh) {
+                    error!("Mismatched hash");
+                    malformed_responses = true;
+                    break;
+                }
+            }
+
+            if malformed_responses {
+                continue;
+            }
+
+            break;
         }
 
         req_buf.clear();
