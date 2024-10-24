@@ -66,6 +66,11 @@ pub fn get_f_plus_one_num(ctx: &PinnedServerContext) -> u64 {
     (n / 3) + 1
 }
 
+pub fn get_all_nodes_num(ctx: &PinnedServerContext) -> u64 {
+    let _cfg = ctx.config.get();
+    _cfg.consensus_config.node_list.len() as u64
+}
+
 pub fn get_f_plus_one_send_list(config: &ClientConfig, rng: &mut ChaCha20Rng) -> Vec<String> {
     let n = config.net_config.nodes.len();
     let f_plus_one = (n / 3) + 1;

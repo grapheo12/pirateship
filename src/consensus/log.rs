@@ -374,14 +374,14 @@ impl Log {
     }
 
     pub fn get_qc_at_n(&self, n: u64, curr_view: u64) -> Result<ProtoQuorumCertificate, Error> {
-        let sig_map = self.get(n)?.qc_sigs.clone();
+        let sig_map = &self.get(n)?.qc_sigs;
         Ok(ProtoQuorumCertificate {
             digest: self.hash_at_n(n).unwrap(),
             n,
             sig: sig_map
                 .into_iter()
                 .map(|(k, v)| ProtoNameWithSignature {
-                    name: k,
+                    name: k.clone(),
                     sig: v.to_vec(),
                 })
                 .collect(),

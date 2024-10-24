@@ -4,6 +4,7 @@
 use hex::ToHex;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
+use core::num;
 use std::{collections::HashMap, sync::atomic::Ordering};
 use tokio::sync::MutexGuard;
 
@@ -25,6 +26,8 @@ use crate::{
         PinnedMessage,
     },
 };
+
+use super::utils::get_all_nodes_num;
 
 /// Rollback such that the commit index is at max (n - 1)
 pub fn maybe_rollback<Engine>(
@@ -169,6 +172,42 @@ where
     true
 }
 
+pub async fn maybe_byzantine_commit_by_fast_path<'a, Engine>(
+    ctx: &PinnedServerContext,
+    client: &PinnedClient,
+    engine: &Engine,
+    fork: &'a MutexGuard<'a, Log>
+)
+where
+    Engine: crate::execution::Engine,
+{
+    let last_block_with_qc = fork.last_block_with_qc();
+    let qcs = &fork.get(last_block_with_qc).unwrap().block.qc;
+
+    for qc in qcs {
+        let num_votes = qc.sig.len() as u64;
+        if get_all_nodes_num(ctx) > num_votes {
+            continue;
+        }
+    
+        let my_view = ctx.state.view.load(Ordering::SeqCst);
+        let last_qc_view = fork.last_qc_view();
+        if my_view != last_qc_view {
+            continue;
+        }
+    
+        let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+        let updated_bci = qc.n;
+        
+        if updated_bci > old_bci {
+            if updated_bci % 1000 == 0 {
+                info!("Byzantine commit by fast path: {}", updated_bci);
+            }
+            do_byzantine_commit(ctx, client, engine, fork, updated_bci).await;
+        }        
+    }
+}
+
 /// Return true if bci was updated.
 pub async fn maybe_byzantine_commit<'a, Engine>(
     ctx: &PinnedServerContext,
@@ -188,6 +227,8 @@ where
 
     let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
 
+    maybe_byzantine_commit_by_fast_path(ctx, client, engine, fork).await;
+
     while !maybe_byzantine_commit_with_n_and_view(ctx, client, engine, fork, check_qc, last_qc_view)
         .await
     {
@@ -198,6 +239,8 @@ where
         trace!("Checking lower QCs: {}", check_qc);
         // view doesn't change from last_qc_view due to commit condition.
     }
+
+
     let new_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
 
     new_bci > old_bci

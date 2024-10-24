@@ -118,6 +118,7 @@ pub fn do_create_qcs(
     next_qc_list: &mut MutexGuard<IndexMap<(u64, u64), ProtoQuorumCertificate>>,
     byz_qc_pending: &mut MutexGuard<HashSet<u64>>,
     qcs: &Vec<u64>,
+    fast_path_qcs: &Vec<u64>,
 ) {
     for n in qcs {
         // It is already done.
@@ -143,6 +144,29 @@ pub fn do_create_qcs(
         } else {
             debug!("QC formed for index: {}", n);
         }
+    }
+
+    // Fast path QCs can only be formed once, since it takes ALL votes to create one
+    // Once disseminated, fast path QCs fo byzantine commit.
+    // So for deduplication (in case a vote is sent twice), only need to compare with bci.
+
+    let bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+    for n in fast_path_qcs {
+        if *n <= bci {
+            continue;
+        }
+
+        let view = ctx.state.view.load(Ordering::SeqCst);
+
+        let qc = match fork.get_qc_at_n(*n, view) {
+            Ok(qc) => qc,
+            Err(_) => {
+                continue;
+            }
+        };
+
+        next_qc_list.insert((qc.n, qc.view), qc);
+        info!("Fast path qc for {}", n);
     }
 }
 
@@ -210,6 +234,7 @@ where Engine: crate::execution::Engine
 
 
     let mut qcs = Vec::new();
+    let mut fast_path_qcs = Vec::new();
 
     for vote_sig in &vote.sig_array {
         if vote_sig.n > fork.last() {
@@ -227,6 +252,13 @@ where Engine: crate::execution::Engine
                    _old_full_nodes.contains(signer)
                 }).count();
 
+                if !ctx.view_is_stable.load(Ordering::SeqCst) {
+                    // Fast path can't be done if the view is not stable.
+                    info!("For fast path: {} {}", fullnode_sigs, get_all_nodes_num(&ctx));
+                    if fullnode_sigs == get_all_nodes_num(&ctx) as usize {
+                        fast_path_qcs.push(vote_sig.n);
+                    }
+                }
                 if fullnode_sigs >= super_majority as usize
                 && (old_super_majority == 0 || oldfullnode_sigs >= old_super_majority as usize)
                 {
@@ -264,6 +296,7 @@ where Engine: crate::execution::Engine
             &mut next_qc_list,
             &mut byz_qc_pending,
             &qcs,
+            &fast_path_qcs,
         );
     }
 
