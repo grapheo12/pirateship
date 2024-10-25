@@ -7,7 +7,7 @@ use hex::ToHex;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
 use std::{
-    collections::HashMap, io::{BufWriter, Error, ErrorKind, Write}, sync::atomic::Ordering
+    collections::{HashMap, HashSet}, io::{BufWriter, Error, ErrorKind, Write}, sync::atomic::Ordering
 };
 use tokio::sync::MutexGuard;
 
@@ -40,11 +40,117 @@ struct ForkStat {
     last_view: u64,
     last_n: u64,
     last_qc_view: u64,
+    last_qc_n: u64,
+    fork_suffix_after_last_qc_n: ProtoFork,
     // last_signed_block: u64,
     name: String
 }
 
+fn __hash_block(b: &ProtoBlock) -> Vec<u8> {
+    hash(&b.encode_to_vec())
+}
+
+/// Take the highest QC.n (since this is called after subrule1, highest QC from each fork will be of the highest possible view)
+/// See if |forks sharing that QC| >= f + 1, otherwise, nobody could've gone fast path.
+/// For all positions after the highest QC.n
+///     See if one block has support of >= (f + 1) forks,
+///     but doesn't conflict with another block that has >= (f + 1) forks
+/// Take the fork for which this signed block is the highest.
+/// (There should be at least (f + 1) that match this.)
+/// Drop everything else.
+fn fork_choice_filter_fast_path(
+    ctx: &PinnedServerContext,
+    fork_set: &mut HashMap<String, ForkStat>
+) {
+    let _fork_set = & *fork_set;
+    let mut highest_qc_n = 0;
+    for (_, stat) in _fork_set {
+        if highest_qc_n < stat.last_qc_n {
+            highest_qc_n = stat.last_qc_n;
+        }
+    }
+
+    let matching_qc_forks = _fork_set.iter()
+        .map(|e| e.1.last_qc_n)
+        .reduce(|acc, e| {
+            if e == highest_qc_n {
+                acc + 1
+            } else {
+                acc
+            }
+        }
+    );
+
+    let f_plus_one = get_f_plus_one_num(ctx);
+
+    if matching_qc_forks.is_none() || matching_qc_forks.unwrap() < f_plus_one {
+        return;
+    }
+
+    fork_set.retain(|_, v| {
+        v.last_qc_n == highest_qc_n
+    });
+
+    let _fork_set = & *fork_set;
+    let start_point = _fork_set.iter()
+    .map(|(_, v)| {
+        if v.fork_suffix_after_last_qc_n.blocks.len() == 0 {
+            highest_qc_n
+        } else {
+            v.fork_suffix_after_last_qc_n.blocks.last().as_ref().unwrap().n
+        }
+    })
+    .reduce(|acc, e| if acc > e { e } else { acc })
+    .unwrap();
+
+    if start_point == highest_qc_n {
+        return;
+    }
+
+    for n in (highest_qc_n + 1..(start_point + 1)).rev() {
+        let mut supports: HashMap<Vec<u8>, HashSet<String>> = HashMap::new();
+        for (name, stat) in _fork_set {
+            let blk: Vec<_> = stat.fork_suffix_after_last_qc_n.blocks.iter().filter(|e| {
+                e.n == n
+            }).collect();
+            let blk = blk[0];
+            let blk_hsh = __hash_block(&blk);
+
+            if !supports.contains_key(&blk_hsh) {
+                supports.insert(blk_hsh.clone(), HashSet::new());
+            }
+            supports.get_mut(&blk_hsh).unwrap().insert(name.clone());
+        }
+
+        // How many blocks have >= (f + 1) support?
+        let possible_fp_blocks: HashMap<_, _> = 
+            supports.iter().filter(|(_, v)| v.len() as u64 >= f_plus_one)
+            .collect();
+
+        if possible_fp_blocks.len() == 0 {
+            // This position couldn't have been fast path committed
+            continue;
+        } else if possible_fp_blocks.len() > 1 {
+            // Somebody is definitely lying.
+            // There can't be any fast path commit here.
+            continue;
+        } else {
+            // This may have been committed by fast path.
+            // Due to hash chaining, we don't have to check more.
+            let fp_support_names: &HashSet<String> = possible_fp_blocks.into_values()
+                .collect::<Vec<_>>()[0];
+            fork_set.retain(|k, _| {
+                fp_support_names.contains(k)
+            });
+
+            return;
+        }
+            
+    }
+}
+
 fn fork_choice_rule_get(
+    ctx: &PinnedServerContext,
     fork_set: &HashMap<String, ProtoViewChange>,
     my_name: &String,
 ) -> (ProtoFork, ForkStat) {
@@ -60,6 +166,8 @@ fn fork_choice_rule_get(
                     last_n: 0,
                     last_qc_view: 0,
                     last_view: 0,
+                    last_qc_n: 0,
+                    fork_suffix_after_last_qc_n: ProtoFork::default(),
                     // last_signed_block: 0,
                     name: name.clone()
                 },
@@ -69,9 +177,13 @@ fn fork_choice_rule_get(
         let last_view = vc.view;
         let last_n = vc.fork_len;
 
-        let last_qc_view = match &vc.fork_last_qc {
-            Some(qc) => qc.view,
-            None => 0,
+        let (last_qc_view, last_qc_n, fork_suffix_after_last_qc_n) = match &vc.fork_last_qc {
+            Some(qc) => {
+                let mut suffix = vc.fork.as_ref().unwrap().clone();
+                suffix.blocks.retain(|e| e.n > qc.n);
+                (qc.view, qc.n, suffix)
+            },
+            None => (0, 0, ProtoFork::default()),
         };
         chk_stats.insert(
             name.clone(),
@@ -79,6 +191,8 @@ fn fork_choice_rule_get(
                 last_n,
                 last_qc_view,
                 last_view,
+                last_qc_n,
+                fork_suffix_after_last_qc_n,
                 // last_signed_block,
                 name: name.clone()
             },
@@ -94,6 +208,10 @@ fn fork_choice_rule_get(
     }
 
     chk_stats.retain(|_k, v| v.last_qc_view == max_last_qc_view);
+
+    // SubRule for fastpath
+    #[cfg(feature = "fast_path")]
+    fork_choice_filter_fast_path(ctx, &mut chk_stats);
 
     // SubRule 2: last_view as high as possible
     let mut max_last_view = 0;
@@ -560,7 +678,7 @@ pub async fn do_init_new_leader<Engine>(
     let mut profile = LatencyProfile::new();
 
     // Choose fork
-    let (mut chosen_fork, chosen_fork_stat) = fork_choice_rule_get(&fork_set, &_cfg.net_config.name);
+    let (mut chosen_fork, chosen_fork_stat) = fork_choice_rule_get(&ctx, &fork_set, &_cfg.net_config.name);
     // Backfill the fork, such that the overwrite doesn't fail.
     profile.register("Fork Choice Rule done");
     
@@ -793,9 +911,13 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
             for (j, fork_validation) in f.blocks[i as usize].fork_validation.iter().enumerate() {
                 // Is this a valid fork?
                 // Check the signature on the fork.
-                let last_qc_view = match &fork_validation.fork_last_qc {
-                    Some(qc) => qc.view,
-                    None => 0
+                let (last_qc_view, last_qc_n, fork_suffix_after_last_qc_n) = match &fork_validation.fork_last_qc {
+                    Some(qc) => {
+                        let mut suffix = fork_validation.fork.as_ref().unwrap().clone();
+                        suffix.blocks.retain(|e| e.n > qc.n);
+                        (qc.view, qc.n, suffix)
+                    },
+                    None => (0, 0)
                 };
                 let chk = verify_view_change_msg_raw(
                     &fork_validation.fork_hash,
@@ -811,7 +933,7 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
                 let fork_stat = ForkStat {
                     last_view: fork_validation.view,
                     last_n: fork_validation.fork_len,
-                    last_qc_view,
+                    last_qc_view, last_qc_n,
                     name: fork_validation.name.clone(),
                 };
 
