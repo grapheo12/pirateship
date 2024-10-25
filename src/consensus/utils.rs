@@ -49,21 +49,50 @@ pub fn get_majority_num(ctx: &PinnedServerContext) -> u64 {
 }
 
 pub fn get_super_majority_num(ctx: &PinnedServerContext) -> u64 {
+    
     let _cfg = ctx.config.get();
     let n = _cfg.consensus_config.node_list.len() as u64;
-    n - (n / 3)
+    
+    #[cfg(feature = "platforms")]
+    {
+        let u = _cfg.consensus_config.liveness_u;
+    
+        n - u
+    }
+
+    #[cfg(not(feature = "platforms"))]
+    {
+        n - (n / 3)
+    }
 }
 
+/// TODO: Save old_config_u
 pub fn get_old_super_majority_num(ctx: &PinnedServerContext) -> u64 {
     let old_full_nodes = ctx.old_full_nodes.get();
     let n = old_full_nodes.len() as u64;
     n - (n / 3)
 }
 
+/// For platforms, this number is actually (r + 1)
+/// But we know N >= 2u + r + 1
+/// Assuming you are not deploying more than required nodes, N = 2u + r + 1
+/// So (r + 1) = N - 2u
 pub fn get_f_plus_one_num(ctx: &PinnedServerContext) -> u64 {
     let _cfg = ctx.config.get();
     let n = _cfg.consensus_config.node_list.len() as u64;
-    (n / 3) + 1
+
+    #[cfg(feature = "platforms")]
+    {
+        let u = _cfg.consensus_config.liveness_u;
+    
+        n - 2 * u
+    }
+
+    #[cfg(not(feature = "platforms"))]
+    {
+        (n / 3) + 1
+    }
+
 }
 
 pub fn get_all_nodes_num(ctx: &PinnedServerContext) -> u64 {

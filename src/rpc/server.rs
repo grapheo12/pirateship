@@ -5,7 +5,7 @@ use std::{fs::File, io::{self, Cursor, Error}, path, sync::Arc, time::{Duration,
 
 use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, rpc::auth, utils::AtomicStruct};
 use indexmap::IndexMap;
-use tokio::{io::{BufWriter, ReadHalf}, sync::{mpsc}};
+use tokio::{io::{BufWriter, ReadHalf}, sync::mpsc};
 use log::{debug, info, trace, warn};
 use rustls::{
     crypto::aws_lc_rs,
