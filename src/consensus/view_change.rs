@@ -15,7 +15,7 @@ use crate::{
     consensus::{
         handler::{LifecycleStage, PinnedServerContext},
         log::{Log, LogEntry}, reconfiguration::fast_forward_config_from_vc,
-    }, crypto::{hash, KeyStore},
+    }, crypto::{cmp_hash, hash, KeyStore},
     proto::{
         client::{
             ProtoClientReply, ProtoClientRequest, ProtoTentativeReceipt
@@ -890,12 +890,57 @@ pub async fn force_noop(ctx: &PinnedServerContext) {
 }
 
 
+async fn verify_fast_path_chosen_fork<'a>(
+    ctx: &PinnedServerContext,
+    f: &ProtoFork,
+    my_fork: &'a MutexGuard<'a, Log>
+) -> bool {
+    // Check if this fork tries to overwrite a byz committed block.
+    // If fast path is disabled, this can never happen
+    // But with fast path enabled, we can commit something by fast path
+    // and then the new leader may try to overwrite it (maliciously.)
+
+    // TODO: Need a more comprehensive check. This is a necessary check but not sufficient.
+    // If the old leader did not replicate the fast path QC to sufficient nodes before dying,
+    // other (honest) nodes may not know about the commit and happily accept an overwrite.
+
+    let bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+    if f.blocks.last().is_none() {
+        // My fork matches exactly.
+        return true;
+    }
+
+    if f.blocks.last().as_ref().unwrap().n < bci {
+        return false;
+    }
+
+    for block in &f.blocks {
+        if block.n > bci {
+            break;
+        }
+
+        // This block MUST match with my fork
+        let my_hsh = my_fork.hash_at_n(block.n).unwrap();
+        let f_hsh = __hash_block(block);
+
+        if !cmp_hash(&my_hsh, &f_hsh) {
+            return false;
+        }
+    }
+
+    true
+}
 
 /// Split the given fork into two sequences: [..last New Leader msg] [Last new leader msg + 1..]
 /// Verify all previous NewLeader messages wrt the proposer and fork choice rule.
 /// If it is verified, fork.overwrite(ret.0) will not violate GlobalLock()
 /// Once overwrite is done, it is safe to push/verify_and_push the blocks in ret.1.
-pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &ProtoFork, super_majority: u64) -> Result<(ProtoFork, ProtoFork), Error> {
+pub async fn maybe_verify_view_change_sequence<'a>(
+    ctx: &PinnedServerContext,
+    f: &ProtoFork,
+    super_majority: u64,
+    my_fork: &'a MutexGuard<'a, Log>
+) -> Result<(ProtoFork, ProtoFork), Error> {
     let mut split_point = None;
     let _keys = ctx.keys.get();
     
@@ -913,11 +958,10 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
                 // Check the signature on the fork.
                 let (last_qc_view, last_qc_n, fork_suffix_after_last_qc_n) = match &fork_validation.fork_last_qc {
                     Some(qc) => {
-                        let mut suffix = fork_validation.fork.as_ref().unwrap().clone();
-                        suffix.blocks.retain(|e| e.n > qc.n);
+                        let suffix = ProtoFork::default();
                         (qc.view, qc.n, suffix)
                     },
-                    None => (0, 0)
+                    None => (0, 0, ProtoFork::default())
                 };
                 let chk = verify_view_change_msg_raw(
                     &fork_validation.fork_hash,
@@ -933,7 +977,7 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
                 let fork_stat = ForkStat {
                     last_view: fork_validation.view,
                     last_n: fork_validation.fork_len,
-                    last_qc_view, last_qc_n,
+                    last_qc_view, last_qc_n, fork_suffix_after_last_qc_n,
                     name: fork_validation.name.clone(),
                 };
 
@@ -966,6 +1010,13 @@ pub async fn maybe_verify_view_change_sequence(ctx: &PinnedServerContext, f: &Pr
             if max_qc_view_selected < max_qc_view_seen {
                 return Err(Error::new(ErrorKind::InvalidData, "New Leader message with invalid max qc; SubRule1 violated"))
             }
+
+            // Subrule fastpath
+            #[cfg(feature = "fast_path")]
+            if !verify_fast_path_chosen_fork(ctx, f, my_fork).await {
+                return Err(Error::new(ErrorKind::InvalidData, "New Leader message with invalid chosen fork; violates fast path"));
+            }
+
 
             let selected_fork_size = f.blocks.len() - 1;
             let selected_fork_last_view = f.blocks[selected_fork_size].view;

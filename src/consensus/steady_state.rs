@@ -478,7 +478,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
         }
         let f = maybe_backfill_fork_till_last_match(&ctx, &client, f, &fork, sender).await;
 
-        let res = maybe_verify_view_change_sequence(&ctx, &f, super_majority).await;
+        let res = maybe_verify_view_change_sequence(&ctx, &f, super_majority, &fork).await;
         
         if let Err(e) = res {
             warn!("Verification error: {}", e);
