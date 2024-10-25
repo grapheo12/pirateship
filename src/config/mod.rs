@@ -79,6 +79,21 @@ pub struct ConsensusConfig {
 
     #[cfg(feature="storage")]
     pub log_storage_config: StorageConfig,
+
+    #[cfg(feature = "platforms")]
+    pub liveness_u: u64,
+}
+
+#[cfg(feature = "platforms")]
+impl ConsensusConfig {
+    pub fn validate_or_die(&self) {
+        let n = self.node_list.len() as u64;
+        let majority = n / 2 + 1;
+
+        if self.liveness_u > n - majority {
+            panic!("self.liveness({}) must be <= n({}) - majority({})", self.liveness_u, n, majority);
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -171,6 +186,9 @@ impl ClientConfig {
                 view_timeout_ms: 150,
                 vote_processing_workers: 128,
 
+                #[cfg(feature = "platforms")]
+                liveness_u: 1,
+
                 #[cfg(feature = "storage")]
                 log_storage_config: StorageConfig::RocksDB(RocksDBConfig::default()),
             },
@@ -182,3 +200,12 @@ impl ClientConfig {
 }
 
 pub type AtomicConfig = AtomicStruct<Config>;
+
+impl AtomicConfig {
+    pub fn set_checked(&self, config: Box<Config>) {
+        #[cfg(feature = "platforms")]
+        config.consensus_config.validate_or_die();
+
+        self.set(config);
+    }
+}

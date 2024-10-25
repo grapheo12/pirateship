@@ -59,6 +59,10 @@ fn test_nodeconfig_serialize() {
 
         #[cfg(feature = "storage")]
         log_storage_config: crate::config::StorageConfig::RocksDB(RocksDBConfig::default()),
+
+        #[cfg(feature = "platforms")]
+        liveness_u: 1,
+
     };
 
     let app_config = AppConfig {
@@ -198,7 +202,10 @@ async fn test_atomic_config_access() {
         view_timeout_ms: 150,
 
         #[cfg(feature = "storage")]
-        log_storage_config: crate::config::StorageConfig::RocksDB(RocksDBConfig::default())
+        log_storage_config: crate::config::StorageConfig::RocksDB(RocksDBConfig::default()),
+
+        #[cfg(feature = "platforms")]
+        liveness_u: 1,
     };
 
     let app_config = AppConfig {
@@ -242,7 +249,7 @@ async fn test_atomic_config_access() {
             let cfg = Arc::make_mut(&mut cfg);
             cfg.net_config.name = format!("node{}", i);
 
-            atomic_config2.set(cfg.clone());
+            atomic_config2.set_checked(cfg.clone());
             sleep(Duration::from_millis(1)).await;
         }
     });

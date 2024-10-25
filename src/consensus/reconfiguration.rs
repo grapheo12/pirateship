@@ -117,8 +117,8 @@ pub fn do_add_learners(ctx: &PinnedServerContext, client: &PinnedClient, learner
         insert_pub_key(new_keys, &learner.name, &learner.pub_key);
     }
 
-    ctx.config.set(new_cfg.clone());
-    client.0.config.set(new_cfg.clone());
+    ctx.config.set_checked(new_cfg.clone());
+    client.0.config.set_checked(new_cfg.clone());
     ctx.keys.set(new_keys.clone());
     client.0.key_store.set(new_keys.clone());
 
@@ -134,7 +134,7 @@ pub fn do_delete_learners(ctx: &PinnedServerContext, names: &Vec<String>) {
         remove_learner(new_cfg, name);
     }
 
-    ctx.config.set(new_cfg.clone());
+    ctx.config.set_checked(new_cfg.clone());
 }
 
 /// Upgrading a learner to a node == removing from learner list + adding to node list
@@ -150,7 +150,7 @@ pub fn do_upgrade_learners_to_node(ctx: &PinnedServerContext, names: &Vec<String
         insert_node(new_cfg, name);
     }
 
-    ctx.config.set(new_cfg.clone());
+    ctx.config.set_checked(new_cfg.clone());
 }
 
 /// Downgrading a node to a learner == removing from node list + adding to learner list
@@ -166,7 +166,7 @@ pub fn do_downgrade_nodes_to_learner(ctx: &PinnedServerContext, names: &Vec<Stri
         insert_learner(new_cfg, name);
     }
 
-    ctx.config.set(new_cfg.clone());
+    ctx.config.set_checked(new_cfg.clone());
 }
 
 /*

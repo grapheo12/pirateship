@@ -58,6 +58,9 @@ fn gen_config() -> Config {
         #[cfg(feature = "storage")]
         // log_storage_config: crate::config::StorageConfig::FileStorage(FileStorageConfig::default()),
         log_storage_config: crate::config::StorageConfig::RocksDB(RocksDBConfig::default()),
+
+        #[cfg(feature = "platforms")]
+        liveness_u: 1,
     };
 
     let app_config = AppConfig {
