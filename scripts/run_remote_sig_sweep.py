@@ -32,7 +32,7 @@ def run_with_given_signature_sweep(node_template, client_template, ip_list, iden
     print("Creating SSH connections")
     node_conns = {node: Connection(
         host=ip,
-        user="azureadmin", # This dependency comes from terraform
+        user="pftadmin", # This dependency comes from terraform
         connect_kwargs={
             "key_filename": identity_file
         }
@@ -41,7 +41,7 @@ def run_with_given_signature_sweep(node_template, client_template, ip_list, iden
     
     client_conns = {client: Connection(
         host=ip,
-        user="azureadmin", # This dependency comes from terraform
+        user="pftadmin", # This dependency comes from terraform
         connect_kwargs={
             "key_filename": identity_file
         }
@@ -84,7 +84,7 @@ def run_with_given_signature_sweep(node_template, client_template, ip_list, iden
         print("Reestablishing connections, since the join killed the sockets")
         node_conns = {node: Connection(
             host=ip,
-            user="azureadmin", # This dependency comes from terraform
+            user="pftadmin", # This dependency comes from terraform
             connect_kwargs={
                 "key_filename": identity_file
             }
@@ -93,7 +93,7 @@ def run_with_given_signature_sweep(node_template, client_template, ip_list, iden
         
         client_conns = {client: Connection(
             host=ip,
-            user="azureadmin", # This dependency comes from terraform
+            user="pftadmin", # This dependency comes from terraform
             connect_kwargs={
                 "key_filename": identity_file
             }

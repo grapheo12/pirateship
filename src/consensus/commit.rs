@@ -182,6 +182,9 @@ where
     Engine: crate::execution::Engine,
 {
     let last_block_with_qc = fork.last_block_with_qc();
+    if last_block_with_qc == 0 {
+        return;
+    }
     let qcs = &fork.get(last_block_with_qc).unwrap().block.qc;
 
     for qc in qcs {

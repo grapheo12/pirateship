@@ -22,7 +22,7 @@ def main(ip_list, identity_file):
     print("Creating SSH connections")
     node_conns = {node: Connection(
         host=ip,
-        user="azureadmin", # This dependency comes from terraform
+        user="pftadmin", # This dependency comes from terraform
         connect_kwargs={
             "key_filename": identity_file
         }
@@ -31,7 +31,7 @@ def main(ip_list, identity_file):
     
     client_conns = {client: Connection(
         host=ip,
-        user="azureadmin", # This dependency comes from terraform
+        user="pftadmin", # This dependency comes from terraform
         connect_kwargs={
             "key_filename": identity_file
         }

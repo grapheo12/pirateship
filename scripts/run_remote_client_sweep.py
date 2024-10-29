@@ -37,7 +37,7 @@ def run_with_given_client(node_template, client_template, ip_list, identity_file
     print("Creating SSH connections")
     node_conns = {node: Connection(
         host=ip,
-        user="azureadmin", # This dependency comes from terraform
+        user="pftadmin", # This dependency comes from terraform
         connect_kwargs={
             "key_filename": identity_file
         }
@@ -46,7 +46,7 @@ def run_with_given_client(node_template, client_template, ip_list, identity_file
     
     client_conns = {client: Connection(
         host=ip,
-        user="azureadmin", # This dependency comes from terraform
+        user="pftadmin", # This dependency comes from terraform
         connect_kwargs={
             "key_filename": identity_file
         }
@@ -89,7 +89,7 @@ def run_with_given_client(node_template, client_template, ip_list, identity_file
         print("Reestablishing connections, since the join killed the sockets")
         node_conns = {node: Connection(
             host=ip,
-            user="azureadmin", # This dependency comes from terraform
+            user="pftadmin", # This dependency comes from terraform
             connect_kwargs={
                 "key_filename": identity_file
             }
@@ -98,7 +98,7 @@ def run_with_given_client(node_template, client_template, ip_list, identity_file
         
         client_conns = {client: Connection(
             host=ip,
-            user="azureadmin", # This dependency comes from terraform
+            user="pftadmin", # This dependency comes from terraform
             connect_kwargs={
                 "key_filename": identity_file
             }

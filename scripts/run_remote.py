@@ -31,7 +31,8 @@ def run_all(cmds: List[str], conn: Connection) -> Tuple[bool, List[str]]:
         return True, outputs
     
 def get_current_git_hash():
-    res = invoke.run("git rev-parse HEAD", hide=True) # type: ignore
+    # res = invoke.run("git rev-parse HEAD", hide=True) # type: ignore
+    res = invoke.run("echo blahblahblahblah", hide=True) # type: ignore
     assert not(res is None)
     return res.stdout.strip()
 
@@ -207,7 +208,7 @@ def run_remote(node_template, client_template, ip_list, identity_file, repeat, s
     print("Creating SSH connections")
     node_conns = {node: Connection(
         host=ip,
-        user="azureadmin", # This dependency comes from terraform
+        user="pftadmin", # This dependency comes from terraform
         connect_kwargs={
             "key_filename": identity_file
         }
@@ -216,7 +217,7 @@ def run_remote(node_template, client_template, ip_list, identity_file, repeat, s
     
     client_conns = {client: Connection(
         host=ip,
-        user="azureadmin", # This dependency comes from terraform
+        user="pftadmin", # This dependency comes from terraform
         connect_kwargs={
             "key_filename": identity_file
         }
@@ -259,7 +260,7 @@ def run_remote(node_template, client_template, ip_list, identity_file, repeat, s
         print("Reestablishing connections, since the join killed the sockets")
         node_conns = {node: Connection(
             host=ip,
-            user="azureadmin", # This dependency comes from terraform
+            user="pftadmin", # This dependency comes from terraform
             connect_kwargs={
                 "key_filename": identity_file
             }
@@ -268,7 +269,7 @@ def run_remote(node_template, client_template, ip_list, identity_file, repeat, s
         
         client_conns = {client: Connection(
             host=ip,
-            user="azureadmin", # This dependency comes from terraform
+            user="pftadmin", # This dependency comes from terraform
             connect_kwargs={
                 "key_filename": identity_file
             }

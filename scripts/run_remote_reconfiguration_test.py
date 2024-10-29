@@ -165,7 +165,7 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
     print("Creating SSH connections")
     node_conns = {node: Connection(
         host=ip,
-        user="azureadmin", # This dependency comes from terraform
+        user="pftadmin", # This dependency comes from terraform
         connect_kwargs={
             "key_filename": identity_file
         }
@@ -174,7 +174,7 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
     
     client_conns = {client: Connection(
         host=ip,
-        user="azureadmin", # This dependency comes from terraform
+        user="pftadmin", # This dependency comes from terraform
         connect_kwargs={
             "key_filename": identity_file
         }
@@ -182,7 +182,7 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
 
     controller_conn = Connection(
         host=controller_ip,
-        user="azureadmin", # This dependency comes from terraform
+        user="pftadmin", # This dependency comes from terraform
         connect_kwargs={
             "key_filename": identity_file
         }
@@ -216,7 +216,7 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
                     print("Booting up extra node:", c[1])
                     extra_node_conns[c[1]] = Connection(
                         host=extra_nodes[c[1]],
-                        user="azureadmin", # This dependency comes from terraform
+                        user="pftadmin", # This dependency comes from terraform
                         connect_kwargs={
                             "key_filename": identity_file
                         }
@@ -275,7 +275,7 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
         print("Reestablishing connections, since the join killed the sockets")
         node_conns = {node: Connection(
             host=ip,
-            user="azureadmin", # This dependency comes from terraform
+            user="pftadmin", # This dependency comes from terraform
             connect_kwargs={
                 "key_filename": identity_file
             }
@@ -283,7 +283,7 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
 
         extra_node_conns = {node: Connection(
             host=ip,
-            user="azureadmin", # This dependency comes from terraform
+            user="pftadmin", # This dependency comes from terraform
             connect_kwargs={
                 "key_filename": identity_file
             }
@@ -292,7 +292,7 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
         
         client_conns = {client: Connection(
             host=ip,
-            user="azureadmin", # This dependency comes from terraform
+            user="pftadmin", # This dependency comes from terraform
             connect_kwargs={
                 "key_filename": identity_file
             }
@@ -300,7 +300,7 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
 
         controller_conn = Connection(
             host=controller_ip,
-            user="azureadmin", # This dependency comes from terraform
+            user="pftadmin", # This dependency comes from terraform
             connect_kwargs={
                 "key_filename": identity_file
             }

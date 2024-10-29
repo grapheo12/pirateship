@@ -21,8 +21,8 @@ If you want to reuse a machine to simulate more number of nodes (or want to perf
 feel free to copy the IP addresses of existing machines (or use `127.0.0.1`) and use a new name.
 
 To be compliant with the terraform script that I generally use to create test VMs,
-you need to have an user called `azureadmin` in each of these VMs.
-Further, one must be able to SSH into `azureadmin@ip` using a common SSH key.
+you need to have an user called `pftadmin` in each of these VMs.
+Further, one must be able to SSH into `pftadmin@ip` using a common SSH key.
 Generate and save this key as `cluster_key.pem`.
 
 Save the `nodelist.txt` and `cluster_key.pem` and copy the path onto `scripts/run_all_protocols.sh`.

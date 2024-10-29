@@ -95,7 +95,7 @@ jolteon = ["round_robin_leader", "always_sign", "view_change", "no_pipeline"]
 chained_pbft = ["round_robin_leader", "always_sign", "view_change"]
 pirateship = ["round_robin_leader", "dynamic_sign", "quorum_diversity", "view_change"]
 
-default = ["jolteon", "app_kvs", "storage", "fast_path", "platforms"]
+default = ["pirateship", "app_kvs", "storage", "fast_path", "platforms"]
 
 
 [profile.release]
