@@ -255,7 +255,7 @@ where Engine: crate::execution::Engine
                 #[cfg(feature = "fast_path")]
                 if !ctx.view_is_stable.load(Ordering::SeqCst) {
                     // Fast path can't be done if the view is not stable.
-                    info!("For fast path: {} {}", fullnode_sigs, get_all_nodes_num(&ctx));
+                    debug!("For fast path: {} {}", fullnode_sigs, get_all_nodes_num(&ctx));
                     if fullnode_sigs == get_all_nodes_num(&ctx) as usize {
                         fast_path_qcs.push(vote_sig.n);
                     }

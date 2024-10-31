@@ -55,7 +55,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
     let mut i = 0;
 
     let mut rng = ChaCha20Rng::seed_from_u64(42);
-    let sample_item = [(true, 1), (false, 99)];
+    let sample_item = [(true, 1), (false, 499)];
 
 
     let weight_dist = WeightedIndex::new(sample_item.iter().map(|(_, weight)| weight)).unwrap();
@@ -203,6 +203,11 @@ async fn byz_poll_worker(idx: usize, client: &PinnedClient, config: &ClientConfi
         loop { // Retry loop
             let send_list = get_f_plus_one_send_list(config, &mut rng);
             let (block_n,tx_n, start) = req_buf[0];
+            // info!("Client Id: {}, Block num: {}, Tx num: {}, Byz Latency: {} us",
+            //     idx, block_n, tx_n,
+            //     start.elapsed().as_micros()
+            // );
+            // break;
             let req = ProtoPayload {
                 message: Some(pft::proto::rpc::proto_payload::Message::ByzPollRequest(
                     ProtoByzPollRequest { block_n, tx_n }

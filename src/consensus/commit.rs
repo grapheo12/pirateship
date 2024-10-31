@@ -221,6 +221,10 @@ pub async fn maybe_byzantine_commit<'a, Engine>(
 where
     Engine: crate::execution::Engine,
 {
+
+    #[cfg(feature = "fast_path")]
+    maybe_byzantine_commit_by_fast_path(ctx, client, engine, fork).await;
+
     // Check all QCs formed during this view.
     // Since the last_qc need not have link to another qc,
     // due pipelined proposals.
@@ -229,9 +233,6 @@ where
     let mut check_qc = fork.last_qc();
 
     let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
-
-    #[cfg(feature = "fast_path")]
-    maybe_byzantine_commit_by_fast_path(ctx, client, engine, fork).await;
 
     while !maybe_byzantine_commit_with_n_and_view(ctx, client, engine, fork, check_qc, last_qc_view)
         .await

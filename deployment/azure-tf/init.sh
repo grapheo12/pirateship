@@ -38,3 +38,10 @@ sudo apt-get install -y net-tools
 sudo apt-get install -y ca-certificates curl libssl-dev
 sudo apt-get install -y librocksdb-dev libprotobuf-dev
 sudo apt-get install -y python3-pip python3-virtualenv
+
+
+# Increase open file limits
+
+echo "*	soft	nofile	8192" >> /etc/security/limits.conf
+echo "*	hard	nofile	8192" >> /etc/security/limits.conf
+
