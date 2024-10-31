@@ -25,6 +25,7 @@ node_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] fork\.last = ([0-9]+), fork\.last
 
 # Sample log: [INFO][client][2024-08-06T10:28:12.352816849+00:00] Client Id: 264, Msg Id: 224, Block num: 1000, Tx num: 145, Latency: 4073 us, Current Leader: node1
 client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Client Id\: ([0-9]+), Msg Id\: ([0-9]+), Block num\: ([0-9]+), Tx num\: ([0-9]+), Latency\: ([.0-9]+) us, Current Leader\: (.+)")
+client_byz_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Client Id\: ([0-9]+), Block num\: ([0-9]+), Tx num\: ([0-9]+), Byz Latency\: ([.0-9]+) us")
 
 
 def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False):
@@ -70,18 +71,33 @@ def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False):
 
 
 def process_latencies(points, ramp_up, ramp_down, latencies):
-    points = [
-        (
-            isoparse(a[0]),      # ISO format is used in run_remote
-            int(a[1]),           # Client Id
-            int(a[2]),           # Msg Id
-            int(a[3]),           # Block num
-            int(a[4]),           # Tx num
-            float(a[5]),         # Latency us
-            a[6]                 # Current Leader
-        )
-        for a in points
-    ]
+    if len(points[0]) == 7:
+        points = [
+            (
+                isoparse(a[0]),      # ISO format is used in run_remote
+                int(a[1]),           # Client Id
+                int(a[2]),           # Msg Id
+                int(a[3]),           # Block num
+                int(a[4]),           # Tx num
+                float(a[5]),         # Latency us
+                a[6]                 # Current Leader
+            )
+            for a in points
+        ]
+    else:
+        # Byz logs have 2 entries less
+        points = [
+            (
+                isoparse(a[0]),      # ISO format is used in run_remote
+                int(a[1]),           # Client Id
+                0,                   # Dummy Msg Id
+                int(a[2]),           # Block num
+                int(a[3]),           # Tx num
+                float(a[4]),         # Latency us
+                "node0"              # Dummy Current Leader
+            )
+            for a in points
+        ]
     total_n = len(points)
 
     # Filter points, only keep if after ramp_up time and before ramp_down time
@@ -127,7 +143,10 @@ def parse_log_dir(dir, repeats, num_clients, leader, ramp_up, ramp_down, byz=Fal
             try:
                 with open(f"{dir}/{i}/client{c}.log", "r") as f:
                     for line in f.readlines():
-                        captures = client_rgx.findall(line)
+                        if byz:
+                            captures = client_byz_rgx.findall(line)
+                        else:
+                            captures = client_rgx.findall(line)
                         # print(captures)
                         if len(captures) == 1:
                             points.append(captures[0])
@@ -245,6 +264,7 @@ def plot_tput_vs_latency_multi(stat_list: List[Dict[int, Stats]], legends: List[
             # hex color
             # color=convert_legend_to_rgb_color(legends[i])
         )
+    plt.yscale("log")
     plt.xlabel("Throughput (req/s)")
     plt.ylabel("Latency (us)")
     plt.grid()

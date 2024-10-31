@@ -7,7 +7,7 @@ set -o xtrace
 
 # ALL_CLIENTS="-c 1 -c 10 -c 50 -c 100 -c 200 -c 500 -c 700 -c 1000"
 # ALL_CLIENTS="-c 200 -c 500 -c 700 -c 1000"
-ALL_CLIENTS="-c 500"
+ALL_CLIENTS="-c 50"
 
 start_time=$(date -Ins)
 # start_time='2024-08-07T10:39:54.859389+00:00'

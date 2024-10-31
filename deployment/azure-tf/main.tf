@@ -44,6 +44,14 @@ resource "azurerm_subnet" "clientpool_subnet" {
   address_prefixes     = ["10.${count.index + 1}.3.0/24"]
 }
 
+resource "azurerm_subnet" "nonteepool_subnet" {
+  name                 = "nonteepoolSubnet${count.index}"
+  count                = length(var.platform_locations)
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.pft_vnet[count.index].name
+  address_prefixes     = ["10.${count.index + 1}.4.0/24"]
+}
+
 
 # Connect all virtual networks together using global peering
 resource "azurerm_virtual_network_peering" "peering" {
@@ -81,6 +89,14 @@ resource "azurerm_public_ip" "clientpool_public_ip" {
   name                = "clientpoolPublicIp_${local.clientpool_ids_flattened_[count.index][0]}_${local.clientpool_ids_flattened_[count.index][1]}"
   count               = length(local.clientpool_ids_flattened_)
   location            = var.platform_locations[local.clientpool_ids_flattened_[count.index][0]]
+  resource_group_name = azurerm_resource_group.rg.name
+  allocation_method   = "Dynamic"
+}
+
+resource "azurerm_public_ip" "nonteepool_public_ip" {
+  name                = "nonteepoolPublicIp_${local.nonteepool_ids_flattened_[count.index][0]}_${local.nonteepool_ids_flattened_[count.index][1]}"
+  count               = length(local.nonteepool_ids_flattened_)
+  location            = var.platform_locations[local.nonteepool_ids_flattened_[count.index][0]]
   resource_group_name = azurerm_resource_group.rg.name
   allocation_method   = "Dynamic"
 }
@@ -171,6 +187,20 @@ resource "azurerm_network_interface" "tdxpool_nic" {
   }
 }
 
+resource "azurerm_network_interface" "nonteepool_nic" {
+  name                = "nonteepoolNic_${local.nonteepool_ids_flattened_[count.index][0]}_${local.nonteepool_ids_flattened_[count.index][1]}"
+  count               = length(local.nonteepool_ids_flattened_)
+  location            = var.platform_locations[local.nonteepool_ids_flattened_[count.index][0]]
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "nonteepool_nic_configuration_${local.nonteepool_ids_flattened_[count.index][0]}_${local.nonteepool_ids_flattened_[count.index][1]}"
+    subnet_id                     = azurerm_subnet.nonteepool_subnet[local.nonteepool_ids_flattened_[count.index][0]].id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = azurerm_public_ip.nonteepool_public_ip[count.index].id
+  }
+}
+
 resource "azurerm_network_interface" "clientpool_nic" {
   name                = "clientpoolNic_${local.clientpool_ids_flattened_[count.index][0]}_${local.clientpool_ids_flattened_[count.index][1]}"
   count               = length(local.clientpool_ids_flattened_)
@@ -206,6 +236,11 @@ resource "azurerm_network_interface_security_group_association" "clientpool_nic_
   network_security_group_id = azurerm_network_security_group.pft_nsg[local.clientpool_ids_flattened_[count.index][0]].id
 }
 
+resource "azurerm_network_interface_security_group_association" "nonteepool_nic_group_assoc" {
+  count                     = length(local.nonteepool_ids_flattened_)
+  network_interface_id      = azurerm_network_interface.nonteepool_nic[count.index].id
+  network_security_group_id = azurerm_network_security_group.pft_nsg[local.nonteepool_ids_flattened_[count.index][0]].id
+}
 
 # Create virtual machine
 resource "azurerm_linux_virtual_machine" "sevpool_vm" {
@@ -321,6 +356,45 @@ resource "azurerm_linux_virtual_machine" "clientpool_vm" {
   }
 
   computer_name  = "client${count.index}"
+  admin_username = var.username
+
+  admin_ssh_key {
+    username   = var.username
+    public_key = azapi_resource_action.ssh_public_key_gen.output.publicKey
+  }
+
+  # boot_diagnostics {
+  #   storage_account_uri = azurerm_storage_account.psl_diag_storage_account.primary_blob_endpoint
+  # }
+
+  custom_data = filebase64("./init.sh")
+}
+
+resource "azurerm_linux_virtual_machine" "nonteepool_vm" {
+  name                  = "nodepool_vm${count.index}_nontee_loc${local.nonteepool_ids_flattened_[count.index][0]}_id${local.nonteepool_ids_flattened_[count.index][1]}"
+  count                 = length(local.nonteepool_ids_flattened_)
+  location              = var.platform_locations[local.nonteepool_ids_flattened_[count.index][0]]
+  resource_group_name   = azurerm_resource_group.rg.name
+  network_interface_ids = [azurerm_network_interface.nonteepool_nic[count.index].id]
+  size                  = "Standard_D8ds_v5"
+
+#   delete_os_disk_on_termination    = true
+#   delete_data_disks_on_termination = true
+
+  os_disk {
+    name                 = "nonteepool_disk${count.index}"
+    caching              = "ReadWrite"
+    storage_account_type = "StandardSSD_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "ubuntu-24_04-lts"
+    sku       = "server"
+    version   = "latest"
+  }
+
+  computer_name  = "nontee${count.index}"
   admin_username = var.username
 
   admin_ssh_key {

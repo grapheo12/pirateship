@@ -55,7 +55,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
     let mut i = 0;
 
     let mut rng = ChaCha20Rng::seed_from_u64(42);
-    let sample_item = [(true, 1), (false, 999)];
+    let sample_item = [(true, 1), (false, 99)];
 
 
     let weight_dist = WeightedIndex::new(sample_item.iter().map(|(_, weight)| weight)).unwrap();
@@ -75,6 +75,11 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
             // sig: vec![0u8; SIGNATURE_LENGTH],
             sig: vec![0u8; 1]
         };
+
+        #[cfg(feature = "app_logger")]
+        let is_byz = true;
+
+        #[cfg(not(feature = "app_logger"))]
         let is_byz = client_req.tx.as_ref().unwrap().on_byzantine_commit.is_some();
 
         let rpc_msg_body = ProtoPayload {
@@ -211,7 +216,7 @@ async fn byz_poll_worker(idx: usize, client: &PinnedClient, config: &ClientConfi
             let res = PinnedClient::broadcast_and_await_reply(client, &send_list, &msg).await;
             match res {
                 Ok(_) => {
-                    info!("Byz Poll {}: Block num: {}, Tx num: {}, Latency: {} us",
+                    info!("Client Id: {}, Block num: {}, Tx num: {}, Byz Latency: {} us",
                         idx, block_n, tx_n,
                         start.elapsed().as_micros()
                     );

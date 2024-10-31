@@ -15,45 +15,45 @@ start_time=$(date -Ins)
 RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt /tmp/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i ../cluster_key.pem -r 3 -s 120 -up 2 -down 2 $ALL_CLIENTS"
 # RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt scripts/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i ../cluster_key.pem -r 1 -s 30 -up 2 -down 2 $ALL_CLIENTS"
 
-# Run pirateship quorum_diversity_k = 3, signature_max_delay_blocks = 1
-jq '.consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 1' scripts/local_template.json > /tmp/local_template.json
-make
-$RUN_CMD
+# # Run pirateship quorum_diversity_k = 3, signature_max_delay_blocks = 1
+# jq '.consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 1' scripts/local_template.json > /tmp/local_template.json
+# make
+# $RUN_CMD
 
-# Run pirateship quorum_diversity_k = 3, signature_max_delay_blocks = 10
-jq '.consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 10' scripts/local_template.json > /tmp/local_template.json
-make
-$RUN_CMD
+# # Run pirateship quorum_diversity_k = 3, signature_max_delay_blocks = 10
+# jq '.consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 10' scripts/local_template.json > /tmp/local_template.json
+# make
+# $RUN_CMD
 
-# Run pirateship quorum_diversity_k = 3, signature_max_delay_blocks = 50
-jq '.consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 50' scripts/local_template.json > /tmp/local_template.json
-make
-$RUN_CMD
+# # Run pirateship quorum_diversity_k = 3, signature_max_delay_blocks = 50
+# jq '.consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 50' scripts/local_template.json > /tmp/local_template.json
+# make
+# $RUN_CMD
 
-# Run pirateship quorum_diversity_k = 3, signature_max_delay_blocks = 100
-jq '.consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 100' scripts/local_template.json > /tmp/local_template.json
-make
-$RUN_CMD
-
-
-# Run pirateship quorum_diversity_k = 3, signature_max_delay_blocks = 200
-jq '.consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 200' scripts/local_template.json > /tmp/local_template.json
-make
-$RUN_CMD
+# # Run pirateship quorum_diversity_k = 3, signature_max_delay_blocks = 100
+# jq '.consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 100' scripts/local_template.json > /tmp/local_template.json
+# make
+# $RUN_CMD
 
 
-# Run pirateship quorum_diversity_k = 3, signature_max_delay_blocks = 500
-jq '.consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 500' scripts/local_template.json > /tmp/local_template.json
-make
-$RUN_CMD
+# # Run pirateship quorum_diversity_k = 3, signature_max_delay_blocks = 200
+# jq '.consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 200' scripts/local_template.json > /tmp/local_template.json
+# make
+# $RUN_CMD
 
-# Run chained_pbft
-make chained_pbft_logger
-$RUN_CMD
 
-# Run lucky_raft
-make lucky_raft_logger
-$RUN_CMD --max_nodes 5
+# # Run pirateship quorum_diversity_k = 3, signature_max_delay_blocks = 500
+# jq '.consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 500' scripts/local_template.json > /tmp/local_template.json
+# make
+# $RUN_CMD
+
+# # Run chained_pbft
+# make chained_pbft_logger
+# $RUN_CMD
+
+# # Run lucky_raft
+# make lucky_raft_logger
+# $RUN_CMD --max_nodes 5
 
 
 end_time=$(date -Ins)
@@ -61,12 +61,12 @@ end_time=$(date -Ins)
 # Plot together
 python3 scripts/plot_time_range_client_sweep.py \
     --path logs --end $end_time --start $start_time \
-    -r 3 -c 2 -l node1 -up 10 -down 10 -o plot.png \
-    --legend "pirateship(sig=1)" \
-    --legend "pirateship(sig=10)" \
-    --legend "pirateship(sig=50)" \
-    --legend "pirateship(sig=100)" \
-    --legend "pirateship(sig=200)" \
-    --legend "pirateship(sig=500)" \
+    -r 3 -c 3 -l node1 -up 10 -down 10 -o plot.png \
+    --legend "pirateship" \
     --legend "pbft" \
     --legend "raft" \
+    # --legend "pirateship(sig=10)" \
+    # --legend "pirateship(sig=50)" \
+    # --legend "pirateship(sig=100)" \
+    # --legend "pirateship(sig=200)" \
+    # --legend "pirateship(sig=500)" \

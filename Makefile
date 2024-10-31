@@ -6,6 +6,12 @@
 pirateship_logger:
 	CC=clang CXX=clang++ cargo build --release
 
+
+.PHONY: pirateship_logger_nofast
+pirateship_logger_nofast:
+	CC=clang CXX=clang++ cargo build --release --features pirateship,app_logger,storage,platforms --no-default-features
+
+
 .PHONY: lucky_raft_logger
 lucky_raft_logger:
 	CC=clang CXX=clang++ cargo build --release --features lucky_raft,app_logger,storage --no-default-features

@@ -9,7 +9,8 @@ variable "resource_group_location" {
 
 variable "platform_locations" {
   type        = list(string)
-  default     = ["eastus", "westus", "centralus", "eastus2"]
+  default     = ["centralus"]
+  # default     = ["eastus", "westus", "centralus", "eastus2"]
   description = "Location of the platforms."
 }
 
@@ -28,20 +29,30 @@ variable "username" {
 variable "sevpool_count" {
   type        = list(number)
   description = "Number of VMs with SEV"
-  default     = [0, 0, 0, 0]
+  default = [ 0 ]
+  # default     = [0, 0, 0, 0]
 }
 
 
 variable "tdxpool_count" {
   type        = list(number)
   description = "Number of VMs with TDX"
-  default     = [0, 0, 1, 0]
+  default = [ 4 ]
+  # default     = [0, 0, 0, 0]
+}
+
+variable "nonteepool_count" {
+  type        = list(number)
+  description = "Number of VMs without TEEs, used as replicas"
+  default = [ 0 ]
+  # default     = [0, 0, 4, 0]
 }
 
 variable "clientpool_count"{
   type        = list(number)
   description = "Number of VMs with no trusted hardware, used as client nodes"
-  default     = [0, 0, 1, 0]
+  default = [ 3 ]
+  # default     = [0, 0, 1, 0]
 }
 
 locals {
@@ -61,6 +72,13 @@ locals {
 
   tdxpool_ids_flattened_ = tolist(setunion([
     for i, j in var.tdxpool_count:[
+      for k in range(j):
+        [i, k]
+    ]
+  ]...))
+
+  nonteepool_ids_flattened_ = tolist(setunion([
+    for i, j in var.nonteepool_count:[
       for k in range(j):
         [i, k]
     ]
