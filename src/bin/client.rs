@@ -203,11 +203,11 @@ async fn byz_poll_worker(idx: usize, client: &PinnedClient, config: &ClientConfi
         loop { // Retry loop
             let send_list = get_f_plus_one_send_list(config, &mut rng);
             let (block_n,tx_n, start) = req_buf[0];
-            // info!("Client Id: {}, Block num: {}, Tx num: {}, Byz Latency: {} us",
-            //     idx, block_n, tx_n,
-            //     start.elapsed().as_micros()
-            // );
-            // break;
+            info!("Client Id: {}, Block num: {}, Tx num: {}, Byz Latency: {} us",
+                idx, block_n, tx_n,
+                start.elapsed().as_micros()
+            );
+            break;
             let req = ProtoPayload {
                 message: Some(pft::proto::rpc::proto_payload::Message::ByzPollRequest(
                     ProtoByzPollRequest { block_n, tx_n }
@@ -285,6 +285,8 @@ async fn byz_poll_worker(idx: usize, client: &PinnedClient, config: &ClientConfi
     Ok(())
 }
 
+const NUM_BYZ_POLLERS: usize = 4;
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> io::Result<()> {
     log4rs::init_config(default_log4rs_config()).unwrap();
@@ -293,23 +295,26 @@ async fn main() -> io::Result<()> {
     keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
     
     let mut client_handles = JoinSet::new();
-    for i in 0..config.workload_config.num_clients {
+    let mut tx_vec = Vec::new(); 
+    for i in 0..NUM_BYZ_POLLERS {
         let (tx, rx) = mpsc::unbounded_channel();
-        {
-            let client_config = config.clone();
-            let net_config = client_config.fill_missing();
-            let c = Client::new(&net_config, &keys).into();
-            let _tx = tx.clone();
-            client_handles.spawn(async move { client_runner(i, &c, config.workload_config.num_requests, client_config.clone(), _tx).await });
-        }
-        {
-            let client_config = config.clone();
-            let net_config = client_config.fill_missing();
-            let c = Client::new(&net_config, &keys).into();
-            client_handles.spawn(async move {
-                byz_poll_worker(i, &c, &client_config, rx).await
-            });
-        }
+        let client_config = config.clone();
+        let net_config = client_config.fill_missing();
+        let c = Client::new(&net_config, &keys).into();
+        client_handles.spawn(async move {
+            byz_poll_worker(i, &c, &client_config, rx).await
+        });
+        tx_vec.push(tx);
+    }
+
+    for i in 0..config.workload_config.num_clients {
+        let tx_id = i % NUM_BYZ_POLLERS;
+        let tx = tx_vec[tx_id].clone();
+        let client_config = config.clone();
+        let net_config = client_config.fill_missing();
+        let c = Client::new(&net_config, &keys).into();
+        let _tx = tx.clone();
+        client_handles.spawn(async move { client_runner(i, &c, config.workload_config.num_requests, client_config.clone(), _tx).await });
     }
 
 
