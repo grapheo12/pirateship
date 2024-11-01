@@ -11,7 +11,7 @@ use tokio::sync::MutexGuard;
 use crate::{
     config::NodeInfo,
     consensus::{
-        client_reply::{do_reply_byz_poll, do_reply_transaction_receipt}, handler::PinnedServerContext, log::Log,
+        client_reply::{bulk_register_byz_response, do_reply_transaction_receipt}, handler::PinnedServerContext, log::Log,
         reconfiguration::maybe_execute_reconfiguration_transaction,
     },
     crypto::hash,
@@ -124,7 +124,8 @@ pub async fn do_byzantine_commit<'a, Engine>(
 
     #[cfg(not(feature = "reply_from_app"))]
     {
-        do_reply_byz_poll(ctx, fork, updated_bci, |_, _| ProtoTransactionResult::default()).await;
+        // do_reply_byz_poll(ctx, fork, updated_bci, |_, _| ProtoTransactionResult::default()).await;
+        bulk_register_byz_response(ctx, updated_bci, fork);
     }
 
 }
@@ -203,7 +204,7 @@ where
         let updated_bci = qc.n;
         
         if updated_bci > old_bci {
-            if updated_bci % 1000 == 0 {
+            if updated_bci % 1 == 0 {
                 info!("Byzantine commit by fast path: {}", updated_bci);
             }
             do_byzantine_commit(ctx, client, engine, fork, updated_bci).await;
@@ -222,6 +223,8 @@ where
     Engine: crate::execution::Engine,
 {
 
+    let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+
     #[cfg(feature = "fast_path")]
     maybe_byzantine_commit_by_fast_path(ctx, client, engine, fork).await;
 
@@ -232,7 +235,6 @@ where
     let last_qc_view = fork.last_qc_view();
     let mut check_qc = fork.last_qc();
 
-    let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
 
     while !maybe_byzantine_commit_with_n_and_view(ctx, client, engine, fork, check_qc, last_qc_view)
         .await

@@ -15,7 +15,7 @@ use prost::Message;
 use rand::{distributions::WeightedIndex, prelude::*};
 use rand_chacha::ChaCha20Rng;
 use core::error;
-use std::{env, fs, io, path, time::Duration};
+use std::{collections::HashMap, env, fs, io, path, pin::Pin, sync::{Arc, Mutex}, time::Duration};
 use tokio::{sync::mpsc, task::JoinSet, time::sleep};
 use std::time::Instant;
 
@@ -46,7 +46,7 @@ fn process_args() -> ClientConfig {
     ClientConfig::deserialize(&cfg_contents)
 }
 
-async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, config: ClientConfig, byz_poll_tx: UnboundedSender<(u64, u64, Instant)>) -> io::Result<()> {    
+async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, config: ClientConfig, byz_resp: Arc<Pin<Box<Mutex<HashMap<(u64, u64), Instant>>>>>) -> io::Result<()> {    
     sleep(Duration::from_millis(10) * (idx as u32)).await;
     
     let mut config = config.clone();
@@ -75,12 +75,6 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
             // sig: vec![0u8; SIGNATURE_LENGTH],
             sig: vec![0u8; 1]
         };
-
-        #[cfg(feature = "app_logger")]
-        let is_byz = true;
-
-        #[cfg(not(feature = "app_logger"))]
-        let is_byz = client_req.tx.as_ref().unwrap().on_byzantine_commit.is_some();
 
         let rpc_msg_body = ProtoPayload {
             message: Some(
@@ -177,10 +171,27 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
                     idx, i, resp.block_n, resp.tx_n,
                     start.elapsed().as_micros(), curr_leader
                 );
-                if is_byz {
-                    let _ = byz_poll_tx.send((resp.block_n, resp.tx_n, start));
+            }
+
+            {
+
+                let mut byz_resp = byz_resp.lock().unwrap();
+                if resp.await_byz_response {
+                    byz_resp.insert((resp.block_n, resp.tx_n), start);
+                }
+
+                for br in &resp.byz_responses {
+                    let _start = byz_resp.remove(&(br.block_n, br.tx_n));
+                    if let Some(_start) = _start {
+                        info!("Client Id: {}, Block num: {}, Tx num: {}, Byz Latency: {} us",
+                            idx, br.block_n, br.tx_n,
+                            _start.elapsed().as_micros()
+                        );
+                    }
                 }
             }
+
+
             break;
         }
 
@@ -193,99 +204,99 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
 }
 
 
-async fn byz_poll_worker(idx: usize, client: &PinnedClient, config: &ClientConfig, mut byz_poll_rx: UnboundedReceiver<(u64, u64, Instant)>)  -> io::Result<()> {
-    // TODO: In retry loop, reuse already received messages.
-    // Send list will change when reconfiguration happens.
+// async fn byz_poll_worker(idx: usize, client: &PinnedClient, config: &ClientConfig, mut byz_poll_rx: UnboundedReceiver<(u64, u64, Instant)>)  -> io::Result<()> {
+//     // TODO: In retry loop, reuse already received messages.
+//     // Send list will change when reconfiguration happens.
 
-    let mut rng = ChaCha20Rng::from_entropy();
-    let mut req_buf = Vec::new();
-    while byz_poll_rx.recv_many(&mut req_buf, 1).await > 0 {
-        loop { // Retry loop
-            let send_list = get_f_plus_one_send_list(config, &mut rng);
-            let (block_n,tx_n, start) = req_buf[0];
-            info!("Client Id: {}, Block num: {}, Tx num: {}, Byz Latency: {} us",
-                idx, block_n, tx_n,
-                start.elapsed().as_micros()
-            );
-            break;
-            let req = ProtoPayload {
-                message: Some(pft::proto::rpc::proto_payload::Message::ByzPollRequest(
-                    ProtoByzPollRequest { block_n, tx_n }
-                ))
-            };
+//     let mut rng = ChaCha20Rng::from_entropy();
+//     let mut req_buf = Vec::new();
+//     while byz_poll_rx.recv_many(&mut req_buf, 1).await > 0 {
+//         loop { // Retry loop
+//             let send_list = get_f_plus_one_send_list(config, &mut rng);
+//             let (block_n,tx_n, start) = req_buf[0];
+//             info!("Client Id: {}, Block num: {}, Tx num: {}, Byz Latency: {} us",
+//                 idx, block_n, tx_n,
+//                 start.elapsed().as_micros()
+//             );
+//             break;
+//             let req = ProtoPayload {
+//                 message: Some(pft::proto::rpc::proto_payload::Message::ByzPollRequest(
+//                     ProtoByzPollRequest { block_n, tx_n }
+//                 ))
+//             };
     
-            let v = req.encode_to_vec();
-            let vlen = v.len();
-            let msg = PinnedMessage::from(v, vlen, pft::rpc::SenderType::Anon);
+//             let v = req.encode_to_vec();
+//             let vlen = v.len();
+//             let msg = PinnedMessage::from(v, vlen, pft::rpc::SenderType::Anon);
     
-            let res = PinnedClient::broadcast_and_await_reply(client, &send_list, &msg).await;
-            match res {
-                Ok(_) => {
-                    info!("Client Id: {}, Block num: {}, Tx num: {}, Byz Latency: {} us",
-                        idx, block_n, tx_n,
-                        start.elapsed().as_micros()
-                    );
-                },
-                Err(e) => {
-                    error!("Error in Byz poll: {}", e);
-                    continue;
-                },
-            }
+//             let res = PinnedClient::broadcast_and_await_reply(client, &send_list, &msg).await;
+//             match res {
+//                 Ok(_) => {
+//                     info!("Client Id: {}, Block num: {}, Tx num: {}, Byz Latency: {} us",
+//                         idx, block_n, tx_n,
+//                         start.elapsed().as_micros()
+//                     );
+//                 },
+//                 Err(e) => {
+//                     error!("Error in Byz poll: {}", e);
+//                     continue;
+//                 },
+//             }
 
-            // Check if responses match.
-            let res = res.unwrap();
-            let msg = res[0].as_ref().0;
-            let sz = res[0].as_ref().1;
+//             // Check if responses match.
+//             let res = res.unwrap();
+//             let msg = res[0].as_ref().0;
+//             let sz = res[0].as_ref().1;
 
-            let cmp_reply = ProtoClientReply::decode(&msg.as_slice()[..sz]).unwrap();
-            let cmp_hsh = match cmp_reply.reply {
-                Some(client::proto_client_reply::Reply::Receipt(receipt)) => {
-                    receipt.req_digest.clone()
-                },
-                _ => {
-                    error!("Malformed response!");
-                    continue;
-                },
-            };
+//             let cmp_reply = ProtoClientReply::decode(&msg.as_slice()[..sz]).unwrap();
+//             let cmp_hsh = match cmp_reply.reply {
+//                 Some(client::proto_client_reply::Reply::Receipt(receipt)) => {
+//                     receipt.req_digest.clone()
+//                 },
+//                 _ => {
+//                     error!("Malformed response!");
+//                     continue;
+//                 },
+//             };
 
-            let mut malformed_responses = false;
+//             let mut malformed_responses = false;
 
-            for _r in &res {
-                let msg = res[0].as_ref().0;
-                let sz = res[0].as_ref().1;
+//             for _r in &res {
+//                 let msg = res[0].as_ref().0;
+//                 let sz = res[0].as_ref().1;
 
-                let cmp_reply = ProtoClientReply::decode(&msg.as_slice()[..sz]).unwrap();
-                let chk_hsh = match cmp_reply.reply {
-                    Some(client::proto_client_reply::Reply::Receipt(receipt)) => {
-                        receipt.req_digest.clone()
-                    },
-                    _ => {
-                        error!("Malformed response!");
-                        malformed_responses = true;
-                        break;
-                    },
-                };
+//                 let cmp_reply = ProtoClientReply::decode(&msg.as_slice()[..sz]).unwrap();
+//                 let chk_hsh = match cmp_reply.reply {
+//                     Some(client::proto_client_reply::Reply::Receipt(receipt)) => {
+//                         receipt.req_digest.clone()
+//                     },
+//                     _ => {
+//                         error!("Malformed response!");
+//                         malformed_responses = true;
+//                         break;
+//                     },
+//                 };
 
-                if !cmp_hash(&chk_hsh, &cmp_hsh) {
-                    error!("Mismatched hash");
-                    malformed_responses = true;
-                    break;
-                }
-            }
+//                 if !cmp_hash(&chk_hsh, &cmp_hsh) {
+//                     error!("Mismatched hash");
+//                     malformed_responses = true;
+//                     break;
+//                 }
+//             }
 
-            if malformed_responses {
-                continue;
-            }
+//             if malformed_responses {
+//                 continue;
+//             }
 
-            break;
-        }
+//             break;
+//         }
 
-        req_buf.clear();
-    }
-    Ok(())
-}
+//         req_buf.clear();
+//     }
+//     Ok(())
+// }
 
-const NUM_BYZ_POLLERS: usize = 4;
+// const NUM_BYZ_POLLERS: usize = 4;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> io::Result<()> {
@@ -293,28 +304,31 @@ async fn main() -> io::Result<()> {
     let config = process_args();
     let mut keys = KeyStore::empty();
     keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
+
+    let resp_store = Arc::new(Box::pin(Mutex::new(HashMap::new())));
     
     let mut client_handles = JoinSet::new();
-    let mut tx_vec = Vec::new(); 
-    for i in 0..NUM_BYZ_POLLERS {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let client_config = config.clone();
-        let net_config = client_config.fill_missing();
-        let c = Client::new(&net_config, &keys).into();
-        client_handles.spawn(async move {
-            byz_poll_worker(i, &c, &client_config, rx).await
-        });
-        tx_vec.push(tx);
-    }
+    // let mut tx_vec = Vec::new(); 
+    // for i in 0..NUM_BYZ_POLLERS {
+    //     let (tx, rx) = mpsc::unbounded_channel();
+    //     let client_config = config.clone();
+    //     let net_config = client_config.fill_missing();
+    //     let c = Client::new(&net_config, &keys).into();
+    //     client_handles.spawn(async move {
+    //         byz_poll_worker(i, &c, &client_config, rx).await
+    //     });
+    //     tx_vec.push(tx);
+    // }
 
     for i in 0..config.workload_config.num_clients {
-        let tx_id = i % NUM_BYZ_POLLERS;
-        let tx = tx_vec[tx_id].clone();
+        // let tx_id = i % NUM_BYZ_POLLERS;
+        // let tx = tx_vec[tx_id].clone();
         let client_config = config.clone();
         let net_config = client_config.fill_missing();
         let c = Client::new(&net_config, &keys).into();
-        let _tx = tx.clone();
-        client_handles.spawn(async move { client_runner(i, &c, config.workload_config.num_requests, client_config.clone(), _tx).await });
+        // let _tx = tx.clone();
+        let _resp_store = resp_store.clone();
+        client_handles.spawn(async move { client_runner(i, &c, config.workload_config.num_requests, client_config.clone(), _resp_store).await });
     }
 
 

@@ -15,11 +15,12 @@ use std::{
 use indexmap::IndexMap;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
+use rustls::crypto::hash::Hash;
 use std::time::Instant;
 use tokio::{join, sync::{mpsc, Mutex, Semaphore}};
 
 use crate::{
-    config::{AtomicConfig, Config, NodeInfo}, crypto::{AtomicKeyStore, KeyStore}, proto::{client::{ProtoByzPollRequest, ProtoClientRequest}, execution::ProtoTransaction, rpc::proto_payload}, rpc::{
+    config::{AtomicConfig, Config, NodeInfo}, crypto::{AtomicKeyStore, KeyStore}, proto::{client::{ProtoByzPollRequest, ProtoByzResponse, ProtoClientRequest}, execution::ProtoTransaction, rpc::proto_payload}, rpc::{
         client::PinnedClient, server::{GetServerKeys, LatencyProfile, MsgAckChan, RespType}, MessageRef, PinnedMessage
     }, utils::AtomicStruct
 };
@@ -106,25 +107,27 @@ pub struct ServerContext {
         mpsc::UnboundedSender<ForwardedMessageWithAckChan>,
         Mutex<mpsc::UnboundedReceiver<ForwardedMessageWithAckChan>>,
     ),
-    pub byz_poll_queue: (
-        mpsc::UnboundedSender<ForwardedMessageWithAckChan>,
-        Mutex<mpsc::UnboundedReceiver<ForwardedMessageWithAckChan>>,
-    ),
-    
     pub state: ConsensusState,
     pub client_ack_pending: Mutex<
         HashMap<
             (u64, usize), // (block_id, tx_id)
-            (MsgAckChan, LatencyProfile),
+            (MsgAckChan, LatencyProfile, String), // (msg chan, latency, sender)
         >,
     >,
 
-    pub client_byz_ack_pending: Mutex<
+    pub client_byz_ack_pending: std::sync::Mutex<
         HashMap<
-            (u64, usize), // (block_id, tx_id)
-            (MsgAckChan, LatencyProfile),
+            String,
+            Vec<ProtoByzResponse>
         >,
     >,
+    pub client_tx_map: std::sync::Mutex<
+        HashMap<
+            (u64, usize),
+            String
+        >
+    >,
+    pub client_replied_bci: AtomicU64,
 
     pub ping_counters: std::sync::Mutex<HashMap<u64, Instant>>,
     pub keys: AtomicKeyStore,
@@ -160,7 +163,6 @@ pub struct PinnedServerContext(pub Arc<Pin<Box<ServerContext>>>);
 impl PinnedServerContext {
     pub fn new(cfg: &Config, keys: &KeyStore) -> PinnedServerContext {
         let node_ch = mpsc::unbounded_channel();
-        let byz_poll_ch = mpsc::unbounded_channel();
         let client_ch = mpsc::unbounded_channel();
         let black_hole_ch = mpsc::unbounded_channel();
         let reconf_channel = mpsc::unbounded_channel();
@@ -186,10 +188,11 @@ impl PinnedServerContext {
             
             node_queue: (node_ch.0, Mutex::new(node_ch.1)),
             client_queue: (client_ch.0, Mutex::new(client_ch.1)),
-            byz_poll_queue: (byz_poll_ch.0, Mutex::new(byz_poll_ch.1)),
             state: ConsensusState::new(cfg.clone()),
             client_ack_pending: Mutex::new(HashMap::new()),
-            client_byz_ack_pending: Mutex::new(HashMap::new()),
+            client_byz_ack_pending: std::sync::Mutex::new(HashMap::new()),
+            client_replied_bci: AtomicU64::new(0),
+            client_tx_map: std::sync::Mutex::new(HashMap::new()),
             ping_counters: std::sync::Mutex::new(HashMap::new()),
             keys: AtomicKeyStore::new(keys.clone()),
             __client_black_hole_channel: (black_hole_ch.0, Mutex::new(black_hole_ch.1)),
@@ -276,14 +279,6 @@ pub fn consensus_rpc_handler<'a>(
         rpc::proto_payload::Message::BackfillRequest(_) => {
             let msg = (body.message.unwrap(), sender, ack_tx, profile);
             if let Err(_) = ctx.node_queue.0.send(msg) {
-                return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
-            }
-
-            return Ok(RespType::RespAndTrack);
-        }
-        rpc::proto_payload::Message::ByzPollRequest(_) => {
-            let msg = (body.message.unwrap(), sender, ack_tx, profile);
-            if let Err(_) = ctx.byz_poll_queue.0.send(msg) {
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }
 
@@ -699,19 +694,4 @@ pub async fn handle_node_messages<Engine>(
 
     let _ = join!(view_timer_handle);
     Ok(())
-}
-
-pub async fn handle_byz_poll(
-    ctx: PinnedServerContext,
-) {
-    let mut byz_poll_rx = ctx.byz_poll_queue.1.lock().await;
-
-    while let Some(query) = byz_poll_rx.recv().await {
-        
-        if let proto_payload::Message::ByzPollRequest(byz_req) = &query.0 {
-            let mut lbyz_ackpend = ctx.client_byz_ack_pending.lock().await;
-            lbyz_ackpend.insert((byz_req.block_n, byz_req.tx_n as usize), (query.2, query.3));
-        }
-
-    }
 }

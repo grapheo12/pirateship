@@ -113,6 +113,9 @@ fn fork_choice_filter_fast_path(
             let blk: Vec<_> = stat.fork_suffix_after_last_qc_n.blocks.iter().filter(|e| {
                 e.n == n
             }).collect();
+            if blk.len() == 0 {
+                continue;
+            }
             let blk = blk[0];
             let blk_hsh = __hash_block(&blk);
 
@@ -313,7 +316,7 @@ fn verify_view_change_msg(vc: &ProtoViewChange, keys: &KeyStore, sender: &String
 pub async fn do_reply_all_with_tentative_receipt(ctx: &PinnedServerContext) {
     let mut lack_pend = ctx.client_ack_pending.lock().await;
 
-    for ((bn, txn), (chan, profile)) in lack_pend.iter_mut() {
+    for ((bn, txn), (chan, profile, _sender)) in lack_pend.iter_mut() {
         profile.register("Tentative chan wait");
         let response = ProtoClientReply {
             reply: Some(

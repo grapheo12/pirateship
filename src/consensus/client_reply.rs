@@ -9,7 +9,7 @@ use tokio::{fs::read, sync::MutexGuard};
 
 use crate::{
     config::NodeInfo, consensus::handler::{ForwardedMessageWithAckChan, PinnedServerContext}, crypto::{hash, DIGEST_LENGTH}, proto::{client::{
-            ProtoClientReply, ProtoCurrentLeader, ProtoTransactionReceipt, ProtoTryAgain
+            ProtoByzResponse, ProtoClientReply, ProtoCurrentLeader, ProtoTransactionReceipt, ProtoTryAgain
         }, execution::ProtoTransactionResult}, rpc::PinnedMessage
 };
 
@@ -93,6 +93,8 @@ pub async fn do_respond_to_read_requests<Engine>(
                                     block_n: 0,
                                     tx_n: 0,
                                     results: Some(result),
+                                    await_byz_response: false,
+                                    byz_responses: vec![]
                                 },
                         )),
                     };
@@ -151,8 +153,11 @@ pub async fn do_reply_transaction_receipt<'a, F>(
             }
         }else {
             let h = hash(&entry.block.tx[*txn].encode_to_vec());
-            
-
+            let byz_responses = get_all_byz_responses(ctx, &chan.2);
+            let await_byz_response = should_await_byz_response(*bn, *txn);
+            if await_byz_response {
+                register_tx_with_client(ctx, &chan.2, *bn, *txn);
+            }
             ProtoClientReply {
                 reply: Some(
                     crate::proto::client::proto_client_reply::Reply::Receipt(
@@ -161,6 +166,8 @@ pub async fn do_reply_transaction_receipt<'a, F>(
                             block_n: (*bn) as u64,
                             tx_n: (*txn) as u64,
                             results: Some(result_getter(*bn, *txn)),
+                            await_byz_response,
+                            byz_responses,
                         },
                 )),
             }
@@ -188,51 +195,68 @@ pub async fn do_reply_transaction_receipt<'a, F>(
     });
 }
 
-pub async fn do_reply_byz_poll<'a, F>(
-    ctx: &PinnedServerContext,
-    fork: &'a MutexGuard<'a, Log>,
-    n: u64,     // bci
-    result_getter: F
-) where F: Fn(u64 /* bn */, usize /* txn */) -> ProtoTransactionResult
-{
-    let mut lbyz_ackpend = ctx.client_byz_ack_pending.lock().await;
-    lbyz_ackpend.retain(|(bn, txn), chan| {
-        if *bn > n {
-            return true;
+pub fn register_byz_response(ctx: &PinnedServerContext, client_name: &String, resp: ProtoByzResponse) {
+    let mut q = ctx.client_byz_ack_pending.lock().unwrap();
+    if !q.contains_key(client_name) {
+        q.insert(client_name.clone(), Vec::new());
+    }
+    q.get_mut(client_name).unwrap().push(resp);
+}
+
+pub fn get_all_byz_responses(ctx: &PinnedServerContext, client_name: &String) -> Vec<ProtoByzResponse> {
+    let mut q = ctx.client_byz_ack_pending.lock().unwrap();
+    if !q.contains_key(client_name) {
+        return vec![];
+    }
+    let ret = q.get(client_name).unwrap().clone();
+    q.get_mut(client_name).unwrap().clear();
+
+    ret
+}
+
+pub fn should_await_byz_response(bn: u64, txn: usize) -> bool {
+    bn > 0 && bn % 157 == 1 && txn == 0
+}
+
+pub fn register_tx_with_client(ctx: &PinnedServerContext, client_name: &String, bn: u64, txn: usize) {
+    if !ctx.i_am_leader.load(Ordering::SeqCst) {
+        return;
+    }
+
+    let mut m = ctx.client_tx_map.lock().unwrap();
+    m.insert((bn, txn), client_name.clone());
+}
+
+pub fn pop_client_for_tx(ctx: &PinnedServerContext, bn: u64, txn: usize) -> Option<String> {
+    if !ctx.i_am_leader.load(Ordering::SeqCst) {
+        return None;
+    }
+    let mut m = ctx.client_tx_map.lock().unwrap();
+    m.remove(&(bn, txn))
+}
+
+pub fn bulk_register_byz_response(ctx: &PinnedServerContext, updated_bci: u64, fork: &MutexGuard<Log>) {
+    if !ctx.i_am_leader.load(Ordering::SeqCst) {
+        return;
+    }
+
+    let old_bci = ctx.client_replied_bci.load(Ordering::SeqCst);
+    if old_bci >= updated_bci {
+        return;
+    }
+
+    for bn in (old_bci + 1)..(updated_bci + 1) {
+        let entry = &fork.get(bn).unwrap();
+        for txn in 0..entry.block.tx.len() {
+            let client_name = pop_client_for_tx(ctx, bn, txn);
+            if let None = client_name {
+                continue;
+            }
+            let client_name = client_name.unwrap();
+            register_byz_response(ctx, &client_name, ProtoByzResponse {
+                block_n: bn,
+                tx_n: txn as u64,
+            });
         }
-
-        let entry = fork.get(*bn).unwrap();
-        let h = hash(&entry.block.tx[*txn].encode_to_vec());
-        let response = ProtoClientReply {
-            reply: Some(
-                crate::proto::client::proto_client_reply::Reply::Receipt(
-                    ProtoTransactionReceipt {
-                        req_digest: h,
-                        block_n: (*bn) as u64,
-                        tx_n: (*txn) as u64,
-                        results: Some(result_getter(*bn, *txn)),
-                    },
-            )),
-        };
-
-        let v = response.encode_to_vec();
-        let vlen = v.len();
-
-        let msg = PinnedMessage::from(v, vlen, crate::rpc::SenderType::Anon);
-
-        let mut profile = chan.1.clone();
-        profile.register("Init Sending Client Response");
-        if *bn % 1000 == 0 {
-            profile.should_print = true;
-            profile.prefix = String::from(format!("Block: {}, Txn: {}", *bn, *txn));
-        }
-        let send_res = chan.0.send((msg, profile));
-        match send_res {
-            Ok(_) => false,
-            Err(e) => {
-                error!("Error sending response: {}", e);
-                true
-            },
-        }
-    });
+    }
 }

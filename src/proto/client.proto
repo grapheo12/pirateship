@@ -13,12 +13,21 @@ message ProtoClientRequest {
     bytes sig = 3;
 }
 
+message ProtoByzResponse {
+    uint64 block_n = 1;
+    uint64 tx_n = 2;
+    // bytes req_digest = 3;
+}
+
 message ProtoTransactionReceipt {
     bytes req_digest = 1;
     uint64 block_n = 2;
     uint64 tx_n = 3;
 
     proto.execution.ProtoTransactionResult results = 4;
+
+    bool await_byz_response = 5;
+    repeated ProtoByzResponse byz_responses = 6;
 }
 
 message ProtoTentativeReceipt {
