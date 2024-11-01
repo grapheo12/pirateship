@@ -184,6 +184,7 @@ impl Log {
     /// So there is no need to bring up that block again.
     #[cfg(feature = "storage")]
     pub fn get_gc_block(&self, n: u64) -> Result<LogEntry, Error> {
+        warn!("Get GC Block called! {}", n);
         if n > self.gc_hiwm {
             return Err(Error::new(
                 ErrorKind::InvalidInput,

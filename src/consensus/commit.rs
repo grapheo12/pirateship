@@ -125,6 +125,16 @@ pub async fn do_byzantine_commit<'a, Engine>(
     #[cfg(not(feature = "reply_from_app"))]
     {
         // do_reply_byz_poll(ctx, fork, updated_bci, |_, _| ProtoTransactionResult::default()).await;
+        #[cfg(feature = "storage")]
+        {
+            let gc_hiwm = fork.gc_hiwm();
+            let replied_bci = ctx.client_replied_bci.load(Ordering::SeqCst);
+
+            if replied_bci < gc_hiwm {
+                ctx.client_replied_bci.store(gc_hiwm, Ordering::SeqCst);
+            }
+        }
+        
         bulk_register_byz_response(ctx, updated_bci, fork);
     }
 
@@ -204,7 +214,7 @@ where
         let updated_bci = qc.n;
         
         if updated_bci > old_bci {
-            if updated_bci % 1 == 0 {
+            if updated_bci % 1000 == 1 {
                 info!("Byzantine commit by fast path: {}", updated_bci);
             }
             do_byzantine_commit(ctx, client, engine, fork, updated_bci).await;
