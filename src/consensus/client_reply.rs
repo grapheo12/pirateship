@@ -3,7 +3,7 @@
 
 use std::sync::atomic::Ordering;
 
-use log::{error, info, warn};
+use log::{error, info, trace, warn};
 use prost::Message;
 use tokio::{fs::read, sync::MutexGuard};
 
@@ -131,7 +131,7 @@ pub async fn do_reply_transaction_receipt<'a, F>(
         if *bn > n {
             return true;
         }
-
+        trace!("Replying tx receipt for {}, gc_hiwm {}", *bn, fork.gc_hiwm());
         let entry = fork.get(*bn).unwrap();
         let response = if entry.block.tx.len() <= *txn {
             if ctx.i_am_leader.load(Ordering::SeqCst) {
@@ -246,6 +246,7 @@ pub fn bulk_register_byz_response(ctx: &PinnedServerContext, updated_bci: u64, f
     }
 
     for bn in (old_bci + 1)..(updated_bci + 1) {
+        trace!("Registering byz reply for {}, gc_hiwm {}", bn, fork.gc_hiwm());
         let entry = &fork.get(bn).unwrap();
         for txn in 0..entry.block.tx.len() {
             let client_name = pop_client_for_tx(ctx, bn, txn);
@@ -259,4 +260,7 @@ pub fn bulk_register_byz_response(ctx: &PinnedServerContext, updated_bci: u64, f
             });
         }
     }
+
+    ctx.client_replied_bci.store(updated_bci, Ordering::SeqCst);
+
 }

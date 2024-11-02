@@ -101,6 +101,7 @@ pub async fn do_byzantine_commit<'a, Engine>(
 
     engine.signal_byzantine_commit(updated_bci);
     for bn in (old_bci + 1)..(updated_bci + 1) {
+        info!("do_byz_commit: Getting {} gc_hiwm {}", bn, fork.gc_hiwm());
         let entry = fork.get(bn).unwrap();
         for _tx in &entry.block.tx {
             if !_tx.is_reconfiguration {
@@ -163,9 +164,12 @@ where
     if n == 0 {
         return true;
     }
+    let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+    if n <= old_bci {
+        return true;
+    }
 
     let block_qcs = &fork.get(n).unwrap().block.qc;
-    let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
     let mut updated_bci = old_bci;
     if block_qcs.len() == 0 && updated_bci > 0 {
         trace!("Invariant violation: No QC found!");
@@ -289,6 +293,7 @@ pub async fn do_commit<'a, Engine>(
     engine.signal_crash_commit(n);
 
     for bn in (ci + 1)..(n + 1) {
+        trace!("do_commit {} gc_hiwm {}", bn, fork.gc_hiwm());
         let entry = fork.get(bn).unwrap();
         for _tx in &entry.block.tx {
             if !_tx.is_reconfiguration {

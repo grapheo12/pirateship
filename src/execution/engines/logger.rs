@@ -134,8 +134,11 @@ impl PinnedLoggerEngine {
             info!("byz_commit_index = {}, hash = {}", bci, fork.hash_at_n(bci).unwrap().encode_hex::<String>());
             
             #[cfg(feature = "storage")]
-            if bci - 1 > 0 {
-                fork.garbage_collect_upto(bci - 1);
+            {
+                let replied_upto = self.ctx.client_replied_bci.load(Ordering::SeqCst);
+                if replied_upto > 0 {
+                    fork.garbage_collect_upto(replied_upto);
+                }
             }
         };
     }

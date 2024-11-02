@@ -9,9 +9,9 @@ variable "resource_group_location" {
 
 variable "platform_locations" {
   type        = list(string)
-  default     = ["centralus"]
+  default     = ["eastus", "centralus", "westus"]
   # default     = ["eastus", "westus", "centralus", "eastus2"]
-  description = "Location of the platforms."
+  description = "Location of the platforms/client machines."
 }
 
 variable "resource_group_name_prefix" {
@@ -29,7 +29,7 @@ variable "username" {
 variable "sevpool_count" {
   type        = list(number)
   description = "Number of VMs with SEV"
-  default = [ 0 ]
+  default = [ 3, 0, 0 ]
   # default     = [0, 0, 0, 0]
 }
 
@@ -37,21 +37,21 @@ variable "sevpool_count" {
 variable "tdxpool_count" {
   type        = list(number)
   description = "Number of VMs with TDX"
-  default = [ 4 ]
+  default = [ 0, 3, 0 ]
   # default     = [0, 0, 0, 0]
 }
 
 variable "nonteepool_count" {
   type        = list(number)
   description = "Number of VMs without TEEs, used as replicas"
-  default = [ 0 ]
+  default = [ 0, 0, 0 ]
   # default     = [0, 0, 4, 0]
 }
 
 variable "clientpool_count"{
   type        = list(number)
   description = "Number of VMs with no trusted hardware, used as client nodes"
-  default = [ 3 ]
+  default = [ 0, 0, 3 ]
   # default     = [0, 0, 1, 0]
 }
 
