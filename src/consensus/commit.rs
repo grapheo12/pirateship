@@ -101,7 +101,7 @@ pub async fn do_byzantine_commit<'a, Engine>(
 
     engine.signal_byzantine_commit(updated_bci);
     for bn in (old_bci + 1)..(updated_bci + 1) {
-        info!("do_byz_commit: Getting {} gc_hiwm {}", bn, fork.gc_hiwm());
+        trace!("do_byz_commit: Getting {} gc_hiwm {}", bn, fork.gc_hiwm());
         let entry = fork.get(bn).unwrap();
         for _tx in &entry.block.tx {
             if !_tx.is_reconfiguration {
