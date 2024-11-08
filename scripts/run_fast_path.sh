@@ -6,7 +6,8 @@
 set -o xtrace
 
 # ALL_CLIENTS="-c 1 -c 10 -c 50 -c 100 -c 200 -c 500 -c 700 -c 1000"
-ALL_CLIENTS="-c 10 -c 50 -c 100 -c 200 -c 500 -c 700 -c 1000"
+# ALL_CLIENTS="-c 10 -c 50 -c 100 -c 200 -c 500 -c 700 -c 1000"
+ALL_CLIENTS="-c 500 -c 700 -c 1000 -c 2000 -c 5000 -c 7000"
 # ALL_CLIENTS="-c 200 -c 500 -c 700 -c 1000"
 # ALL_CLIENTS="-c 200"
 

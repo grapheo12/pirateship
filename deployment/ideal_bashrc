@@ -118,4 +118,4 @@ if ! shopt -oq posix; then
 fi
 . "$HOME/.cargo/env"
 
-ulimit -n 8192
+ulimit -n 10000

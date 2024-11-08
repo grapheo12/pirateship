@@ -6,17 +6,12 @@ fn get_small_tx_msg() -> ProtoClientRequest {
     ProtoClientRequest {
         tx: Some(ProtoTransaction{
             on_receive: None,
-            // on_crash_commit: Some(ProtoTransactionPhase {
-            //     ops: vec![ProtoTransactionOp {
-            //         op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-            //         // operands: vec![
-            //         //     format!("crash_commit_{}", i).into_bytes(),
-            //         //     format!("Tx:{}:{}", idx, i).into_bytes()
-            //         // ],
-            //         operands: Vec::new(),
-            //     }],
-            // }),
-            on_crash_commit: None,
+            on_crash_commit: Some(ProtoTransactionPhase {
+                ops: vec![ProtoTransactionOp {
+                    op_type: pft::proto::execution::ProtoTransactionOpType::Noop.into(),
+                    operands: vec![vec![2u8; 2]],
+                }],
+            }),
             on_byzantine_commit: None,
             is_reconfiguration: false,
         }),
@@ -104,5 +99,9 @@ fn main() {
     println!("Mean small length: {} KiB Total {} KiB", mean_small_len / 1024.0, mean_small_len * SAMPLES as f64 / 1024.0);
     println!("Small fork size: {} KiB", small_fork.encode_to_vec().len() as f64 / 1024.0);
 
+    let tx = get_small_tx_msg();
+
+    let tx_ser = tx.tx.unwrap().encode_to_vec();
+    println!("Small tx serialized size: {}", tx_ser.len());
 
 }

@@ -42,6 +42,6 @@ sudo apt-get install -y python3-pip python3-virtualenv
 
 # Increase open file limits
 
-echo "*	soft	nofile	8192" >> /etc/security/limits.conf
-echo "*	hard	nofile	8192" >> /etc/security/limits.conf
+echo "*	soft	nofile	10000" >> /etc/security/limits.conf
+echo "*	hard	nofile	10000" >> /etc/security/limits.conf
 
