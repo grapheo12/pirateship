@@ -266,7 +266,7 @@ def plot_tput_vs_latency_multi(stat_list: List[Dict[int, Stats]], legends: List[
             # hex color
             # color=convert_legend_to_rgb_color(legends[i])
         )
-    plt.yscale("log", base=2)
+    plt.yscale("log")
     plt.xlabel("Throughput (k req/s)")
     plt.ylabel("Latency (ms)")
     plt.grid()
