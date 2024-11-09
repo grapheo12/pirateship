@@ -348,7 +348,7 @@ where Engine: crate::execution::Engine
         }
 
         if __flipped {
-            info!(
+            trace!(
                 "Waiting for super_majority due to quorum diversity. |byz_qc_pending| = {}",
                 __byz_qc_pending_len
             );
@@ -356,6 +356,7 @@ where Engine: crate::execution::Engine
 
         if qd_should_wait_supermajority {
             if fork.inc_replication_vote(sender, i)? >= super_majority {
+                ctx.total_blocks_forced_supermajority.fetch_add(1, Ordering::SeqCst);
                 updated_ci = i;
             }
         } else {

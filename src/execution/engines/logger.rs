@@ -115,6 +115,8 @@ impl PinnedLoggerEngine {
 
             #[cfg(feature = "storage")]
             info!("Storage GC Hi watermark: {}", fork.gc_hiwm());
+
+            info!("Blocks forced to supermajority: {}", self.ctx.total_blocks_forced_supermajority.load(Ordering::SeqCst));
         }
 
         let mut rback_chan = self.rback_chan.1.lock().await;
@@ -135,6 +137,9 @@ impl PinnedLoggerEngine {
             
             #[cfg(feature = "storage")]
             {
+                if !self.ctx.i_am_leader.load(Ordering::SeqCst){
+                    self.ctx.client_replied_bci.store(bci, Ordering::SeqCst);
+                }
                 let replied_upto = self.ctx.client_replied_bci.load(Ordering::SeqCst);
                 if replied_upto > 0 {
                     fork.garbage_collect_upto(replied_upto);

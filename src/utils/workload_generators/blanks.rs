@@ -8,6 +8,7 @@ impl PerWorkerWorkloadGenerator for BlankWorkloadGenerator {
     fn next(&mut self) -> ProtoTransaction {
         ProtoTransaction{
             on_receive: None,
+            // on_crash_commit: None,
             on_crash_commit: Some(ProtoTransactionPhase {
                 ops: vec![ProtoTransactionOp {
                     op_type: crate::proto::execution::ProtoTransactionOpType::Noop.into(),

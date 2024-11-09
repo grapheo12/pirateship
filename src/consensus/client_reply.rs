@@ -215,7 +215,7 @@ pub fn get_all_byz_responses(ctx: &PinnedServerContext, client_name: &String) ->
 }
 
 pub fn should_await_byz_response(bn: u64, txn: usize) -> bool {
-    bn > 0 && bn % 1573 == 1 && txn == 0
+    bn > 0 && bn % 173 == 1 && txn == 0
 }
 
 pub fn register_tx_with_client(ctx: &PinnedServerContext, client_name: &String, bn: u64, txn: usize) {
@@ -240,6 +240,7 @@ pub fn bulk_register_byz_response(ctx: &PinnedServerContext, updated_bci: u64, f
         return;
     }
 
+
     let old_bci = ctx.client_replied_bci.load(Ordering::SeqCst);
     if old_bci >= updated_bci {
         return;
@@ -262,5 +263,4 @@ pub fn bulk_register_byz_response(ctx: &PinnedServerContext, updated_bci: u64, f
     }
 
     ctx.client_replied_bci.store(updated_bci, Ordering::SeqCst);
-
 }

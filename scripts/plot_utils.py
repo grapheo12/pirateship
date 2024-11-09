@@ -204,18 +204,20 @@ def plot_tput_vs_latency(stats: Dict[int, Stats], name: str):
 
     mean_tputs = [p[1].mean_tput for p in points]
     stdev_tputs = [p[1].stdev_tput for p in points]
+    stdev_latencies = [p[1].stdev_latency for p in points]
     median_latencies = [p[1].median_latency for p in points]
     yerr_max = [p[1].p75_latency - p[1].median_latency for p in points]
     yerr_min = [p[1].median_latency - p[1].p25_latency for p in points]
 
     plt.errorbar(
-        np.array(mean_tputs),
-        np.array(median_latencies),
-        yerr=[yerr_min, yerr_max],
-        xerr=np.array(stdev_tputs),
+        np.array(mean_tputs) / 1000.0,
+        np.array(median_latencies) / 1000.0,
+        # yerr=[yerr_min, yerr_max],
+        yerr=np.array(stdev_latencies) / 1000.0,
+        xerr=np.array(stdev_tputs) / 1000.0,
     )
-    plt.xlabel("Throughput (req/s)")
-    plt.ylabel("Latency (us)")
+    plt.xlabel("Throughput (k req/s)")
+    plt.ylabel("Latency (ms)")
     plt.grid()
     
     plt.savefig(name)
@@ -250,11 +252,11 @@ def plot_tput_vs_latency_multi(stat_list: List[Dict[int, Stats]], legends: List[
         
         # Errorbar plot both side
         plt.errorbar(
-            x=np.array(mean_tputs),
-            y=np.array(mean_latencies),
-            yerr=[yerr_min, yerr_max],
-            # yerr=np.array(stdev_latencies),
-            xerr=np.array(stdev_tputs),
+            x=np.array(mean_tputs) / 1000.0,
+            y=np.array(mean_latencies) / 1000.0,
+            # yerr=[yerr_min, yerr_max],
+            yerr=np.array(stdev_latencies) / 1000.0,
+            xerr=np.array(stdev_tputs) / 1000.0,
             label=legends[i],
             marker='>' if legends[i].endswith("-byz") else 'o',
             # ecolor='r',
@@ -265,8 +267,8 @@ def plot_tput_vs_latency_multi(stat_list: List[Dict[int, Stats]], legends: List[
             # color=convert_legend_to_rgb_color(legends[i])
         )
     plt.yscale("log")
-    plt.xlabel("Throughput (req/s)")
-    plt.ylabel("Latency (us)")
+    plt.xlabel("Throughput (k req/s)")
+    plt.ylabel("Latency (ms)")
     plt.grid()
 
     # Legend to the top and horizontal

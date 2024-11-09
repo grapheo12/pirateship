@@ -154,7 +154,9 @@ pub struct ServerContext {
 
     pub total_client_requests: AtomicUsize,
 
-    pub should_progress: Semaphore
+    pub should_progress: Semaphore,
+
+    pub total_blocks_forced_supermajority: AtomicUsize,
 }
 
 #[derive(Clone)]
@@ -202,6 +204,7 @@ impl PinnedServerContext {
             intended_view: AtomicU64::new(0),
             total_client_requests: AtomicUsize::new(0),
             should_progress: Semaphore::new(1),
+            total_blocks_forced_supermajority: AtomicUsize::new(0),
         })));
         let lifecycle_stage = decide_my_lifecycle_stage(&ctx, true);
         ctx.lifecycle_stage.store(lifecycle_stage as i8, Ordering::SeqCst);
