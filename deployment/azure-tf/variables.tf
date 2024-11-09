@@ -29,7 +29,7 @@ variable "username" {
 variable "sevpool_count" {
   type        = list(number)
   description = "Number of VMs with SEV"
-  default = [ 3, 0, 0 ]
+  default = [ 0, 0, 0 ]
   # default     = [0, 0, 0, 0]
 }
 
@@ -37,14 +37,14 @@ variable "sevpool_count" {
 variable "tdxpool_count" {
   type        = list(number)
   description = "Number of VMs with TDX"
-  default = [ 0, 3, 0 ]
+  default = [ 0, 0, 0 ]
   # default     = [0, 0, 0, 0]
 }
 
 variable "nonteepool_count" {
   type        = list(number)
   description = "Number of VMs without TEEs, used as replicas"
-  default = [ 0, 0, 0 ]
+  default = [ 0, 0, 4 ]
   # default     = [0, 0, 4, 0]
 }
 

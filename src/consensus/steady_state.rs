@@ -348,7 +348,7 @@ where Engine: crate::execution::Engine
         }
 
         if __flipped {
-            trace!(
+            info!(
                 "Waiting for super_majority due to quorum diversity. |byz_qc_pending| = {}",
                 __byz_qc_pending_len
             );

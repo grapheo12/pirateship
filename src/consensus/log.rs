@@ -2,8 +2,7 @@
 // Licensed under the MIT License.
 
 use std::{
-    collections::{HashMap, HashSet},
-    io::{Error, ErrorKind}, sync::Arc
+    collections::{HashMap, HashSet}, io::{Error, ErrorKind}, sync::Arc
 };
 
 #[cfg(feature = "storage")]
@@ -13,7 +12,7 @@ use ed25519_dalek::SIGNATURE_LENGTH;
 use log::{error, info, warn};
 use prost::Message;
 
-use crate::{config::Config, crypto::{cmp_hash, hash, KeyStore}, utils::{FileStorageEngine, RocksDBStorageEngine, StorageEngine}};
+use crate::{config::Config, crypto::{cmp_hash, hash, KeyStore}, utils::{AgnosticRef, FileStorageEngine, RocksDBStorageEngine, StorageEngine}};
 
 use super::super::proto::consensus::{
     proto_block::Sig, DefferedSignature, ProtoBlock, ProtoFork, ProtoNameWithSignature,
@@ -63,7 +62,6 @@ pub struct Log {
     #[cfg(feature = "storage")]
     gc_hiwm: u64,
 
-
     #[cfg(not(feature = "storage"))]
     entries: Vec<LogEntry>,
 
@@ -101,7 +99,6 @@ impl Log {
 
             #[cfg(feature = "storage")]
             gc_hiwm: 0,
-
 
             #[cfg(not(feature = "storage"))]
             entries: Vec::new(),
@@ -239,7 +236,7 @@ impl Log {
 
     }
 
-    pub fn get(&self, n: u64) -> Result<LogEntry, Error> {
+    pub fn get(&self, n: u64) -> Result<AgnosticRef<LogEntry>, Error> {
         if n > self.last() || n == 0 {
             return Err(Error::new(ErrorKind::InvalidInput, format!("Out of bounds {}, last() = {}", n, self.last())));
         }
@@ -249,7 +246,7 @@ impl Log {
             let res = self.get_gc_block(n);
             match res {
                 Ok(entry) => {
-                    return Ok(entry)
+                    return Ok(AgnosticRef::from(entry))
                 },
                 Err(e) => {
                     return Err(e)
@@ -257,15 +254,16 @@ impl Log {
             }
         }
 
-        // Since the block can be garbage collected any time after returning from here.
-        // The pointer may be invalidated. Better to return a clone.
-        // I don't know how costly this is going to be.
         #[cfg(feature = "storage")]
-        return Ok(self.entries.get((n - self.gc_hiwm - 1) as usize).unwrap().clone());
+        return Ok(AgnosticRef::from(
+            self.entries.get((n - self.gc_hiwm - 1) as usize).unwrap()
+        ));
 
 
         #[cfg(not(feature = "storage"))]
-        Ok(self.entries.get((n - 1) as usize).unwrap().clone())
+        Ok(AgnosticRef::from(
+            self.entries.get((n - 1) as usize).unwrap()
+        ))
     }
 
     /// Returns current vote size
@@ -772,9 +770,12 @@ impl Log {
         self.gc_hiwm = n;
     }
 
-    #[cfg(feature = "storage")]
     pub fn gc_hiwm(&self) -> u64 {
+        #[cfg(feature = "storage")]
         return self.gc_hiwm;
+
+        #[cfg(not(feature = "storage"))]
+        return 0;
     }
 
 }

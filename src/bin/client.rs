@@ -47,14 +47,12 @@ fn process_args() -> ClientConfig {
 }
 
 async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, config: ClientConfig, byz_resp: Arc<Pin<Box<Mutex<HashMap<(u64, u64), Instant>>>>>) -> io::Result<()> {    
-    sleep(Duration::from_millis(10) * (idx as u32)).await;
-    
     let mut config = config.clone();
     let mut leader_rr = 0;
     let mut curr_leader = config.net_config.nodes.keys().into_iter().collect::<Vec<_>>()[leader_rr].clone();
     let mut i = 0;
 
-    let mut rng = ChaCha20Rng::seed_from_u64(42);
+    let mut rng = ChaCha20Rng::seed_from_u64(42 + idx as u64);
     let sample_item = [(true, 1), (false, 499)];
 
 
@@ -298,7 +296,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
 
 // const NUM_BYZ_POLLERS: usize = 4;
 
-#[tokio::main(flavor = "multi_thread")]
+#[tokio::main(flavor = "multi_thread", worker_threads = 50)]
 async fn main() -> io::Result<()> {
     log4rs::init_config(default_log4rs_config()).unwrap();
     let config = process_args();

@@ -51,7 +51,7 @@ impl LatencyProfile {
             format!("{}: {} us", k, v.as_micros())
         }).collect();
 
-        trace!("{}, {}", self.prefix, str_list.join(", "));
+        info!("{}, {}", self.prefix, str_list.join(", "));
     }
 
     pub fn force_print(&self) {
