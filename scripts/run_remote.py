@@ -171,7 +171,8 @@ def kill_clients(client_conns: Dict[str, Connection]):
 def kill_nodes(node_conns: Dict[str, Connection]):
     for node, conn in node_conns.items():
         run_all([
-            f"pkill -c server_{node}"       # There better not be any other process that matches this.
+            f"pkill -c server_{node}",       # There better not be any other process that matches this.
+            "sleep 1 && rm -rf /tmp/testdb"  # Give some time to cool off after pkill so that db can be cleared off better.
         ], conn)
 
 
