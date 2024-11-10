@@ -46,6 +46,25 @@ fn process_args() -> ClientConfig {
     ClientConfig::deserialize(&cfg_contents)
 }
 
+const MAX_BACKOFF_MS: u64 = 1000;
+const MIN_BACKOFF_MS: u64 = 150;
+
+macro_rules! backoff {
+    ($current_backoff_ms: expr) => {
+        sleep(Duration::from_millis($current_backoff_ms)).await;
+        $current_backoff_ms *= 2;
+        if $current_backoff_ms > MAX_BACKOFF_MS {
+            $current_backoff_ms = MAX_BACKOFF_MS;
+        }
+    };
+}
+
+macro_rules! reset_backoff {
+    ($current_backoff_ms: expr) => {
+        $current_backoff_ms = MIN_BACKOFF_MS;
+    };
+}
+
 async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, config: ClientConfig, byz_resp: Arc<Pin<Box<Mutex<HashMap<(u64, u64), Instant>>>>>) -> io::Result<()> {    
     let mut config = config.clone();
     let mut leader_rr = 0;
@@ -64,6 +83,11 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
         pft::config::RequestConfig::KVReadWriteYCSB(config) => Box::new(KVReadWriteYCSBGenerator::new(config)),
         pft::config::RequestConfig::MockSQL() => Box::new(MockSQLGenerator::new()),
     };
+
+    let mut current_backoff_ms = MAX_BACKOFF_MS;
+
+    sleep(Duration::from_millis(current_backoff_ms)).await;
+    reset_backoff!(current_backoff_ms);
 
     while i < num_requests {
         let client_req = ProtoClientRequest {
@@ -98,7 +122,8 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
             if let Err(_) = msg {
                 leader_rr = (leader_rr + 1) % config.net_config.nodes.len();
                 curr_leader = config.net_config.nodes.keys().into_iter().collect::<Vec<_>>()[leader_rr].clone();
-                info!("Retrying with leader {}", curr_leader);
+                info!("Retrying with leader {} Backoff: {} ms", curr_leader, current_backoff_ms);
+                backoff!(current_backoff_ms);
                 continue;
             }
 
@@ -110,7 +135,10 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
                 continue;
             }
             let resp = match resp.reply.unwrap() {
-                pft::proto::client::proto_client_reply::Reply::Receipt(r) => r,
+                pft::proto::client::proto_client_reply::Reply::Receipt(r) => {
+                    reset_backoff!(current_backoff_ms);
+                    r
+                },
                 pft::proto::client::proto_client_reply::Reply::TryAgain(try_again_msg) => {
                     let node_infos = pft::config::NodeInfo::deserialize(&try_again_msg.serialized_node_infos);
                     for (k, v) in node_infos.nodes.iter() {
@@ -118,9 +146,11 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
                     }
                     client.0.config.set(Box::new(config.fill_missing()));
                     debug!("New Net Info: {:#?}", config.net_config.nodes);
+                    backoff!(current_backoff_ms);
                     continue;
                 },
                 pft::proto::client::proto_client_reply::Reply::Leader(l) => {
+                    reset_backoff!(current_backoff_ms);
                     let node_infos = pft::config::NodeInfo::deserialize(&l.serialized_node_infos);
                     for (k, v) in node_infos.nodes.iter() {
                         config.net_config.nodes.insert(k.clone(), v.clone());
@@ -152,6 +182,8 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
                 },
                 pft::proto::client::proto_client_reply::Reply::TentativeReceipt(r) => {
                     debug!("Got tentative receipt: {:?}", r);
+                    backoff!(current_backoff_ms);
+                    
                     continue;
                     // @todo: Wait to see if my txn gets committed in the tentative block.
                 },
