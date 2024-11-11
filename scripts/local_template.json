@@ -22,8 +22,8 @@
     "signature_max_delay_blocks": 1000,
     "signature_max_delay_ms": 200,
     "vote_processing_workers": 4,
-    "view_timeout_ms": 5000,
-    "liveness_u": 1,
+    "view_timeout_ms": 7000,
+    "liveness_u": 2,
     "log_storage_config": {
       "RocksDB": {
         "db_path": "/tmp/testdb",
