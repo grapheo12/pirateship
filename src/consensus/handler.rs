@@ -157,13 +157,17 @@ pub struct ServerContext {
     pub should_progress: Semaphore,
 
     pub total_blocks_forced_supermajority: AtomicUsize,
+
+    pub simulate_byz_behavior: bool,
+    pub byz_block_start: u64,
+    pub last_byz_hash: Mutex<Option<Vec<u8>>>
 }
 
 #[derive(Clone)]
 pub struct PinnedServerContext(pub Arc<Pin<Box<ServerContext>>>);
 
 impl PinnedServerContext {
-    pub fn new(cfg: &Config, keys: &KeyStore) -> PinnedServerContext {
+    pub fn new(cfg: &Config, keys: &KeyStore, sim_byz: bool) -> PinnedServerContext {
         let node_ch = mpsc::unbounded_channel();
         let client_ch = mpsc::unbounded_channel();
         let black_hole_ch = mpsc::unbounded_channel();
@@ -205,6 +209,10 @@ impl PinnedServerContext {
             total_client_requests: AtomicUsize::new(0),
             should_progress: Semaphore::new(1),
             total_blocks_forced_supermajority: AtomicUsize::new(0),
+
+            simulate_byz_behavior: sim_byz,
+            byz_block_start: 5000,
+            last_byz_hash: Mutex::new(None),
         })));
         let lifecycle_stage = decide_my_lifecycle_stage(&ctx, true);
         ctx.lifecycle_stage.store(lifecycle_stage as i8, Ordering::SeqCst);

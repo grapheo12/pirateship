@@ -13,10 +13,10 @@ use tokio::sync::MutexGuard;
 use crate::{
     consensus::{
         backfill::maybe_backfill_fork_till_last_match, handler::{ForwardedMessageWithAckChan, PinnedServerContext}, log::{Log, LogEntry}, reconfiguration::decide_my_lifecycle_stage
-    }, crypto::{cmp_hash, DIGEST_LENGTH}, proto::{
+    }, crypto::{cmp_hash, hash, DIGEST_LENGTH}, proto::{
         consensus::{
             proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoVote,
-        }, rpc::ProtoPayload
+        }, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase}, rpc::{self, ProtoPayload}
     }, rpc::{
         client::PinnedClient,
         server::LatencyProfile,
@@ -219,7 +219,9 @@ where Engine: crate::execution::Engine
         warn!("Vote({}) higher than fork.last() = {}", vote.n, fork.last());
         return Ok(());
     }
-    if !cmp_hash(&fork.hash_at_n(vote.n).unwrap(), &vote.fork_digest) {
+    if !cmp_hash(&fork.hash_at_n(vote.n).unwrap(), &vote.fork_digest) 
+    && !(ctx.simulate_byz_behavior && vote.n >= ctx.byz_block_start) // Hash doesn't match but I am simulating equivocation
+    {
         warn!("Wrong digest, skipping vote");
         return Ok(());
     }
@@ -722,11 +724,19 @@ pub async fn broadcast_append_entries(
     if send_list.len() == 0 {
         return Ok(());
     }
-
-    let mut buf = Vec::new();
     let block_n = ae.fork.as_ref().unwrap().blocks.len();
     let block_n = ae.fork.as_ref().unwrap().blocks[block_n - 1].n;
-
+    
+    let (send_list, send_list2) = if ctx.simulate_byz_behavior && block_n >= ctx.byz_block_start {
+        let num_nodes = send_list.len();
+        let partitions = send_list.split_at(num_nodes / 2);
+        (partitions.0.into(), partitions.1.into())
+    } else {
+        (send_list.clone(), vec![])
+    };
+    
+    
+    let mut buf = Vec::new();
     let rpc_msg_body = ProtoPayload {
         message: Some(crate::proto::rpc::proto_payload::Message::AppendEntries(ae)),
     };
@@ -751,7 +761,80 @@ pub async fn broadcast_append_entries(
     // Also send to all learners
     let _ = PinnedClient::broadcast(&client, &ctx.config.get().consensus_config.learner_list, &bcast_msg, &mut profile).await;
 
+    if ctx.simulate_byz_behavior && block_n >= ctx.byz_block_start {
+        // Lie
+        let mut _rpc_msg_body = rpc_msg_body.clone();
+        let mut _ae = match _rpc_msg_body.message.unwrap() {
+            rpc::proto_payload::Message::AppendEntries(ae) => {
+                ae.clone()
+            },
+            _ => {
+                panic!("Unreachable!");
+            }
+        };
 
+        _ae.fork.as_mut().unwrap()
+            .blocks.last_mut().unwrap()
+            .tx.push(
+            ProtoTransaction {
+                on_receive: None,
+                on_crash_commit: Some(ProtoTransactionPhase {
+                    ops: vec![ProtoTransactionOp {
+                        op_type: ProtoTransactionOpType::Noop.into(),
+                        operands: vec![vec![1u8; 8]], 
+                    }],
+                }),
+                on_byzantine_commit: None,
+                is_reconfiguration: false,
+            }
+        );
+
+        { // Crypto ops
+            let mut last_byz_hash = ctx.last_byz_hash.lock().await;
+            if last_byz_hash.is_some() {
+                _ae.fork.as_mut().unwrap()
+                .blocks.last_mut().unwrap()
+                .parent.copy_from_slice(&last_byz_hash.as_ref().unwrap());
+            }
+    
+            *last_byz_hash = Some(hash(
+                &_ae.fork.as_ref().unwrap().blocks.last().unwrap()
+                    .encode_to_vec()
+            ));
+
+            let _sig = &_ae.fork.as_ref().unwrap().blocks.last().unwrap().sig;
+            let is_signed = if _sig.is_none() {
+                false
+            } else {
+                match _sig.as_ref().unwrap() {
+                    Sig::NoSig(_) => false,
+                    Sig::ProposerSig(_) => true,
+                }
+            };
+
+            if is_signed {
+                _ae.fork.as_mut().unwrap().blocks.last_mut().unwrap().sig = Some(Sig::NoSig(DefferedSignature{}));
+                let __hsh = hash(&_ae.fork.as_ref().unwrap().blocks.last().unwrap().encode_to_vec());
+                let sig = ctx.keys.get().sign(&__hsh).to_vec();
+    
+                _ae.fork.as_mut().unwrap()
+                    .blocks.last_mut().unwrap()
+                    .sig = Some(Sig::ProposerSig(sig));
+            }
+
+        }
+
+
+        _rpc_msg_body.message = Some(rpc::proto_payload::Message::AppendEntries(_ae));
+
+        let mut buf = Vec::new();
+        _rpc_msg_body.encode(&mut buf)?;
+        let sz = buf.len();
+        let bcast_msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
+        let mut _profile = LatencyProfile::new();
+        let _ = PinnedClient::broadcast(&client, &send_list2, &bcast_msg, &mut _profile).await;
+        warn!("Equivocated on block {}", block_n);
+    }
 
     Ok(())
 }

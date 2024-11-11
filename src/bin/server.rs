@@ -1,7 +1,7 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use pft::{config::{self, Config}, consensus, execution::engines::{kvs::PinnedKVStoreEngine, logger::PinnedLoggerEngine, sql::PinnedSQLEngine}};
 use tokio::{runtime, signal};
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
@@ -12,16 +12,16 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 /// Fetch json config file from command line path.
 /// Panic if not found or parsed properly.
-fn process_args() -> Config {
+fn process_args() -> (Config, bool) {
     macro_rules! usage_str {
         () => {
-            "\x1b[31;1mUsage: {} path/to/config.json\x1b[0m"
+            "\x1b[31;1mUsage: {} path/to/config.json [--sim_byz]\x1b[0m"
         };
     }
 
     let args: Vec<_> = env::args().collect();
 
-    if args.len() != 2 {
+    if args.len() != 2 && args.len() != 3 {
         panic!(usage_str!(), args[0]);
     }
 
@@ -32,7 +32,13 @@ fn process_args() -> Config {
 
     let cfg_contents = fs::read_to_string(cfg_path).expect("Invalid file path");
 
-    Config::deserialize(&cfg_contents)
+    let sim_byz = if args.len() == 3 && args[2] == "--sim_byz" {
+        true
+    } else {
+        false
+    };
+
+    (Config::deserialize(&cfg_contents), sim_byz)
 }
 
 #[allow(unused_assignments)]
@@ -54,9 +60,9 @@ fn get_feature_set() -> (&'static str, &'static str) {
     (protocol, app)
 }
 
-async fn run_main(cfg: Config) -> io::Result<()> {
+async fn run_main(cfg: Config, sim_byz: bool) -> io::Result<()> {
     #[cfg(feature = "app_logger")]
-    let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
+    let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg, sim_byz));
     
     #[cfg(feature = "app_kvs")]
     let node = Arc::new(consensus::ConsensusNode::<PinnedKVStoreEngine>::new(&cfg));
@@ -87,10 +93,14 @@ const NUM_THREADS: usize = 32;
 fn main() {
     log4rs::init_config(config::default_log4rs_config()).unwrap();
 
-    let cfg = process_args();
+    let (cfg, sim_byz) = process_args();
 
     let (protocol, app) = get_feature_set();
     info!("Protocol: {}, App: {}", protocol, app);
+
+    if sim_byz {
+        warn!("Will simulate Byzantine behavior!");
+    }
 
     let core_ids = 
         Arc::new(Mutex::new(Box::pin(core_affinity::get_core_ids().unwrap())));
@@ -128,5 +138,5 @@ fn main() {
         .build()
         .unwrap();
 
-    let _ = runtime.block_on(run_main(cfg));
+    let _ = runtime.block_on(run_main(cfg, sim_byz));
 }

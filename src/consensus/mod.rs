@@ -48,13 +48,13 @@ impl<Engine> ConsensusNode<Engine>
 where 
     Engine: crate::execution::Engine + Clone + Send + Sync + 'static
 {
-    pub fn new(config: &Config) -> ConsensusNode<Engine> {
+    pub fn new(config: &Config, sim_byz: bool) -> ConsensusNode<Engine> {
         let key_store = KeyStore::new(
             &config.rpc_config.allowed_keylist_path,
             &config.rpc_config.signing_priv_key_path,
         );
         
-        let ctx = PinnedServerContext::new(config, &key_store);
+        let ctx = PinnedServerContext::new(config, &key_store, sim_byz);
         ConsensusNode{
             server: Arc::new(Server::new(config, consensus_rpc_handler, &key_store)),
             client: Client::new(config, &key_store).into(),
