@@ -796,11 +796,6 @@ pub async fn broadcast_append_entries(
                 .blocks.last_mut().unwrap()
                 .parent.copy_from_slice(&last_byz_hash.as_ref().unwrap());
             }
-    
-            *last_byz_hash = Some(hash(
-                &_ae.fork.as_ref().unwrap().blocks.last().unwrap()
-                    .encode_to_vec()
-            ));
 
             let _sig = &_ae.fork.as_ref().unwrap().blocks.last().unwrap().sig;
             let is_signed = if _sig.is_none() {
@@ -822,6 +817,11 @@ pub async fn broadcast_append_entries(
                     .sig = Some(Sig::ProposerSig(sig));
             }
 
+            *last_byz_hash = Some(hash(
+                &_ae.fork.as_ref().unwrap().blocks.last().unwrap()
+                    .encode_to_vec()
+            ));
+
         }
 
 
@@ -833,7 +833,7 @@ pub async fn broadcast_append_entries(
         let bcast_msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
         let mut _profile = LatencyProfile::new();
         let _ = PinnedClient::broadcast(&client, &send_list2, &bcast_msg, &mut _profile).await;
-        warn!("Equivocated on block {}", block_n);
+        warn!("Equivocated on block {}, Partitions: {:?} {:?}", block_n, send_list, send_list2);
     }
 
     Ok(())
