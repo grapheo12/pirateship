@@ -1,6 +1,8 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
+use std::{ops::Index, sync::atomic::Ordering};
+
 use log::{debug, error, info, warn};
 use prost::Message;
 use tokio::sync::{mpsc::UnboundedSender, MutexGuard};
@@ -85,7 +87,28 @@ pub async fn do_process_backfill_request(ctx: PinnedServerContext, ack_tx: &mut 
             fork  
         }
     };
-    let resp_fork = fork.serialize_range(block_start, block_end);
+    let mut resp_fork = fork.serialize_range(block_start, block_end);
+    if ctx.simulate_byz_behavior && ctx.view_is_stable.load(Ordering::SeqCst) {
+        let send_list = ctx.send_list.get();
+        let mid = send_list.len() / 2;
+        if send_list.iter().position(|e| e.eq(_sender)).unwrap_or(send_list.len()) >= mid {
+            // You must get the equivocated blocks.
+            let eq_block_store = ctx.state.equivocated_blocks.lock().await;
+            for block in resp_fork.blocks.iter_mut() {
+                if block.n < 5000 {
+                    continue;
+                }
+
+                let _blk = eq_block_store.get(&block.n);
+                match _blk {
+                    Some(_b) => {
+                        *block = _b.clone();
+                    },
+                    None => {}
+                }
+            }
+        }
+    }
     profile.register("Backfill done");
 
     let response = ProtoBackFillResponse {

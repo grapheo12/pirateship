@@ -123,7 +123,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
                 leader_rr = (leader_rr + 1) % config.net_config.nodes.len();
                 curr_leader = config.net_config.nodes.keys().into_iter().collect::<Vec<_>>()[leader_rr].clone();
                 info!("Retrying with leader {} Backoff: {} ms: Error: {}", curr_leader, current_backoff_ms, e);
-                // backoff!(current_backoff_ms);
+                backoff!(current_backoff_ms);
                 continue;
             }
 
@@ -194,7 +194,8 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
             }
 
             
-            let should_log = sample_item[weight_dist.sample(&mut rng)].0;
+            let should_log = curr_leader == "node1";
+            let should_log = should_log || sample_item[weight_dist.sample(&mut rng)].0;
             
             if should_log {
                 info!("Client Id: {}, Msg Id: {}, Block num: {}, Tx num: {}, Latency: {} us, Current Leader: {}",
@@ -226,6 +227,8 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
         }
 
         i += 1;
+
+        sleep(Duration::from_millis(10)).await;
     }
 
     info!("All transactions done");

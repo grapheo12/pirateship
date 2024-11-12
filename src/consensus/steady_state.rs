@@ -427,10 +427,10 @@ pub async fn do_push_append_entries_to_fork<Engine>(
 
 
     if ae.view < ctx.state.view.load(Ordering::SeqCst) {
-        if ctx.last_stable_view.load(Ordering::SeqCst) <= ae.view {
+        if false && ctx.last_stable_view.load(Ordering::SeqCst) <= ae.view && ae.view_is_stable {
             info!("I timed out due to network partition; Now going back to view {} from {}",
-                ctx.state.view.load(Ordering::SeqCst), ctx.last_stable_view.load(Ordering::SeqCst));
-            ctx.state.view.store(ctx.last_stable_view.load(Ordering::SeqCst), Ordering::SeqCst);
+                ctx.state.view.load(Ordering::SeqCst), ae.view);
+            ctx.state.view.store(ae.view, Ordering::SeqCst);
         } else {
             trace!("Message from older view! Rejected; Sent by: {} Is New leader? {} Msg view: {} Current View {}",
                 sender, !ae.fork.as_ref().unwrap().blocks[0].view_is_stable, ae.view, ctx.state.view.load(Ordering::SeqCst));
@@ -520,7 +520,11 @@ pub async fn do_push_append_entries_to_fork<Engine>(
             let res = if entry.has_signature() {
                 fork.verify_and_push(entry, &_keys, &get_leader_str_for_view(&ctx, b.view))
             } else {
-                fork.push(entry)
+                if entry.block.qc.len() != 0 {
+                    Err(Error::new(ErrorKind::InvalidData, format!("Unsigned block has QC! n = {}", entry.block.n)))
+                } else {
+                    fork.push(entry)
+                }
             };
             match res {
                 Ok(_n) => {
@@ -560,12 +564,12 @@ pub async fn do_push_append_entries_to_fork<Engine>(
         byz_qc_pending.retain(|&n| n > last_qc);
 
         // Also the byzantine commit index may move
-        let did_byz_commit = maybe_byzantine_commit(&ctx, &client, engine, &fork).await;
+        let _did_byz_commit = maybe_byzantine_commit(&ctx, &client, engine, &fork).await;
 
-        if did_byz_commit {
+        // if did_byz_commit {
             // Pacemaker logic: Reset the view timer.
             ctx.view_timer.reset();
-        }
+        // }
     }
 
     (last_n, updated_last_n, seq_nums, true)
@@ -686,12 +690,12 @@ where Engine: crate::execution::Engine
             }
             profile.register("Block create");
 
-            let did_byz_commit = maybe_byzantine_commit(&ctx, &client, engine, &fork).await;
+            let _did_byz_commit = maybe_byzantine_commit(&ctx, &client, engine, &fork).await;
 
-            if did_byz_commit {
+            // if did_byz_commit {
                 // Pacemaker logic: Reset the view timer.
                 ctx.view_timer.reset();
-            }
+            // }
 
             trace!("QC link: {} --> {:?}", n, __qc_trace);
         }
@@ -762,7 +766,7 @@ pub async fn broadcast_append_entries(
     // Also send to all learners
     let _ = PinnedClient::broadcast(&client, &ctx.config.get().consensus_config.learner_list, &bcast_msg, &mut profile).await;
 
-    if ctx.simulate_byz_behavior && block_n >= ctx.byz_block_start {
+    if ctx.simulate_byz_behavior && block_n >= ctx.byz_block_start && ctx.view_is_stable.load(Ordering::SeqCst) {
         // Lie
         let mut _rpc_msg_body = rpc_msg_body.clone();
         let mut _ae = match _rpc_msg_body.message.unwrap() {
@@ -823,6 +827,12 @@ pub async fn broadcast_append_entries(
                     .encode_to_vec()
             ));
 
+        }
+
+        {
+            let mut eq_block_store = ctx.state.equivocated_blocks.lock().await;
+            let blk_cp = _ae.fork.as_ref().unwrap().blocks.last().unwrap().clone();
+            eq_block_store.insert(blk_cp.n, blk_cp);
         }
 
 

@@ -20,7 +20,7 @@ use std::time::Instant;
 use tokio::{join, sync::{mpsc, Mutex, Semaphore}};
 
 use crate::{
-    config::{AtomicConfig, Config, NodeInfo}, crypto::{AtomicKeyStore, KeyStore}, proto::{client::{ProtoByzPollRequest, ProtoByzResponse, ProtoClientRequest}, execution::ProtoTransaction, rpc::proto_payload}, rpc::{
+    config::{AtomicConfig, Config, NodeInfo}, crypto::{AtomicKeyStore, KeyStore}, proto::{client::{ProtoByzPollRequest, ProtoByzResponse, ProtoClientRequest}, consensus::ProtoBlock, execution::ProtoTransaction, rpc::proto_payload}, rpc::{
         client::PinnedClient, server::{GetServerKeys, LatencyProfile, MsgAckChan, RespType}, MessageRef, PinnedMessage
     }, utils::AtomicStruct
 };
@@ -46,6 +46,8 @@ pub struct ConsensusState {
     pub byz_qc_pending: Mutex<HashSet<u64>>,
     pub next_qc_list: Mutex<IndexMap<(u64, u64), ProtoQuorumCertificate>>,
     pub fork_buffer: Mutex<BTreeMap<u64, HashMap<String, ProtoViewChange>>>,
+
+    pub equivocated_blocks: Mutex<HashMap<u64, ProtoBlock>>
 }
 
 impl ConsensusState {
@@ -65,7 +67,8 @@ impl ConsensusState {
             byz_commit_index: AtomicU64::new(0),
             byz_qc_pending: Mutex::new(HashSet::new()),
             next_qc_list: Mutex::new(IndexMap::new()),
-            fork_buffer: Mutex::new(BTreeMap::new())
+            fork_buffer: Mutex::new(BTreeMap::new()),
+            equivocated_blocks: Mutex::new(HashMap::new())
         }
     }
 }
