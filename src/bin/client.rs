@@ -227,8 +227,6 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
         }
 
         i += 1;
-
-        sleep(Duration::from_millis(10)).await;
     }
 
     info!("All transactions done");

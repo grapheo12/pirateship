@@ -420,13 +420,13 @@ where Engine: crate::execution::Engine
 
     warn!("Moved to new view {} with leader {}", view, leader);
 
-    // Send everything from ci onwards.
+    // Send everything from bci onwards.
     // If more of the fork is needed, the next leader will backfill.
     let (fork_from_ci, fork_last, fork_last_qc, fork_last_hash) = {
         let fork = ctx.state.fork.lock().await;
-        let ci = ctx.state.commit_index.load(Ordering::SeqCst);
-        info!("Sending everything from {} to {}", ci, fork.last());
-        (fork.serialize_from_n(ci), fork.last(), fork.get_last_qc(), fork.last_hash())
+        let bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+        info!("Sending everything from {} to {}", bci, fork.last());
+        (fork.serialize_from_n(bci), fork.last(), fork.get_last_qc(), fork.last_hash())
     };
     // These are all the unconfirmed blocks that the next leader may or may not have.
     // So we must send them otherwise there is a data loss.
