@@ -675,7 +675,7 @@ pub async fn handle_node_messages<Engine>(
             }
 
             // AppendEntries should be processed by a single thread.
-            // Only votes can be safely processed by multiple threads.
+            // Only votes and backfill requests can be safely processed by multiple threads.
             if let crate::proto::rpc::proto_payload::Message::Vote(_) = req.0 {
                 let cfg = ctx.config.get();
                 let rr_cnt =
@@ -690,6 +690,20 @@ pub async fn handle_node_messages<Engine>(
                     // Push it to a worker
                     let _ = vote_worker_chans[(rr_cnt - 1) as usize].send(req);
                 }
+            } else if let crate::proto::rpc::proto_payload::Message::BackfillRequest(_) = req.0 {
+                let cfg = ctx.config.get();
+                let mut rr_cnt =
+                    vote_worker_rr_cnt % cfg.consensus_config.vote_processing_workers;
+                vote_worker_rr_cnt += 1;
+                if rr_cnt == 0 {
+                    rr_cnt = 1;
+                }
+                if vote_worker_chans.len() == 0 {
+                    panic!("Handling backfill requests needs multiple workers!");
+                }
+
+                // Always Push it to a worker
+                let _ = vote_worker_chans[(rr_cnt - 1) as usize].send(req);
             } else {
                 if let Err(e) = process_node_request(&ctx, &engine, &client, majority, super_majority, old_super_majority, &mut req).await {
                     error!("Error processing node request: {}", e);

@@ -220,7 +220,7 @@ where Engine: crate::execution::Engine
         return Ok(());
     }
     if !cmp_hash(&fork.hash_at_n(vote.n).unwrap(), &vote.fork_digest) 
-    && !(ctx.simulate_byz_behavior && vote.n >= ctx.byz_block_start) // Hash doesn't match but I am simulating equivocation
+    && !(ctx.simulate_byz_behavior && vote.n >= ctx.byz_block_start && ctx.view_is_stable.load(Ordering::SeqCst)) // Hash doesn't match but I am simulating equivocation
     {
         warn!("Wrong digest, skipping vote");
         return Ok(());
@@ -418,18 +418,10 @@ pub async fn do_push_append_entries_to_fork<Engine>(
     let _cfg = ctx.config.get();
     let _keys = ctx.keys.get();
 
-    let fork = ctx.state.fork.try_lock();
-    let mut fork = if let Err(e) = fork {
-        debug!("do_push_append_entries_to_fork: Fork is locked, waiting for it to be unlocked: {}", e);
+    let (last_n, last_qc) = {
         let fork = ctx.state.fork.lock().await;
-        debug!("do_push_append_entries_to_fork: Fork locked");
-        fork  
-    }else{
-        debug!("do_push_append_entries_to_fork: Fork locked");
-        fork.unwrap()
+        (fork.last(), fork.last_qc())
     };
-    let last_n = fork.last();
-    let last_qc = fork.last_qc();
     let mut updated_last_n = last_n;
     let mut seq_nums = Vec::new();
 
@@ -479,9 +471,15 @@ pub async fn do_push_append_entries_to_fork<Engine>(
         if !ae.view_is_stable {
             info!("Got New leader message for view {}!", ae.view);
         }
-        let f = maybe_backfill_fork_till_last_match(&ctx, &client, f, &fork, sender).await;
+        let f = {
+            let fork = ctx.state.fork.lock().await;
+            maybe_backfill_fork_till_last_match(&ctx, &client, f, fork.last(), sender).await
+        };
 
-        let res = maybe_verify_view_change_sequence(&ctx, &f, super_majority, &fork).await;
+        let res = {
+            let fork = ctx.state.fork.lock().await;
+            maybe_verify_view_change_sequence(&ctx, &f, super_majority, &fork).await
+        };
         
         if let Err(e) = res {
             warn!("Verification error: {}", e);
@@ -496,6 +494,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
             // However, the view change message comes with a sizeable backlog which will cause unnecessary fork overwrites.
             // So, we trim the matching prefix.
             // After trimming, the only thing that should remain is the last New Leader message.
+            let mut fork = ctx.state.fork.lock().await;
             let overwrite_blocks = fork.trim_matching_prefix(overwrite_blocks);
             if overwrite_blocks.blocks.len() > 0 {
                 trace!("Trimmed fork start: {}", overwrite_blocks.blocks[0].n);
@@ -513,6 +512,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
             }
         }
         
+        let mut fork = ctx.state.fork.lock().await;
         for b in view_lock_blocks.blocks {
             trace!("Inserting block {} with {} txs", b.n, b.tx.len());
             let entry = LogEntry::new(b.clone());
@@ -552,7 +552,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
     ctx.view_is_stable.store(ae.view_is_stable, Ordering::SeqCst);
 
 
-
+    let fork = ctx.state.fork.lock().await;
     if fork.last_qc() > last_qc {
         // If the last_qc progressed forward, need to clean up byz_qc_pending
         let last_qc = fork.last_qc();
@@ -727,7 +727,8 @@ pub async fn broadcast_append_entries(
     let block_n = ae.fork.as_ref().unwrap().blocks.len();
     let block_n = ae.fork.as_ref().unwrap().blocks[block_n - 1].n;
     
-    let (send_list, send_list2) = if ctx.simulate_byz_behavior && block_n >= ctx.byz_block_start {
+    let (send_list, send_list2) =
+    if ctx.simulate_byz_behavior && block_n >= ctx.byz_block_start && ctx.view_is_stable.load(Ordering::SeqCst) {
         let num_nodes = send_list.len();
         let partitions = send_list.split_at(num_nodes / 2);
         (partitions.0.into(), partitions.1.into())

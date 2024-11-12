@@ -514,21 +514,26 @@ pub async fn do_process_view_change<Engine>(
     // Check the signature on the fork.
     if !verify_view_change_msg(vc, &_keys, sender) {
         return;
-    } 
+    }
 
     // Check if fork's first block points to a block I already have.
     let vc = if vc.fork_len > 0 {
         if vc.fork.is_none() || vc.fork.as_ref().unwrap().blocks.len() == 0 {
             return;
         }
+
         match maybe_backfill_fork_till_prefix_match(ctx.clone(), client.clone(), vc, sender).await {
-            Some(vc) => vc,
+            Some(vc) => {
+                vc
+            },
             None => {
                 return;
             }
         }
+
     } else {
         vc.clone()
+        
     };
 
 

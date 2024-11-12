@@ -23,15 +23,20 @@ use crate::{
 
 
 pub async fn maybe_backfill_fork_till_prefix_match(ctx: PinnedServerContext, client: PinnedClient, vc: &ProtoViewChange, sender: &String) -> Option<ProtoViewChange> {
-    let fork = ctx.state.fork.lock().await;
     let mut vc_fork = vc.fork.clone().unwrap();
-    vc_fork = maybe_backfill_fork_till_last_match(&ctx, &client, &vc_fork, &fork, sender).await;
+    {
+        let fork = ctx.state.fork.lock().await;
+        vc_fork = maybe_backfill_fork_till_last_match(&ctx, &client, &vc_fork, fork.last(), sender).await;
+    }
     
     while vc_fork.blocks[0].n > 0 {
-        let my_parent_hash = match fork.hash_at_n(vc_fork.blocks[0].n - 1) {
-            Some(h) => h,
-            None => {
-                return None; // This is clearly an error!
+        let my_parent_hash = {
+            let fork = ctx.state.fork.lock().await;
+            match fork.hash_at_n(vc_fork.blocks[0].n - 1) {
+                Some(h) => h,
+                None => {
+                    return None; // This is clearly an error!
+                }
             }
         };
     
@@ -44,11 +49,11 @@ pub async fn maybe_backfill_fork_till_prefix_match(ctx: PinnedServerContext, cli
         }else {
             0
         };
-
-    
-        vc_fork = maybe_backfill_fork(&ctx, &client, &vc_fork, &fork, sender,
+        
+        vc_fork = maybe_backfill_fork(&ctx, &client, &vc_fork, sender,
             start,   // Fetch 10 blocks at a time. A better approach is to bin search first.
             vc_fork.blocks[0].n - 1).await;
+        
     }
 
     Some(ProtoViewChange {
@@ -74,9 +79,9 @@ pub async fn do_process_backfill_request(ctx: PinnedServerContext, ack_tx: &mut 
             f
         },
         Err(e) => {
-            debug!("do_process_backfill_request: Fork is locked, waiting for it to be unlocked: {}", e);
+            info!("do_process_backfill_request: Fork is locked, waiting for it to be unlocked: {}", e);
             let fork = ctx.state.fork.lock().await;
-            debug!("do_process_backfill_request: Fork locked");
+            info!("do_process_backfill_request: Fork locked");
             fork  
         }
     };
@@ -97,28 +102,28 @@ pub async fn do_process_backfill_request(ctx: PinnedServerContext, ack_tx: &mut 
 
 }
 
-pub async fn maybe_backfill_fork_till_last_match<'a>(ctx: &PinnedServerContext, client: &PinnedClient, f: &ProtoFork, fork: &MutexGuard<'a, Log>, sender: &String) -> ProtoFork {
-    let start = fork.last() + 1;
+pub async fn maybe_backfill_fork_till_last_match<'a>(ctx: &PinnedServerContext, client: &PinnedClient, f: &ProtoFork, fork_last: u64, sender: &String) -> ProtoFork {
+    let start = fork_last + 1;
     let end = f.blocks[0].n - 1;
     if start > end {
         return f.clone();
     }
 
-    maybe_backfill_fork(ctx, client, f, fork, sender, start, end).await
+    maybe_backfill_fork(ctx, client, f, sender, start, end).await
 
     
 }
 
 
-pub async fn maybe_backfill_fork<'a>(_ctx: &PinnedServerContext, client: &PinnedClient, f: &ProtoFork, fork: &MutexGuard<'a, Log>, sender: &String, block_start: u64, block_end: u64) -> ProtoFork {
+pub async fn maybe_backfill_fork<'a>(_ctx: &PinnedServerContext, client: &PinnedClient, f: &ProtoFork, sender: &String, block_start: u64, block_end: u64) -> ProtoFork {
     // Currently, just backfill if the current log is lagging behind.
     if f.blocks.len() == 0 {
         return f.clone();
     }
 
-    if f.blocks[0].n <= fork.last() + 1{
-        return f.clone();
-    }
+    // if f.blocks[0].n <= fork.last() + 1{
+    //     return f.clone();
+    // }
 
     
     let backfill_req = ProtoBackFillRequest {
