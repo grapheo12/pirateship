@@ -256,12 +256,12 @@ fn fork_choice_rule_get(
     (chosen_fork.unwrap(), chosen_fork_stat.unwrap())
 }
 
-fn sign_view_change_msg(vc: &mut ProtoViewChange, keys: &KeyStore, fork: &MutexGuard<Log>) {
+fn sign_view_change_msg(vc: &mut ProtoViewChange, keys: &KeyStore, fork_last_hash: &Vec<u8>) {
     // Precondition: A correctly generated vc message will have fork.last() in its fork.
     //              OR have fork_len == 0
     let mut buf = BufWriter::new(vec![0u8; 32 + 8 + 8 + 8]);
     // 32 for hash, 8 for view, 8 for last_n, 8 for last_qc_view
-    let _ = buf.write(&fork.last_hash());
+    let _ = buf.write(fork_last_hash);
     let _ = buf.write_u64::<BigEndian>(vc.view);
     let _ = buf.write_u64::<BigEndian>(vc.fork_len);
     let _ = buf.write_u64::<BigEndian>(match &vc.fork_last_qc {
@@ -380,10 +380,12 @@ where Engine: crate::execution::Engine
 
     // Send everything from ci onwards.
     // If more of the fork is needed, the next leader will backfill.
-    let fork = ctx.state.fork.lock().await;
-    let ci = ctx.state.commit_index.load(Ordering::SeqCst);
-    info!("Sending everything from {} to {}", ci, fork.last());
-    let fork_from_ci = fork.serialize_from_n(ci);
+    let (fork_from_ci, fork_last, fork_last_qc, fork_last_hash) = {
+        let fork = ctx.state.fork.lock().await;
+        let ci = ctx.state.commit_index.load(Ordering::SeqCst);
+        info!("Sending everything from {} to {}", ci, fork.last());
+        (fork.serialize_from_n(ci), fork.last(), fork.get_last_qc(), fork.last_hash())
+    };
     // These are all the unconfirmed blocks that the next leader may or may not have.
     // So we must send them otherwise there is a data loss.
     // It doesn't violate any guarantees, but clients will have to repropose.
@@ -393,20 +395,19 @@ where Engine: crate::execution::Engine
         view,
         fork: Some(fork_from_ci),
         fork_sig: vec![0u8; SIGNATURE_LENGTH],
-        fork_len: fork.last(),
-        fork_last_qc: match fork.get_last_qc() {
+        fork_len: fork_last,
+        fork_last_qc: match fork_last_qc {
             Ok(qc) => Some(qc),
             Err(_) => None,
         },
         config_num: ctx.state.config_num.load(Ordering::SeqCst),
     };
 
-    sign_view_change_msg(&mut vc_msg, &_keys, &fork);
+    sign_view_change_msg(&mut vc_msg, &_keys, &fork_last_hash);
 
 
     if leader == _cfg.net_config.name {
         // I won't send the message to myself.
-        drop(fork);
         do_process_view_change(
             ctx.clone(), engine,
             client.clone(),

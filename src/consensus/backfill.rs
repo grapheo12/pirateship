@@ -44,8 +44,8 @@ pub async fn maybe_backfill_fork_till_prefix_match(ctx: PinnedServerContext, cli
             break;
         }
 
-        let start = if vc_fork.blocks[0].n >= 10 {
-            vc_fork.blocks[0].n - 10
+        let start = if vc_fork.blocks[0].n >= 1000 {
+            vc_fork.blocks[0].n - 1000
         }else {
             0
         };

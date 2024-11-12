@@ -690,7 +690,8 @@ pub async fn handle_node_messages<Engine>(
                     // Push it to a worker
                     let _ = vote_worker_chans[(rr_cnt - 1) as usize].send(req);
                 }
-            } else if let crate::proto::rpc::proto_payload::Message::BackfillRequest(_) = req.0 {
+            }
+            else if let crate::proto::rpc::proto_payload::Message::BackfillRequest(_) = req.0 {
                 let cfg = ctx.config.get();
                 let mut rr_cnt =
                     vote_worker_rr_cnt % cfg.consensus_config.vote_processing_workers;
@@ -704,10 +705,13 @@ pub async fn handle_node_messages<Engine>(
 
                 // Always Push it to a worker
                 let _ = vote_worker_chans[(rr_cnt - 1) as usize].send(req);
-            } else {
-                if let Err(e) = process_node_request(&ctx, &engine, &client, majority, super_majority, old_super_majority, &mut req).await {
-                    error!("Error processing node request: {}", e);
-                }
+            }
+            else {
+                // if let Err(e) = process_node_request(&ctx, &engine, &client, majority, super_majority, old_super_majority, &mut req).await {
+                //     error!("Error processing node request: {}", e);
+                // }
+                let _ = vote_worker_chans[0].send(req);
+
             }
         }
 

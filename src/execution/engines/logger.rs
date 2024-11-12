@@ -125,11 +125,21 @@ impl PinnedLoggerEngine {
 
 
         while let Ok(ci) = rback_chan.try_recv() {
-            info!("rolled back commit_index = {}, hash = {}", ci, fork.hash_at_n(ci).unwrap().encode_hex::<String>());
+            match fork.hash_at_n(ci) {
+                Some(h) => {
+                    info!("rolled back commit_index = {}, hash = {}", ci, h.encode_hex::<String>());
+                },
+                None => {},
+            }
         };
 
         while let Ok(ci) = ci_chan.try_recv() {
-            info!("commit_index = {}, hash = {}", ci, fork.hash_at_n(ci).unwrap().encode_hex::<String>());
+            match fork.hash_at_n(ci) {
+                Some(h) => {
+                    info!("commit_index = {}, hash = {}", ci, h.encode_hex::<String>());
+                },
+                None => {},
+            }
         };
 
         while let Ok(bci) = bci_chan.try_recv() {
