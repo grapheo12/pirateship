@@ -204,6 +204,7 @@ impl Client {
 impl PinnedClient {
     async fn connect(client: &PinnedClient, name: &String) -> Result<PinnedTlsStream, Error> {
         let cfg = client.0.config.get();
+        debug!("(Re)establishing connection to: {}", name);
         debug!("Node list: {:?}", cfg.net_config.nodes);
         let peer = cfg
             .net_config
@@ -447,9 +448,9 @@ impl PinnedClient {
                 // If reliable send fails, die.
 
                 let mut msgs = Vec::new();
-                let c = _client.clone();
+                // let c = _client.clone();
                 let sock = loop {
-                    let s = match Self::get_sock(&c, &_name).await {
+                    let s = match Self::get_sock(&_client, &_name).await {
                         Ok(s) => s,
                         Err(e) => {
                             debug!("Broadcast worker dying for {}: {}", _name, e);
@@ -470,13 +471,14 @@ impl PinnedClient {
                         let msg_ref = msg.as_ref();
 
                         let len = msg_ref.len() as u32;
-                        if let Err(e) = Self::send_raw(&c, &_name, &sock, SendDataType::SizeType(len)).await {
+                        if let Err(e) = Self::send_raw(&_client, &_name, &sock, SendDataType::SizeType(len)).await {
                             warn!("Broadcast worker for {} dying: {}", _name, e);
                             should_die = true;
                             break;
                         }
-                        if let Err(e) = Self::send_raw(&c, &_name, &sock, SendDataType::ByteType(msg_ref)).await {
+                        if let Err(e) = Self::send_raw(&_client, &_name, &sock, SendDataType::ByteType(msg_ref)).await {
                             warn!("Broadcast worker for {} dying: {}", _name, e);
+                            should_die = true;
                             break;
                         }
 

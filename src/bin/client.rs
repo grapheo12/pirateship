@@ -119,11 +119,11 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
             // info!("Client {}: Received response", idx);
 
 
-            if let Err(_) = msg {
+            if let Err(e) = msg {
                 leader_rr = (leader_rr + 1) % config.net_config.nodes.len();
                 curr_leader = config.net_config.nodes.keys().into_iter().collect::<Vec<_>>()[leader_rr].clone();
-                info!("Retrying with leader {} Backoff: {} ms", curr_leader, current_backoff_ms);
-                backoff!(current_backoff_ms);
+                info!("Retrying with leader {} Backoff: {} ms: Error: {}", curr_leader, current_backoff_ms, e);
+                // backoff!(current_backoff_ms);
                 continue;
             }
 

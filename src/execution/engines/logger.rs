@@ -143,7 +143,10 @@ impl PinnedLoggerEngine {
         };
 
         while let Ok(bci) = bci_chan.try_recv() {
-            info!("byz_commit_index = {}, hash = {}", bci, fork.hash_at_n(bci).unwrap().encode_hex::<String>());
+            info!("byz_commit_index = {}, hash = {}, last qc size = {}",
+                bci, fork.hash_at_n(bci).unwrap().encode_hex::<String>(),
+                fork.get_last_qc().unwrap().sig.len()
+            );
             
             #[cfg(feature = "storage")]
             {
