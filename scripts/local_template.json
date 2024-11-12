@@ -35,5 +35,9 @@
   },
   "app_config": {
     "logger_stats_report_ms": 100
+  },
+  "evil_config": {
+    "simulate_byzantine_behavior": false,
+    "byzantine_start_block": 0
   }
 }

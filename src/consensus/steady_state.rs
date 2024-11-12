@@ -219,8 +219,17 @@ where Engine: crate::execution::Engine
         warn!("Vote({}) higher than fork.last() = {}", vote.n, fork.last());
         return Ok(());
     }
+
+    #[cfg(feature = "evil")]
     if !cmp_hash(&fork.hash_at_n(vote.n).unwrap(), &vote.fork_digest) 
     && !(ctx.simulate_byz_behavior && vote.n >= ctx.byz_block_start && ctx.view_is_stable.load(Ordering::SeqCst)) // Hash doesn't match but I am simulating equivocation
+    {
+        warn!("Wrong digest, skipping vote");
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "evil"))]
+    if !cmp_hash(&fork.hash_at_n(vote.n).unwrap(), &vote.fork_digest) 
     {
         warn!("Wrong digest, skipping vote");
         return Ok(());
@@ -731,6 +740,7 @@ pub async fn broadcast_append_entries(
     let block_n = ae.fork.as_ref().unwrap().blocks.len();
     let block_n = ae.fork.as_ref().unwrap().blocks[block_n - 1].n;
     
+    #[cfg(feature = "evil")]
     let (send_list, send_list2) =
     if ctx.simulate_byz_behavior && block_n >= ctx.byz_block_start && ctx.view_is_stable.load(Ordering::SeqCst) {
         let num_nodes = send_list.len();
@@ -766,6 +776,7 @@ pub async fn broadcast_append_entries(
     // Also send to all learners
     let _ = PinnedClient::broadcast(&client, &ctx.config.get().consensus_config.learner_list, &bcast_msg, &mut profile).await;
 
+    #[cfg(feature = "evil")]
     if ctx.simulate_byz_behavior && block_n >= ctx.byz_block_start && ctx.view_is_stable.load(Ordering::SeqCst) {
         // Lie
         let mut _rpc_msg_body = rpc_msg_body.clone();

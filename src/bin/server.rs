@@ -12,16 +12,16 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 /// Fetch json config file from command line path.
 /// Panic if not found or parsed properly.
-fn process_args() -> (Config, bool) {
+fn process_args() -> Config {
     macro_rules! usage_str {
         () => {
-            "\x1b[31;1mUsage: {} path/to/config.json [--sim_byz]\x1b[0m"
+            "\x1b[31;1mUsage: {} path/to/config.json\x1b[0m"
         };
     }
 
     let args: Vec<_> = env::args().collect();
 
-    if args.len() != 2 && args.len() != 3 {
+    if args.len() != 2 {
         panic!(usage_str!(), args[0]);
     }
 
@@ -32,13 +32,7 @@ fn process_args() -> (Config, bool) {
 
     let cfg_contents = fs::read_to_string(cfg_path).expect("Invalid file path");
 
-    let sim_byz = if args.len() == 3 && args[2] == "--sim_byz" {
-        true
-    } else {
-        false
-    };
-
-    (Config::deserialize(&cfg_contents), sim_byz)
+    Config::deserialize(&cfg_contents)
 }
 
 #[allow(unused_assignments)]
@@ -60,9 +54,9 @@ fn get_feature_set() -> (&'static str, &'static str) {
     (protocol, app)
 }
 
-async fn run_main(cfg: Config, sim_byz: bool) -> io::Result<()> {
+async fn run_main(cfg: Config) -> io::Result<()> {
     #[cfg(feature = "app_logger")]
-    let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg, sim_byz));
+    let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
     
     #[cfg(feature = "app_kvs")]
     let node = Arc::new(consensus::ConsensusNode::<PinnedKVStoreEngine>::new(&cfg));
@@ -93,12 +87,13 @@ const NUM_THREADS: usize = 32;
 fn main() {
     log4rs::init_config(config::default_log4rs_config()).unwrap();
 
-    let (cfg, sim_byz) = process_args();
+    let cfg = process_args();
 
     let (protocol, app) = get_feature_set();
     info!("Protocol: {}, App: {}", protocol, app);
 
-    if sim_byz {
+    #[cfg(feature = "evil")]
+    if cfg.evil_config.simulate_byzantine_behavior {
         warn!("Will simulate Byzantine behavior!");
     }
 
@@ -138,5 +133,5 @@ fn main() {
         .build()
         .unwrap();
 
-    let _ = runtime.block_on(run_main(cfg, sim_byz));
+    let _ = runtime.block_on(run_main(cfg));
 }

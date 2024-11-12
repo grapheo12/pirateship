@@ -88,6 +88,8 @@ pub async fn do_process_backfill_request(ctx: PinnedServerContext, ack_tx: &mut 
         }
     };
     let mut resp_fork = fork.serialize_range(block_start, block_end);
+
+    #[cfg(feature = "evil")]
     if ctx.simulate_byz_behavior && ctx.view_is_stable.load(Ordering::SeqCst) {
         let send_list = ctx.send_list.get();
         let mid = send_list.len() / 2;

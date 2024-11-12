@@ -161,8 +161,11 @@ pub struct ServerContext {
 
     pub total_blocks_forced_supermajority: AtomicUsize,
 
+    #[cfg(feature = "evil")]
     pub simulate_byz_behavior: bool,
+    #[cfg(feature = "evil")]
     pub byz_block_start: u64,
+    #[cfg(feature = "evil")]
     pub last_byz_hash: Mutex<Option<Vec<u8>>>
 }
 
@@ -170,7 +173,7 @@ pub struct ServerContext {
 pub struct PinnedServerContext(pub Arc<Pin<Box<ServerContext>>>);
 
 impl PinnedServerContext {
-    pub fn new(cfg: &Config, keys: &KeyStore, sim_byz: bool) -> PinnedServerContext {
+    pub fn new(cfg: &Config, keys: &KeyStore) -> PinnedServerContext {
         let node_ch = mpsc::unbounded_channel();
         let client_ch = mpsc::unbounded_channel();
         let black_hole_ch = mpsc::unbounded_channel();
@@ -213,8 +216,11 @@ impl PinnedServerContext {
             should_progress: Semaphore::new(1),
             total_blocks_forced_supermajority: AtomicUsize::new(0),
 
-            simulate_byz_behavior: sim_byz,
-            byz_block_start: 5000,
+            #[cfg(feature = "evil")]
+            simulate_byz_behavior: cfg.evil_config.simulate_byzantine_behavior,
+            #[cfg(feature = "evil")]
+            byz_block_start: cfg.evil_config.byzantine_start_block,
+            #[cfg(feature = "evil")]
             last_byz_hash: Mutex::new(None),
         })));
         let lifecycle_stage = decide_my_lifecycle_stage(&ctx, true);

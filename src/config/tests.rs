@@ -6,7 +6,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tokio::{join, time::sleep};
 
-use crate::config::{AppConfig, ClientConfig, ClientNetConfig, ClientRpcConfig, Config, ConsensusConfig, KVReadWriteUniform, NetConfig, NodeNetInfo, RocksDBConfig, RpcConfig, WorkloadConfig};
+use crate::config::{AppConfig, ClientConfig, ClientNetConfig, ClientRpcConfig, Config, ConsensusConfig, EvilConfig, KVReadWriteUniform, NetConfig, NodeNetInfo, RocksDBConfig, RpcConfig, WorkloadConfig};
 
 use super::AtomicConfig;
 
@@ -69,11 +69,19 @@ fn test_nodeconfig_serialize() {
         logger_stats_report_ms: 100,
     };
 
+    let evil_config = EvilConfig {
+        simulate_byzantine_behavior: true,
+        byzantine_start_block: 20000,
+    };
+
     let config = Config {
         net_config,
         rpc_config,
         consensus_config,
         app_config,
+        
+        #[cfg(feature = "evil")]
+        evil_config
     };
 
     let s = config.serialize();
@@ -212,11 +220,19 @@ async fn test_atomic_config_access() {
         logger_stats_report_ms: 100,
     };
 
+    let evil_config = EvilConfig {
+        simulate_byzantine_behavior: true,
+        byzantine_start_block: 20000,
+    };
+
     let config = Config {
         net_config,
         rpc_config,
         consensus_config,
         app_config,
+
+        #[cfg(feature = "evil")]
+        evil_config,
     };
 
     let atomic_config = AtomicConfig::new(config);
