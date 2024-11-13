@@ -1,3 +1,6 @@
+# Copyright (c) Shubham Mishra. All rights reserved.
+# Licensed under the MIT License.
+
 import datetime
 from plot_utils import node_rgx, isoparse
 import matplotlib.pyplot as plt
@@ -15,6 +18,7 @@ revolt_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Processing view change for view
 moved_view_rgx = re.compile(r"\[WARN\]\[.*\]\[(.*)\] Moved to new view .* with leader.*")
 
 stable_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] View stabilised.*")
+stable_rgx2 = re.compile(r"\[INFO\]\[.*\]\[(.*)\]View fast forwarded to .* stable\? true")
 
 
 def plot_throughput_timeseries(infile, outfile, ramp_up=5, ramp_down=5):
@@ -36,21 +40,27 @@ def plot_throughput_timeseries(infile, outfile, ramp_up=5, ramp_down=5):
                 if len(eq_cp) == 1:
                     first_equivocate = isoparse(eq_cp[0])
 
-            if not(first_equivocate is None) and first_revolt is None:
-                r_cp = revolt_rgx.findall(line)
-                if len(r_cp) == 1:
-                    first_revolt = isoparse(r_cp[0])
-                    
-            if not(first_equivocate is None) and not(first_revolt is None) and moved_view is None:
-                nl_cp = moved_view_rgx.findall(line)
-                if len(nl_cp) == 1:
-                    moved_view = isoparse(nl_cp[0])
+            else: # Need to check what happens AFTER equivocation
+                if first_revolt is None:
+                    r_cp = revolt_rgx.findall(line)
+                    if len(r_cp) == 1:
+                        first_revolt = isoparse(r_cp[0])
+                        
+                if moved_view is None:
+                    nl_cp = moved_view_rgx.findall(line)
+                    if len(nl_cp) == 1:
+                        moved_view = isoparse(nl_cp[0])
 
-            if not(first_equivocate is None) and not(first_revolt is None) and not(moved_view is None) and view_stabilized is None:
-                st_cp = stable_rgx.findall(line)
-                if len(st_cp) == 1:
-                    view_stabilized = isoparse(st_cp[0])
+                if view_stabilized is None:
+                    st_cp = stable_rgx.findall(line)
+                    if len(st_cp) == 1:
+                        view_stabilized = isoparse(st_cp[0])
 
+                if view_stabilized is None:
+                    st_cp = stable_rgx2.findall(line)
+                    if len(st_cp) == 1:
+                        view_stabilized = isoparse(st_cp[0])
+                
 
     points = [
         (
@@ -61,13 +71,6 @@ def plot_throughput_timeseries(infile, outfile, ramp_up=5, ramp_down=5):
         for a in points
     ]
 
-    # Filter points, only keep if after ramp_up time and before ramp_down time
-    start_time = points[0][0] + datetime.timedelta(seconds=ramp_up)
-    end_time = points[-1][0] - datetime.timedelta(seconds=ramp_down)
-
-    points = [p for p in points if p[0] >= start_time and p[0] <= end_time]
-
-
     diff_points = [
         (
             (a[0] - points[0][0]).total_seconds(),
@@ -77,10 +80,25 @@ def plot_throughput_timeseries(infile, outfile, ramp_up=5, ramp_down=5):
         for i, a in enumerate(points) if i > 0
     ]
 
-    first_equivocate = (first_equivocate - points[0][0]).total_seconds()
-    first_revolt = (first_revolt - points[0][0]).total_seconds()
-    moved_view = (moved_view - points[0][0]).total_seconds()
-    view_stabilized = (view_stabilized - points[0][0]).total_seconds()
+    try:
+        first_equivocate = (first_equivocate - points[0][0]).total_seconds()
+    except:
+        first_equivocate = None
+    
+    try:
+        first_revolt = (first_revolt - points[0][0]).total_seconds()
+    except:
+        first_revolt = None
+
+    try:
+        moved_view = (moved_view - points[0][0]).total_seconds()
+    except:
+        moved_view = None
+
+    try:
+        view_stabilized = (view_stabilized - points[0][0]).total_seconds()
+    except:
+        view_stabilized = None
 
 
     plt.plot(
@@ -95,14 +113,23 @@ def plot_throughput_timeseries(infile, outfile, ramp_up=5, ramp_down=5):
         label="BCI Tput"
     )
 
-    plt.axvline(x=first_equivocate, label="Equivocation start", color='red', linestyle='dashed')
-    plt.axvline(x=first_revolt, label="Followers start revolting", color='magenta', linestyle='dashed')
-    plt.axvline(x=moved_view, label="Leader step down", color='black', linestyle='dashed')
-    plt.axvline(x=view_stabilized, label="New view stabilized", color='green', linestyle='dashed')
+    if not(first_equivocate is None):
+        plt.axvline(x=first_equivocate, label="Equivocation start", color='red', linestyle='dashed')
+    
+    if not(first_revolt is None) and first_revolt >= first_equivocate:
+        plt.axvline(x=first_revolt, label="Followers start revolting", color='magenta', linestyle='dashed')
+    
+    if not(moved_view is None) and not(view_stabilized is None) and moved_view <= view_stabilized:
+        plt.axvline(x=moved_view, label="Leader step down", color='black', linestyle='dashed')
+
+    if not(view_stabilized is None) and view_stabilized >= first_equivocate:
+        plt.axvline(x=view_stabilized, label="New view stabilized", color='green', linestyle='dashed')
+
     plt.yscale("symlog")
     plt.grid()
     plt.ylabel("Throughput (blocks/s)")
     plt.xlabel("Time elapsed (s)")
+    plt.xlim((ramp_up, diff_points[-1][0] - ramp_down))
     
     # Legend to the bottom and right
     plt.legend(loc='lower right')
@@ -115,4 +142,4 @@ def plot_throughput_timeseries(infile, outfile, ramp_up=5, ramp_down=5):
 
 
 if __name__ == "__main__":
-    plot_throughput_timeseries("logs/1.log", "tseries_plot.png")
+    plot_throughput_timeseries("logs/1.log", "plot.png")

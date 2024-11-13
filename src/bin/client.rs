@@ -194,8 +194,8 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
             }
 
             
-            let should_log = curr_leader == "node1";
-            let should_log = should_log || sample_item[weight_dist.sample(&mut rng)].0;
+            // let should_log = curr_leader == "node1";
+            let should_log = sample_item[weight_dist.sample(&mut rng)].0;
             
             if should_log {
                 info!("Client Id: {}, Msg Id: {}, Block num: {}, Tx num: {}, Latency: {} us, Current Leader: {}",
