@@ -855,7 +855,10 @@ pub async fn broadcast_append_entries(
         let bcast_msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
         let mut _profile = LatencyProfile::new();
         let _ = PinnedClient::broadcast(&client, &send_list2, &bcast_msg, &mut _profile).await;
-        warn!("Equivocated on block {}, Partitions: {:?} {:?}", block_n, send_list, send_list2);
+        
+        if block_n % ctx.config.get().evil_config.byzantine_start_block == 0 {
+            warn!("Equivocated on block {}, Partitions: {:?} {:?}", block_n, send_list, send_list2);
+        }
     }
 
     Ok(())
