@@ -18,7 +18,7 @@
     "node_list": [],
     "learner_list": [],
     "quorum_diversity_k": 3,
-    "max_backlog_batch_size": 400,
+    "max_backlog_batch_size": 1200,
     "signature_max_delay_blocks": 1000,
     "signature_max_delay_ms": 1000,
     "vote_processing_workers": 4,
