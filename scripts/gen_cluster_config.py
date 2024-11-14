@@ -276,19 +276,27 @@ def gen_local_nodelist(num_nodes: int) -> Tuple[OrderedDict[str, Tuple[str, str]
 
     return (nodelist, 1)
 
-# Node's binding address will always be 0.0.0.0:(3000 + index)
-# This makes sure that no matter what environment I am in,
-# Ports will not clash with one another.
-# However, for a kubernetes-style deployment,
-# it may make more sense to have all nodes listen on same port.
 def gen_node_config(i, node, tmpl, caname, root_path):
     tmpl["net_config"]["tls_cert_path"] = os.path.join(root_path, node + TLS_CERT_SUFFIX)
     tmpl["net_config"]["tls_key_path"] = os.path.join(root_path, node + TLS_PRIVKEY_SUFFIX)
     tmpl["net_config"]["tls_root_ca_cert_path"] = os.path.join(root_path, caname + ROOT_CERT_SUFFIX)
     tmpl["net_config"]["name"] = node
+
+    # Node's binding address will always be 0.0.0.0:(3000 + index)
+    # This makes sure that no matter what environment I am in,
+    # Ports will not clash with one another.
+    # However, for a kubernetes-style deployment,
+    # it may make more sense to have all nodes listen on same port.
     tmpl["net_config"]["addr"] = "0.0.0.0:" + str(3000 + i + 1)
+
     tmpl["rpc_config"]["allowed_keylist_path"] = os.path.join(root_path, PUB_KEYLIST_NAME)
     tmpl["rpc_config"]["signing_priv_key_path"] = os.path.join(root_path, node + SIGN_PRIVKEY_SUFFIX)
+
+    # Change storage path to be distinct.
+    # This will help colocate multiple nodes onto the same machine.
+    if "log_storage_config" in tmpl["consensus_config"]:
+        if "RocksDB" in tmpl["consensus_config"]["log_storage_config"]:
+            tmpl["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"/tmp/{node}_db"
 
     with open(node + CONFIG_SUFFIX, "w") as f:
         json.dump(tmpl, f, indent=4)

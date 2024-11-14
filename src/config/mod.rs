@@ -102,11 +102,21 @@ pub struct AppConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct EvilConfig {
+    pub simulate_byzantine_behavior: bool,
+    pub byzantine_start_block: u64,
+}
+
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
     pub net_config: NetConfig,
     pub rpc_config: RpcConfig,
     pub consensus_config: ConsensusConfig,
     pub app_config: AppConfig,
+
+    #[cfg(feature = "evil")]
+    pub evil_config: EvilConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -194,6 +204,12 @@ impl ClientConfig {
             },
             app_config: AppConfig {
                 logger_stats_report_ms: 100,
+            },
+            
+            #[cfg(feature = "evil")]
+            evil_config: EvilConfig {
+                simulate_byzantine_behavior: false,
+                byzantine_start_block: 0
             }
         }
     }

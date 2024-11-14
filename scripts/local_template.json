@@ -18,12 +18,12 @@
     "node_list": [],
     "learner_list": [],
     "quorum_diversity_k": 3,
-    "max_backlog_batch_size": 10000,
+    "max_backlog_batch_size": 1200,
     "signature_max_delay_blocks": 1000,
-    "signature_max_delay_ms": 200,
+    "signature_max_delay_ms": 1000,
     "vote_processing_workers": 4,
-    "view_timeout_ms": 7000,
-    "liveness_u": 2,
+    "view_timeout_ms": 2000,
+    "liveness_u": 1,
     "log_storage_config": {
       "RocksDB": {
         "db_path": "/tmp/testdb",
@@ -35,5 +35,9 @@
   },
   "app_config": {
     "logger_stats_report_ms": 100
+  },
+  "evil_config": {
+    "simulate_byzantine_behavior": false,
+    "byzantine_start_block": 0
   }
 }

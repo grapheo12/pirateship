@@ -82,6 +82,7 @@ no_qc = []
 reply_from_app = []
 fast_path = []
 platforms = []
+evil = []
 
 # Applications
 app_logger = []
@@ -96,6 +97,7 @@ chained_pbft = ["round_robin_leader", "always_sign", "view_change"]
 pirateship = ["round_robin_leader", "dynamic_sign", "quorum_diversity", "view_change"]
 
 default = ["pirateship", "app_logger", "storage", "fast_path", "platforms"]
+# default = ["pirateship", "app_logger", "storage", "evil", "fast_path", "platforms"]
 
 
 [profile.release]

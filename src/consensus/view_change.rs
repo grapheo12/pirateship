@@ -27,7 +27,7 @@ use crate::{
         client::PinnedClient,
         server::LatencyProfile,
         PinnedMessage,
-    }
+    }, utils::AgnosticRef
 };
 
 use crate::consensus::backfill::*;
@@ -152,11 +152,53 @@ fn fork_choice_filter_fast_path(
     }
 }
 
+fn check_for_equivocation(fork_set: &HashMap<String, ProtoViewChange>) {
+    // Highest common block_n
+    let mut max_n = 0;
+    let mut max_fork_name = String::new();
+    fork_set.iter().for_each(|(k, v)| {
+        if v.fork.is_none() || v.fork.as_ref().unwrap().blocks.len() == 0 {
+            return;
+        }
+        let _n = v.fork.as_ref().unwrap().blocks.last().unwrap().n;
+        if _n > max_n {
+            max_n = _n;
+            max_fork_name = k.clone();
+        }
+    });
+
+    if max_n == 0 {
+        return;
+    }
+
+    let chk_hsh = hash(&fork_set.get(&max_fork_name).unwrap().fork.as_ref().unwrap().blocks.last().unwrap().encode_to_vec());
+    fork_set.iter().for_each(|(_k, v)| {
+        if v.fork.is_none() || v.fork.as_ref().unwrap().blocks.len() == 0 {
+            return;
+        }
+        for blk in &v.fork.as_ref().unwrap().blocks {
+            if blk.n != max_n {
+                continue;
+            }
+
+            let hsh = hash(&blk.encode_to_vec());
+
+            if !cmp_hash(&chk_hsh, &hsh) {
+                warn!("Equivocation detected!");
+            }
+        }
+    });
+
+
+}
+
 fn fork_choice_rule_get(
     ctx: &PinnedServerContext,
     fork_set: &HashMap<String, ProtoViewChange>,
     my_name: &String,
 ) -> (ProtoFork, ForkStat) {
+    // Sanity check: warn if there was equivocation!
+    // check_for_equivocation(fork_set);
 
     let mut chk_stats = HashMap::<String, ForkStat>::new();
     for (name, vc) in fork_set {
@@ -256,12 +298,12 @@ fn fork_choice_rule_get(
     (chosen_fork.unwrap(), chosen_fork_stat.unwrap())
 }
 
-fn sign_view_change_msg(vc: &mut ProtoViewChange, keys: &KeyStore, fork: &MutexGuard<Log>) {
+fn sign_view_change_msg(vc: &mut ProtoViewChange, keys: &KeyStore, fork_last_hash: &Vec<u8>) {
     // Precondition: A correctly generated vc message will have fork.last() in its fork.
     //              OR have fork_len == 0
     let mut buf = BufWriter::new(vec![0u8; 32 + 8 + 8 + 8]);
     // 32 for hash, 8 for view, 8 for last_n, 8 for last_qc_view
-    let _ = buf.write(&fork.last_hash());
+    let _ = buf.write(fork_last_hash);
     let _ = buf.write_u64::<BigEndian>(vc.view);
     let _ = buf.write_u64::<BigEndian>(vc.fork_len);
     let _ = buf.write_u64::<BigEndian>(match &vc.fork_last_qc {
@@ -378,12 +420,14 @@ where Engine: crate::execution::Engine
 
     warn!("Moved to new view {} with leader {}", view, leader);
 
-    // Send everything from ci onwards.
+    // Send everything from bci onwards.
     // If more of the fork is needed, the next leader will backfill.
-    let fork = ctx.state.fork.lock().await;
-    let ci = ctx.state.commit_index.load(Ordering::SeqCst);
-    info!("Sending everything from {} to {}", ci, fork.last());
-    let fork_from_ci = fork.serialize_from_n(ci);
+    let (fork_from_ci, fork_last, fork_last_qc, fork_last_hash) = {
+        let fork = ctx.state.fork.lock().await;
+        let bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+        info!("Sending everything from {} to {}", bci, fork.last());
+        (fork.serialize_from_n(bci + 1), fork.last(), fork.get_last_qc(), fork.last_hash())
+    };
     // These are all the unconfirmed blocks that the next leader may or may not have.
     // So we must send them otherwise there is a data loss.
     // It doesn't violate any guarantees, but clients will have to repropose.
@@ -393,20 +437,18 @@ where Engine: crate::execution::Engine
         view,
         fork: Some(fork_from_ci),
         fork_sig: vec![0u8; SIGNATURE_LENGTH],
-        fork_len: fork.last(),
-        fork_last_qc: match fork.get_last_qc() {
+        fork_len: fork_last,
+        fork_last_qc: match fork_last_qc {
             Ok(qc) => Some(qc),
             Err(_) => None,
         },
         config_num: ctx.state.config_num.load(Ordering::SeqCst),
     };
 
-    sign_view_change_msg(&mut vc_msg, &_keys, &fork);
+    sign_view_change_msg(&mut vc_msg, &_keys, &fork_last_hash);
 
 
     if leader == _cfg.net_config.name {
-        // I won't send the message to myself.
-        drop(fork);
         do_process_view_change(
             ctx.clone(), engine,
             client.clone(),
@@ -415,7 +457,6 @@ where Engine: crate::execution::Engine
             super_majority,
             old_super_majority,
         ).await;
-        return Ok(());
     }
 
     let mut buf = Vec::new();
@@ -504,6 +545,11 @@ pub async fn do_process_view_change<Engine>(
 
     info!("Processing view change for view {} from {}", vc.view, sender);
 
+    // Check the signature on the fork.
+    if !verify_view_change_msg(vc, &_keys, sender) {
+        return;
+    }
+
     if !_cfg.net_config.name
         .eq(&get_leader_str_for_view(&ctx, vc.view))
     {
@@ -511,24 +557,27 @@ pub async fn do_process_view_change<Engine>(
         info!("Not the leader for view {}, using this message for pacemaker", vc.view);
     }
 
-    // Check the signature on the fork.
-    if !verify_view_change_msg(vc, &_keys, sender) {
-        return;
-    } 
 
     // Check if fork's first block points to a block I already have.
-    let vc = if vc.fork_len > 0 {
+    let vc = if vc.fork_len > 0
+    && _cfg.net_config.name.eq(&get_leader_str_for_view(&ctx, vc.view)) {
+        // No need to backfill if it is just for pacemaker
         if vc.fork.is_none() || vc.fork.as_ref().unwrap().blocks.len() == 0 {
             return;
         }
+
         match maybe_backfill_fork_till_prefix_match(ctx.clone(), client.clone(), vc, sender).await {
-            Some(vc) => vc,
+            Some(vc) => {
+                AgnosticRef::from(vc)
+            },
             None => {
                 return;
             }
         }
+
     } else {
-        vc.clone()
+        AgnosticRef::from(vc)
+        
     };
 
 

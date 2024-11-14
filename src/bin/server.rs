@@ -1,7 +1,7 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use pft::{config::{self, Config}, consensus, execution::engines::{kvs::PinnedKVStoreEngine, logger::PinnedLoggerEngine, sql::PinnedSQLEngine}};
 use tokio::{runtime, signal};
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
@@ -91,6 +91,11 @@ fn main() {
 
     let (protocol, app) = get_feature_set();
     info!("Protocol: {}, App: {}", protocol, app);
+
+    #[cfg(feature = "evil")]
+    if cfg.evil_config.simulate_byzantine_behavior {
+        warn!("Will simulate Byzantine behavior!");
+    }
 
     let core_ids = 
         Arc::new(Mutex::new(Box::pin(core_affinity::get_core_ids().unwrap())));

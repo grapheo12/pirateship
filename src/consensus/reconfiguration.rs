@@ -491,11 +491,14 @@ where Engine: crate::execution::Engine
         return ae.clone();
     }
 
-    let mut fork = ctx.state.fork.lock().await;
     let f = ae.fork.as_ref().unwrap();
-    let mut f = maybe_backfill_fork_till_last_match(&ctx, &client, f, &fork, sender).await;
-
+    let mut f = {
+        let fork = ctx.state.fork.lock().await;
+        maybe_backfill_fork_till_last_match(&ctx, &client, f, fork.last(), sender).await
+    };
+    
     // Indexes in fork where the config changes.
+    let mut fork = ctx.state.fork.lock().await;
     let mut config_change_idx = Vec::new();
     let mut last_qc = 0;
     let mut last_qc_view = 0;
@@ -593,10 +596,13 @@ where Engine: crate::execution::Engine
         return vc.clone();
     }
 
-    let mut fork = ctx.state.fork.lock().await;
     let f = vc.fork.as_ref().unwrap();
-    let mut f = maybe_backfill_fork_till_last_match(&ctx, &client, f, &fork, sender).await;
-
+    let mut f = {
+        let fork = ctx.state.fork.lock().await;
+        maybe_backfill_fork_till_last_match(&ctx, &client, f, fork.last(), sender).await
+    };
+    
+    let mut fork = ctx.state.fork.lock().await;
     // Indexes in fork where the config changes.
     let mut config_change_idx = Vec::new();
     let mut last_qc = 0;

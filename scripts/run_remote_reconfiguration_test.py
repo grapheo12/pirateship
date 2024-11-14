@@ -13,8 +13,11 @@ from gen_cluster_config import gen_cluster_nodelist, DEFAULT_CA_NAME, LEARNER_SU
 import time
 from fabric import Connection
 import datetime
+import glob
+import matplotlib.pyplot as plt
 
 from plot_utils import parse_log_dir_with_total_clients, plot_tput_vs_latency
+from plot_throughput_timeseries import plot_throughput_timeseries_multi
 
 def parse_reconfiguration_trace(trace_file, config_dir) -> List[Tuple[int, List[List[str]]]]:
     """
@@ -117,6 +120,13 @@ def gen_extra_node_configs(outdir, extra_ip_list, template, num_init_config_node
         cfg["net_config"]["tls_cert_path"] = f"{outdir}/{node}{TLS_CERT_SUFFIX}"
         cfg["net_config"]["tls_key_path"] = f"{outdir}/{node}{TLS_PRIVKEY_SUFFIX}"
         cfg["rpc_config"]["signing_priv_key_path"] = f"{outdir}/{node}{SIGN_PRIVKEY_SUFFIX}"
+
+        # Change storage path to be distinct.
+        # This will help colocate multiple nodes onto the same machine.
+        if "log_storage_config" in cfg["consensus_config"]:
+            if "RocksDB" in cfg["consensus_config"]["log_storage_config"]:
+                cfg["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"/tmp/{node}_db"
+
 
         with open(f"{node}{CONFIG_SUFFIX}", "w") as f:
             json.dump(cfg, f)
@@ -361,7 +371,12 @@ def run_with_given_reconfiguration_trace(node_template, client_template, ip_list
     help="Number of clients",
     type=click.INT
 )
-def main(node_template, client_template, trace_file, ip_list, extra_ip_list, identity_file, repeat, client):
+@click.option(
+    "-t", "--target", multiple=True,
+    help="Nodes to plot throughput",
+    type=click.STRING
+)
+def main(node_template, client_template, trace_file, ip_list, extra_ip_list, identity_file, repeat, client, target):
     # build_project()
     git_hash = get_current_git_hash()
     _, client_tags = tag_all_machines(ip_list)
@@ -373,17 +388,20 @@ def main(node_template, client_template, trace_file, ip_list, extra_ip_list, ide
             client)
     dir = f"logs/{dir}"
 
-    # stats = {}
-    # for d in dirs:
-    #     res = parse_log_dir_with_total_clients(
-    #         d, repeat, client_machines, "node1",
-    #         ramp_up, ramp_down)
-    #     stats.update(res)
+    for i in range(repeat):
+        if len(target) == 0:
+            infiles = glob.glob(f"{dir}/{i}/node*.log")
+            legends = [os.path.basename(a).split(".")[0] for a in infiles]
+        else:
+            infiles = [f"{dir}/{i}/{t}.log" for t in target]
+            legends = target[:]
 
-    # pprint(stats)
-    # plot_tput_vs_latency(stats, f"{dirs[-1]}/plot.png")
+        outfile = f"{dir}/{i}/plot.png"
 
-    
+        cmd_files = glob.glob(f"{dir}/{i}/controller_cmd*.log")
+
+        plot_throughput_timeseries_multi(infiles, legends, outfile, 0, 0, cmd_files)
+        plt.clf()
 
 
 if __name__ == "__main__":

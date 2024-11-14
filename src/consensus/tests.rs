@@ -5,7 +5,7 @@ use std::{collections::{HashMap, HashSet}, fs::exists};
 
 use ed25519_dalek::{SigningKey, SECRET_KEY_LENGTH};
 
-use crate::{config::{AppConfig, Config, ConsensusConfig, FileStorageConfig, NetConfig, NodeNetInfo, RocksDBConfig, RpcConfig}, crypto::KeyStore, proto::{consensus::ProtoBlock, execution::ProtoTransaction}};
+use crate::{config::{AppConfig, Config, ConsensusConfig, EvilConfig, FileStorageConfig, NetConfig, NodeNetInfo, RocksDBConfig, RpcConfig}, crypto::KeyStore, proto::{consensus::ProtoBlock, execution::ProtoTransaction}};
 
 use super::log::{Log, LogEntry};
 
@@ -67,11 +67,19 @@ fn gen_config() -> Config {
         logger_stats_report_ms: 100,
     };
 
+    let evil_config = EvilConfig {
+        simulate_byzantine_behavior: false,
+        byzantine_start_block: 0,
+    };
+
     let config = Config {
         net_config,
         rpc_config,
         consensus_config,
         app_config,
+
+        #[cfg(feature = "evil")]
+        evil_config,
     };
 
     config

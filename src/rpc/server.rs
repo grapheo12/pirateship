@@ -355,6 +355,7 @@ where
 
                 // Reconfigure the server to use the new public keys.
                 let new_keys = ctx.get_server_keys();
+                info!("Resp to: {:?}, Resp: {:?}", mref.2, mref.0);
                 server.key_store.set(new_keys.as_ref().clone());
 
 

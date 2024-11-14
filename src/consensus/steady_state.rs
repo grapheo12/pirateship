@@ -13,10 +13,10 @@ use tokio::sync::MutexGuard;
 use crate::{
     consensus::{
         backfill::maybe_backfill_fork_till_last_match, handler::{ForwardedMessageWithAckChan, PinnedServerContext}, log::{Log, LogEntry}, reconfiguration::decide_my_lifecycle_stage
-    }, crypto::{cmp_hash, DIGEST_LENGTH}, proto::{
+    }, crypto::{cmp_hash, hash, DIGEST_LENGTH}, proto::{
         consensus::{
             proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoVote,
-        }, rpc::ProtoPayload
+        }, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase}, rpc::{self, ProtoPayload}
     }, rpc::{
         client::PinnedClient,
         server::LatencyProfile,
@@ -219,7 +219,18 @@ where Engine: crate::execution::Engine
         warn!("Vote({}) higher than fork.last() = {}", vote.n, fork.last());
         return Ok(());
     }
-    if !cmp_hash(&fork.hash_at_n(vote.n).unwrap(), &vote.fork_digest) {
+
+    #[cfg(feature = "evil")]
+    if !cmp_hash(&fork.hash_at_n(vote.n).unwrap(), &vote.fork_digest) 
+    && !(ctx.simulate_byz_behavior && vote.n >= ctx.byz_block_start && ctx.view_is_stable.load(Ordering::SeqCst)) // Hash doesn't match but I am simulating equivocation
+    {
+        warn!("Wrong digest, skipping vote");
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "evil"))]
+    if !cmp_hash(&fork.hash_at_n(vote.n).unwrap(), &vote.fork_digest) 
+    {
         warn!("Wrong digest, skipping vote");
         return Ok(());
     }
@@ -416,27 +427,19 @@ pub async fn do_push_append_entries_to_fork<Engine>(
     let _cfg = ctx.config.get();
     let _keys = ctx.keys.get();
 
-    let fork = ctx.state.fork.try_lock();
-    let mut fork = if let Err(e) = fork {
-        debug!("do_push_append_entries_to_fork: Fork is locked, waiting for it to be unlocked: {}", e);
+    let (last_n, last_qc) = {
         let fork = ctx.state.fork.lock().await;
-        debug!("do_push_append_entries_to_fork: Fork locked");
-        fork  
-    }else{
-        debug!("do_push_append_entries_to_fork: Fork locked");
-        fork.unwrap()
+        (fork.last(), fork.last_qc())
     };
-    let last_n = fork.last();
-    let last_qc = fork.last_qc();
     let mut updated_last_n = last_n;
     let mut seq_nums = Vec::new();
 
 
     if ae.view < ctx.state.view.load(Ordering::SeqCst) {
-        if ctx.last_stable_view.load(Ordering::SeqCst) <= ae.view {
+        if false && ctx.last_stable_view.load(Ordering::SeqCst) <= ae.view && ae.view_is_stable {
             info!("I timed out due to network partition; Now going back to view {} from {}",
-                ctx.state.view.load(Ordering::SeqCst), ctx.last_stable_view.load(Ordering::SeqCst));
-            ctx.state.view.store(ctx.last_stable_view.load(Ordering::SeqCst), Ordering::SeqCst);
+                ctx.state.view.load(Ordering::SeqCst), ae.view);
+            ctx.state.view.store(ae.view, Ordering::SeqCst);
         } else {
             trace!("Message from older view! Rejected; Sent by: {} Is New leader? {} Msg view: {} Current View {}",
                 sender, !ae.fork.as_ref().unwrap().blocks[0].view_is_stable, ae.view, ctx.state.view.load(Ordering::SeqCst));
@@ -477,9 +480,15 @@ pub async fn do_push_append_entries_to_fork<Engine>(
         if !ae.view_is_stable {
             info!("Got New leader message for view {}!", ae.view);
         }
-        let f = maybe_backfill_fork_till_last_match(&ctx, &client, f, &fork, sender).await;
+        let f = {
+            let fork = ctx.state.fork.lock().await;
+            maybe_backfill_fork_till_last_match(&ctx, &client, f, fork.last(), sender).await
+        };
 
-        let res = maybe_verify_view_change_sequence(&ctx, &f, super_majority, &fork).await;
+        let res = {
+            let fork = ctx.state.fork.lock().await;
+            maybe_verify_view_change_sequence(&ctx, &f, super_majority, &fork).await
+        };
         
         if let Err(e) = res {
             warn!("Verification error: {}", e);
@@ -494,6 +503,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
             // However, the view change message comes with a sizeable backlog which will cause unnecessary fork overwrites.
             // So, we trim the matching prefix.
             // After trimming, the only thing that should remain is the last New Leader message.
+            let mut fork = ctx.state.fork.lock().await;
             let overwrite_blocks = fork.trim_matching_prefix(overwrite_blocks);
             if overwrite_blocks.blocks.len() > 0 {
                 trace!("Trimmed fork start: {}", overwrite_blocks.blocks[0].n);
@@ -511,6 +521,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
             }
         }
         
+        let mut fork = ctx.state.fork.lock().await;
         for b in view_lock_blocks.blocks {
             trace!("Inserting block {} with {} txs", b.n, b.tx.len());
             let entry = LogEntry::new(b.clone());
@@ -518,7 +529,11 @@ pub async fn do_push_append_entries_to_fork<Engine>(
             let res = if entry.has_signature() {
                 fork.verify_and_push(entry, &_keys, &get_leader_str_for_view(&ctx, b.view))
             } else {
-                fork.push(entry)
+                if entry.block.qc.len() != 0 {
+                    Err(Error::new(ErrorKind::InvalidData, format!("Unsigned block has QC! n = {}", entry.block.n)))
+                } else {
+                    fork.push(entry)
+                }
             };
             match res {
                 Ok(_n) => {
@@ -550,7 +565,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
     ctx.view_is_stable.store(ae.view_is_stable, Ordering::SeqCst);
 
 
-
+    let fork = ctx.state.fork.lock().await;
     if fork.last_qc() > last_qc {
         // If the last_qc progressed forward, need to clean up byz_qc_pending
         let last_qc = fork.last_qc();
@@ -558,12 +573,12 @@ pub async fn do_push_append_entries_to_fork<Engine>(
         byz_qc_pending.retain(|&n| n > last_qc);
 
         // Also the byzantine commit index may move
-        let did_byz_commit = maybe_byzantine_commit(&ctx, &client, engine, &fork).await;
+        let _did_byz_commit = maybe_byzantine_commit(&ctx, &client, engine, &fork).await;
 
-        if did_byz_commit {
+        // if did_byz_commit {
             // Pacemaker logic: Reset the view timer.
             ctx.view_timer.reset();
-        }
+        // }
     }
 
     (last_n, updated_last_n, seq_nums, true)
@@ -684,12 +699,12 @@ where Engine: crate::execution::Engine
             }
             profile.register("Block create");
 
-            let did_byz_commit = maybe_byzantine_commit(&ctx, &client, engine, &fork).await;
+            let _did_byz_commit = maybe_byzantine_commit(&ctx, &client, engine, &fork).await;
 
-            if did_byz_commit {
+            // if did_byz_commit {
                 // Pacemaker logic: Reset the view timer.
                 ctx.view_timer.reset();
-            }
+            // }
 
             trace!("QC link: {} --> {:?}", n, __qc_trace);
         }
@@ -722,11 +737,21 @@ pub async fn broadcast_append_entries(
     if send_list.len() == 0 {
         return Ok(());
     }
-
-    let mut buf = Vec::new();
     let block_n = ae.fork.as_ref().unwrap().blocks.len();
     let block_n = ae.fork.as_ref().unwrap().blocks[block_n - 1].n;
-
+    
+    #[cfg(feature = "evil")]
+    let (send_list, send_list2) =
+    if ctx.simulate_byz_behavior && block_n >= ctx.byz_block_start && ctx.view_is_stable.load(Ordering::SeqCst) {
+        let num_nodes = send_list.len();
+        let partitions = send_list.split_at(num_nodes / 2);
+        (partitions.0.into(), partitions.1.into())
+    } else {
+        (send_list.clone(), vec![])
+    };
+    
+    
+    let mut buf = Vec::new();
     let rpc_msg_body = ProtoPayload {
         message: Some(crate::proto::rpc::proto_payload::Message::AppendEntries(ae)),
     };
@@ -751,7 +776,90 @@ pub async fn broadcast_append_entries(
     // Also send to all learners
     let _ = PinnedClient::broadcast(&client, &ctx.config.get().consensus_config.learner_list, &bcast_msg, &mut profile).await;
 
+    #[cfg(feature = "evil")]
+    if ctx.simulate_byz_behavior && block_n >= ctx.byz_block_start && ctx.view_is_stable.load(Ordering::SeqCst) {
+        // Lie
+        let mut _rpc_msg_body = rpc_msg_body.clone();
+        let mut _ae = match _rpc_msg_body.message.unwrap() {
+            rpc::proto_payload::Message::AppendEntries(ae) => {
+                ae.clone()
+            },
+            _ => {
+                panic!("Unreachable!");
+            }
+        };
 
+        _ae.fork.as_mut().unwrap()
+            .blocks.last_mut().unwrap()
+            .tx.push(
+            ProtoTransaction {
+                on_receive: None,
+                on_crash_commit: Some(ProtoTransactionPhase {
+                    ops: vec![ProtoTransactionOp {
+                        op_type: ProtoTransactionOpType::Noop.into(),
+                        operands: vec![vec![1u8; 8]], 
+                    }],
+                }),
+                on_byzantine_commit: None,
+                is_reconfiguration: false,
+            }
+        );
+
+        { // Crypto ops
+            let mut last_byz_hash = ctx.last_byz_hash.lock().await;
+            if last_byz_hash.is_some() {
+                _ae.fork.as_mut().unwrap()
+                .blocks.last_mut().unwrap()
+                .parent.copy_from_slice(&last_byz_hash.as_ref().unwrap());
+            }
+
+            let _sig = &_ae.fork.as_ref().unwrap().blocks.last().unwrap().sig;
+            let is_signed = if _sig.is_none() {
+                false
+            } else {
+                match _sig.as_ref().unwrap() {
+                    Sig::NoSig(_) => false,
+                    Sig::ProposerSig(_) => true,
+                }
+            };
+
+            if is_signed {
+                _ae.fork.as_mut().unwrap().blocks.last_mut().unwrap().sig = Some(Sig::NoSig(DefferedSignature{}));
+                let __hsh = hash(&_ae.fork.as_ref().unwrap().blocks.last().unwrap().encode_to_vec());
+                let sig = ctx.keys.get().sign(&__hsh).to_vec();
+    
+                _ae.fork.as_mut().unwrap()
+                    .blocks.last_mut().unwrap()
+                    .sig = Some(Sig::ProposerSig(sig));
+            }
+
+            *last_byz_hash = Some(hash(
+                &_ae.fork.as_ref().unwrap().blocks.last().unwrap()
+                    .encode_to_vec()
+            ));
+
+        }
+
+        {
+            let mut eq_block_store = ctx.state.equivocated_blocks.lock().await;
+            let blk_cp = _ae.fork.as_ref().unwrap().blocks.last().unwrap().clone();
+            eq_block_store.insert(blk_cp.n, blk_cp);
+        }
+
+
+        _rpc_msg_body.message = Some(rpc::proto_payload::Message::AppendEntries(_ae));
+
+        let mut buf = Vec::new();
+        _rpc_msg_body.encode(&mut buf)?;
+        let sz = buf.len();
+        let bcast_msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
+        let mut _profile = LatencyProfile::new();
+        let _ = PinnedClient::broadcast(&client, &send_list2, &bcast_msg, &mut _profile).await;
+        
+        if block_n % ctx.config.get().evil_config.byzantine_start_block == 0 {
+            warn!("Equivocated on block {}, Partitions: {:?} {:?}", block_n, send_list, send_list2);
+        }
+    }
 
     Ok(())
 }
