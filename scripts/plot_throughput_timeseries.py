@@ -20,6 +20,10 @@ moved_view_rgx = re.compile(r"\[WARN\]\[.*\]\[(.*)\] Moved to new view .* with l
 stable_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] View stabilised.*")
 stable_rgx2 = re.compile(r"\[INFO\]\[.*\]\[(.*)\]View fast forwarded to .* stable\? true")
 
+# Sample: [INFO][controller][2024-11-14T22:02:44.250572996+00:00] ProtoTransactionReceipt
+controller_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] ProtoTransactionReceipt.*")
+
+
 
 def plot_throughput_timeseries(infile, outfile, ramp_up=5, ramp_down=5):
     points = []
@@ -133,6 +137,71 @@ def plot_throughput_timeseries(infile, outfile, ramp_up=5, ramp_down=5):
     
     # Legend to the bottom and right
     plt.legend(loc='lower right')
+    # Wide and short figure
+    plt.gcf().set_size_inches(20, 12)
+
+    # Save the figure, tight layout to prevent cropping
+    plt.savefig(outfile, bbox_inches='tight')
+
+
+
+def plot_throughput_timeseries_multi(infiles, legends, outfile, ramp_up=5, ramp_down=5, cmd_files=[]):
+    assert(len(infiles) == len(legends))
+
+    for i, infile in enumerate(infiles):
+        points = []
+
+        with open(infile, "r") as f:
+            for line in f.readlines():
+                captures = node_rgx.findall(line)
+                # print(captures)
+                if len(captures) == 1:
+                    points.append(captures[0])
+
+        points = [
+            (
+                isoparse(a[0]),    # ISO format is used in run_remote
+                int(a[3]),         # commit_index
+                int(a[4]),         # byz_commit_index
+            )
+            for a in points
+        ]
+
+        diff_points = [
+            (
+                (a[0] - points[0][0]).total_seconds(),
+                (a[1] - points[i - 10][1]) / (a[0] - points[i - 10][0]).total_seconds(),
+                (a[2] - points[i - 10][2]) / (a[0] - points[i - 10][0]).total_seconds()
+            )
+            for i, a in enumerate(points) if i >= 10
+        ]
+
+        plt.plot(
+            np.array([x[0] for x in diff_points]),
+            np.array([x[2] for x in diff_points]),
+            label=legends[i]
+        )
+
+    plt.yscale("symlog")
+    plt.grid()
+    plt.ylabel("Byzantine Commit Throughput (blocks/s)")
+    plt.xlabel("Time elapsed (s)")
+    plt.xlim((ramp_up, diff_points[-1][0] - ramp_down))
+    plt.ylim(0)
+    
+    # Legend to the bottom and right
+    plt.legend(loc='lower right')
+
+    for i, path in enumerate(cmd_files):
+        with open(path, "r") as f:
+            for line in f.readlines():
+                captures = controller_rgx.findall(line)
+                # print(captures)
+                if len(captures) == 1:
+                    x = isoparse(captures[0])
+                    x = (x - points[0][0]).total_seconds()
+                    plt.axvline(x=x, label=f"cmd{i}", linestyle='dashed', color="red")
+
     # Wide and short figure
     plt.gcf().set_size_inches(20, 12)
 

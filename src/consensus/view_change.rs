@@ -426,7 +426,7 @@ where Engine: crate::execution::Engine
         let fork = ctx.state.fork.lock().await;
         let bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
         info!("Sending everything from {} to {}", bci, fork.last());
-        (fork.serialize_from_n(bci), fork.last(), fork.get_last_qc(), fork.last_hash())
+        (fork.serialize_from_n(bci + 1), fork.last(), fork.get_last_qc(), fork.last_hash())
     };
     // These are all the unconfirmed blocks that the next leader may or may not have.
     // So we must send them otherwise there is a data loss.
