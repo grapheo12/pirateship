@@ -6,7 +6,7 @@ from plot_utils import node_rgx, isoparse
 import matplotlib.pyplot as plt
 import numpy as np
 import re
-
+import click
 
 # Sample: [WARN][pft::consensus::steady_state][2024-11-12T14:22:57.240051-08:00] Equivocated on block 5000, Partitions: ["node2"] ["node3", "node4"]
 equivocate_rgx = re.compile(r"\[WARN\]\[.*\]\[(.*)\] Equivocated on block .*")
@@ -140,6 +140,31 @@ def plot_throughput_timeseries(infile, outfile, ramp_up=5, ramp_down=5):
     plt.savefig(outfile, bbox_inches='tight')
 
 
+@click.command()
+@click.option(
+    "-i", "--infile", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True),
+    help="Path to log file"
+)
+@click.option(
+    "-o", "--outfile", required=True,
+    type=click.Path(file_okay=True, resolve_path=True),
+    help="Output path"
+)
+@click.option(
+    "-up", "--ramp_up",
+    default=2,
+    help="Ramp up seconds to ignore in plotting",
+    type=click.INT
+)
+@click.option(
+    "-down", "--ramp_down",
+    default=2,
+    help="Ramp down seconds to ignore in plotting",
+    type=click.INT
+)
+def main(infile, outfile, ramp_up, ramp_down):
+    plot_throughput_timeseries(infile, outfile, ramp_up, ramp_down)
 
 if __name__ == "__main__":
-    plot_throughput_timeseries("logs/1.log", "plot.png")
+    main()

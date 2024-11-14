@@ -38,14 +38,14 @@ variable "tdxpool_count" {
   type        = list(number)
   description = "Number of VMs with TDX"
   # default = [ 0, 0, 0, 3, 0 ]
-  default     = [5]
+  default     = [0]
 }
 
 variable "nonteepool_count" {
   type        = list(number)
   description = "Number of VMs without TEEs, used as replicas"
   # default = [ 0, 0, 0, 0, 0 ]
-  default     = [0]
+  default     = [4]
 }
 
 variable "clientpool_count"{

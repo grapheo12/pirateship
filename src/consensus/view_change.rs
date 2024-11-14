@@ -449,7 +449,6 @@ where Engine: crate::execution::Engine
 
 
     if leader == _cfg.net_config.name {
-        // I won't send the message to myself.
         do_process_view_change(
             ctx.clone(), engine,
             client.clone(),
@@ -458,7 +457,6 @@ where Engine: crate::execution::Engine
             super_majority,
             old_super_majority,
         ).await;
-        return Ok(());
     }
 
     let mut buf = Vec::new();

@@ -118,6 +118,13 @@ def gen_extra_node_configs(outdir, extra_ip_list, template, num_init_config_node
         cfg["net_config"]["tls_key_path"] = f"{outdir}/{node}{TLS_PRIVKEY_SUFFIX}"
         cfg["rpc_config"]["signing_priv_key_path"] = f"{outdir}/{node}{SIGN_PRIVKEY_SUFFIX}"
 
+        # Change storage path to be distinct.
+        # This will help colocate multiple nodes onto the same machine.
+        if "log_storage_config" in cfg["consensus_config"]:
+            if "RocksDB" in cfg["consensus_config"]["log_storage_config"]:
+                cfg["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"/tmp/{node}_db"
+
+
         with open(f"{node}{CONFIG_SUFFIX}", "w") as f:
             json.dump(cfg, f)
 

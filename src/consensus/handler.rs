@@ -241,7 +241,7 @@ impl Deref for PinnedServerContext {
 
 impl GetServerKeys for PinnedServerContext {
     fn get_server_keys(&self) -> Arc<Box<KeyStore>> {
-        info!("Keys: {:?}", self.keys.get().pub_keys);
+        info!("Keys: {:?}", self.keys.get().pub_keys.keys());
         self.keys.get()
     }
 }
@@ -298,7 +298,7 @@ pub fn consensus_rpc_handler<'a>(
         }
         rpc::proto_payload::Message::BackfillRequest(_) => {
             let msg = (body.message.unwrap(), sender, ack_tx, profile);
-            if let Err(_) = ctx.node_queue.0.send(msg) {
+            if let Err(_) = ctx.client_queue.0.send(msg) {
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }
 
@@ -318,6 +318,7 @@ pub fn consensus_rpc_handler<'a>(
         }
     }
 }
+
 
 
 
@@ -390,11 +391,6 @@ where Engine: crate::execution::Engine
                 .await;
             profile.register("View change process");
         },
-        crate::proto::rpc::proto_payload::Message::BackfillRequest(bfr) => {
-            profile.register("Backfill Request chan wait");
-            do_process_backfill_request(ctx.clone(), ack_tx, bfr, sender).await;
-            profile.register("Backfill Request process");
-        },
         _ => {}
     }
 
@@ -405,6 +401,33 @@ where Engine: crate::execution::Engine
     Ok(())
 }
 
+
+pub async fn do_respond_to_backfill_requests(ctx: &PinnedServerContext, curr_client_req: &mut Vec<ForwardedMessageWithAckChan>) {
+    let mut need_to_respond = Vec::new();
+    
+    curr_client_req.retain(|req| {
+        match &req.0 {
+            crate::proto::rpc::proto_payload::Message::BackfillRequest(_) => {
+                need_to_respond.push(req.clone());
+                false
+            },
+
+            _ => true
+        }
+    });
+
+    for req in &mut need_to_respond {
+        match &req.0 {
+            crate::proto::rpc::proto_payload::Message::BackfillRequest(bfr) => {
+                req.3.register("Backfill Request chan wait");
+                do_process_backfill_request(ctx.clone(), &mut req.2, bfr, &req.1).await;
+                req.3.register("Backfill Request process");
+            },
+
+            _ => {}
+        }
+    }
+}
 
 
 pub async fn handle_client_messages<Engine>(
@@ -463,6 +486,9 @@ where
         ctx.total_client_requests.fetch_add(curr_client_req_num, Ordering::SeqCst);
         trace!("Client handler: {} client requests", ctx.total_client_requests.load(Ordering::SeqCst));
         
+        // Remove backfill requests and respond
+        do_respond_to_backfill_requests(&ctx, &mut curr_client_req).await;
+        
         if !ctx.view_is_stable.load(Ordering::SeqCst) {
             do_respond_with_try_again(&curr_client_req, NodeInfo {
                 nodes: ctx.config.get().net_config.nodes.clone(),
@@ -474,7 +500,7 @@ where
             signature_timer_tick = false;
             continue;
         }
-        
+
         // Respond to read requests: Any replica can reply.
         // Removes read-only requests from curr_client_req.
         do_respond_to_read_requests(&ctx, &engine, &mut curr_client_req).await;
@@ -707,26 +733,26 @@ pub async fn handle_node_messages<Engine>(
                     let _ = vote_worker_chans[(rr_cnt - 1) as usize].send(req);
                 }
             }
-            else if let crate::proto::rpc::proto_payload::Message::BackfillRequest(_) = req.0 {
-                let cfg = ctx.config.get();
-                let mut rr_cnt =
-                    vote_worker_rr_cnt % cfg.consensus_config.vote_processing_workers;
-                vote_worker_rr_cnt += 1;
-                if rr_cnt == 0 {
-                    rr_cnt = 1;
-                }
-                if vote_worker_chans.len() == 0 {
-                    panic!("Handling backfill requests needs multiple workers!");
-                }
+            // else if let crate::proto::rpc::proto_payload::Message::BackfillRequest(_) = req.0 {
+            //     let cfg = ctx.config.get();
+            //     let mut rr_cnt =
+            //         vote_worker_rr_cnt % cfg.consensus_config.vote_processing_workers;
+            //     vote_worker_rr_cnt += 1;
+            //     if rr_cnt == 0 {
+            //         rr_cnt = 1;
+            //     }
+            //     if vote_worker_chans.len() == 0 {
+            //         panic!("Handling backfill requests needs multiple workers!");
+            //     }
 
-                // Always Push it to a worker
-                let _ = vote_worker_chans[(rr_cnt - 1) as usize].send(req);
-            }
+            //     // Always Push it to a worker
+            //     let _ = vote_worker_chans[(rr_cnt - 1) as usize].send(req);
+            // }
             else {
-                // if let Err(e) = process_node_request(&ctx, &engine, &client, majority, super_majority, old_super_majority, &mut req).await {
-                //     error!("Error processing node request: {}", e);
-                // }
-                let _ = vote_worker_chans[0].send(req);
+                if let Err(e) = process_node_request(&ctx, &engine, &client, majority, super_majority, old_super_majority, &mut req).await {
+                    error!("Error processing node request: {}", e);
+                }
+                // let _ = vote_worker_chans[0].send(req);
 
             }
         }
