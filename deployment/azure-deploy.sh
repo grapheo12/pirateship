@@ -6,11 +6,13 @@
 set -o xtrace
 
 CWD=$(pwd)
+SETUP=$1
+SETUP_FILE=setups/$1.tfvars
 
 pushd $CWD/deployment/azure-tf
 
 terraform init -upgrade
-terraform plan -out main.tfplan
+terraform plan -out main.tfplan --var-file=$SETUP_FILE
 terraform apply "main.tfplan"
 
 rm -f ../cluster_key.pem
