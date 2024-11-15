@@ -1,5 +1,5 @@
 platform_locations = ["centralus"]
 sevpool_count = [0]
-tdxpool_count = [4]
+tdxpool_count = [7]
 nonteepool_count = [0]
 clientpool_count = [3]

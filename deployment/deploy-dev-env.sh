@@ -33,6 +33,7 @@ scp -r -q -p -i $DEV_SSH_KEY $CWD/src $DEV_USER@$DEV_VM:~/pft-dev
 rm -r $CWD/scripts/venv
 rm -r $CWD/scripts/__pycache__
 scp -r -q -p -i $DEV_SSH_KEY $CWD/scripts $DEV_USER@$DEV_VM:~/pft-dev
+scp -r -q -p -i $DEV_SSH_KEY $CWD/experiments $DEV_USER@$DEV_VM:~/pft-dev
 
 # Need to redo virtualenv inside
 ssh -i $DEV_SSH_KEY $DEV_USER@$DEV_VM 'virtualenv ~/pft-dev/scripts/venv && ~/pft-dev/scripts/venv/bin/pip3 install -r ~/pft-dev/scripts/requirements.txt'

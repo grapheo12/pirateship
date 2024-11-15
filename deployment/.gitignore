@@ -16,6 +16,7 @@ cluster_key.pem
 nodelist.txt
 extra_nodelist.txt
 nodelist_public.txt
+nodelist-bak.txt
 
 # Crash log files
 crash.log
