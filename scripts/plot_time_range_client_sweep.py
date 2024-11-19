@@ -75,7 +75,7 @@ def main(path, start, end, repeats, num_clients, leader, ramp_up, ramp_down, out
         stats = [{} for _ in range(len(legend))]
         byz_stats = [{} for _ in range(len(legend))]
         for i, d in enumerate(dir):
-            res = parse_log_dir_with_total_clients(d, repeats, num_clients, leader, ramp_up, ramp_down)
+            res = parse_log_dir_with_total_clients(d, repeats, num_clients, leader, ramp_up, ramp_down, byz=(legend[i // per_legend].endswith("+onlybyz")))
             stats[i // per_legend].update(res)
             if legend[i // per_legend].endswith("+byz"):
                 byz_res = parse_log_dir_with_total_clients(d, repeats, num_clients, leader, ramp_up, ramp_down, byz=True)
@@ -85,6 +85,7 @@ def main(path, start, end, repeats, num_clients, leader, ramp_up, ramp_down, out
         byz_stats = [a for a in byz_stats if len(a) > 0]
         print(byz_legends, byz_stats)
         legend = [a[:-4] if a.endswith("+byz") else a for a in legend]
+        legend = [a[:-8] if a.endswith("+onlybyz") else a for a in legend]
         legend.extend(byz_legends)
         stats.extend(byz_stats)
 

@@ -44,7 +44,7 @@ jolteon_logger:
 
 .PHONY: chained_pbft_logger
 chained_pbft_logger:
-	CC=clang CXX=clang++ cargo build --release --features chained_pbft,app_logger,storage,fast_path --no-default-features
+	CC=clang CXX=clang++ cargo build --release --features chained_pbft,app_logger,storage --no-default-features
 
 .PHONY: bench
 bench:

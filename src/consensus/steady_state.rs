@@ -220,6 +220,12 @@ where Engine: crate::execution::Engine
         return Ok(());
     }
 
+    let bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
+    if vote.n <= bci {
+        // There is no need to take into account this vote.
+        return Ok(());
+    }
+
     #[cfg(feature = "evil")]
     if !cmp_hash(&fork.hash_at_n(vote.n).unwrap(), &vote.fork_digest) 
     && !(ctx.simulate_byz_behavior && vote.n >= ctx.byz_block_start && ctx.view_is_stable.load(Ordering::SeqCst)) // Hash doesn't match but I am simulating equivocation
@@ -249,6 +255,10 @@ where Engine: crate::execution::Engine
 
     for vote_sig in &vote.sig_array {
         if vote_sig.n > fork.last() {
+            continue;
+        }
+
+        if vote_sig.n <= bci {
             continue;
         }
         // Try to increase the signature after verifying against my own fork.

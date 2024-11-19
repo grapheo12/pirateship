@@ -43,7 +43,7 @@ def recreate_nodelist_txt(nodelist, file=stdout):
              
 
 
-if len(argv) != 3 or not(argv[1] in ["restore", "lan-reconfig"] + ["c" + str(i) for i in range(1, 6)]):
+if len(argv) != 3 or not(argv[1] in ["restore", "lan-reconfig"] + ["c" + str(i) for i in range(1, 4)]):
     print(f"Usage: python3 {argv[0]} <lan-reconfig | c1 | c2 | c3 | c4 | c5> <nodelist dir>")
     exit(0)
 
@@ -72,43 +72,27 @@ c1_config = {
 
 c2_config = {
     "loc0": 2,
-    "loc1": 0,
-    "loc2": 2,
-    "loc3": 1,
+    "loc1": 2,
+    "loc2": 1,
+    "loc3": 0,
 }
 
 c3_config = {
-    "loc0": 2,
-    "loc1": 1,
-    "loc2": 1,
-    "loc3": 1,
-}
-
-c4_config = {
     "loc0": 3,
     "loc1": 0,
     "loc2": 3,
     "loc3": 0,
 }
 
-c5_config = {
-    "loc0": 3,
-    "loc1": 0,
-    "loc2": 3,
-    "loc3": 2,
-}
-
 configs = {
     "c1": c1_config,
     "c2": c2_config,
     "c3": c3_config,
-    "c4": c4_config,
-    "c5": c5_config
 }
 
 shutil.copyfile(nodelist_path, backup_nodelist_path)
 
-if job in ["c" + str(i) for i in range(1, 6)]:
+if job in ["c" + str(i) for i in range(1, 4)]:
     _config = configs[job]
     _nodelist = dict()
 
