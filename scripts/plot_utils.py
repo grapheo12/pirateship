@@ -247,15 +247,15 @@ def plot_tput_vs_latency_multi(stat_list: List[Dict[int, Stats]], legends: List[
         stdev_tputs = [p[1].stdev_tput for p in points]
         mean_latencies = [p[1].mean_latency for p in points]
         stdev_latencies = [p[1].stdev_latency for p in points]
-        yerr_max = [p[1].p75_latency - p[1].median_latency for p in points]
-        yerr_min = [p[1].median_latency - p[1].p25_latency for p in points]
+        yerr_max = [(p[1].p75_latency - p[1].median_latency) / 1000.0 for p in points]
+        yerr_min = [(p[1].median_latency - p[1].p25_latency) / 1000.0 for p in points]
         
         # Errorbar plot both side
         plt.errorbar(
             x=np.array(mean_tputs) / 1000.0,
             y=np.array(mean_latencies) / 1000.0,
-            # yerr=[yerr_min, yerr_max],
-            yerr=np.array(stdev_latencies) / 1000.0,
+            yerr=[yerr_min, yerr_max],
+            # yerr=np.array(stdev_latencies) / 1000.0,
             xerr=np.array(stdev_tputs) / 1000.0,
             label=legends[i],
             marker='>' if legends[i].endswith("-byz") else 'o',

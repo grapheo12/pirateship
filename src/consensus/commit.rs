@@ -118,9 +118,25 @@ pub async fn do_byzantine_commit<'a, Engine>(
             let _ = ctx.reconf_channel.0.send(_tx.clone());
         }
 
+        let num_txs = entry.block.tx.iter().map(|e| {
+            let crash_committed = if e.on_crash_commit.is_some() {
+                e.on_crash_commit.as_ref().unwrap().ops.len()
+            } else {
+                0
+            };
+            let byz_committed = if e.on_byzantine_commit.is_some() {
+                e.on_byzantine_commit.as_ref().unwrap().ops.len()
+            } else {
+                0
+            };
+
+            crash_committed + byz_committed
+        }).reduce(|acc, e| acc + e)
+        .unwrap_or(0);
+
         ctx.state
             .num_byz_committed_txs
-            .fetch_add(entry.block.tx.len(), Ordering::SeqCst);
+            .fetch_add(num_txs, Ordering::SeqCst);
     }
 
     #[cfg(not(feature = "reply_from_app"))]
@@ -319,7 +335,16 @@ pub async fn do_commit<'a, Engine>(
 
     for i in (ci + 1)..(n + 1) {
         let num_txs = match fork.get(i) {
-            Ok(entry) => entry.block.tx.len(),
+            Ok(entry) => {
+                entry.block.tx.iter().map(|e| {
+                    if e.on_crash_commit.is_some() {
+                        e.on_crash_commit.as_ref().unwrap().ops.len()
+                    } else {
+                        0
+                    }
+                }).reduce(|acc, e| acc + e)
+                .unwrap_or(0)
+            }
             Err(_) => {
                 break;
             }
