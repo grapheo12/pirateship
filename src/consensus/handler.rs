@@ -670,7 +670,7 @@ pub async fn handle_node_messages<Engine>(
                     if ctx.view_is_stable.load(Ordering::SeqCst) || view_timer_ignore_tick >= 10 || ctx.state.view.load(Ordering::SeqCst) == 0 {
                         view_timer_ignore_tick = 0;
                         info!("Timer fired");
-                        PinnedClient::drop_all_connections(&client);
+                        PinnedClient::drop_all_connections(&client).await;
                         ctx.intended_view.fetch_add(1, Ordering::SeqCst);
                         if ctx.intended_view.load(Ordering::SeqCst) > ctx.state.view.load(Ordering::SeqCst) {
                             if let Err(e) = do_init_view_change(&ctx, &engine, &client, super_majority, old_super_majority).await {

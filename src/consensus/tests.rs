@@ -88,8 +88,8 @@ fn gen_config() -> Config {
 
 macro_rules! log_push_next {
     ( $log:expr, $n:expr, $parent:expr ) => {
-        $log.push(LogEntry {
-            block: ProtoBlock {
+        $log.push(LogEntry::new(
+            ProtoBlock {
                 tx: vec![ProtoTransaction {
                     on_crash_commit: None,
                     on_byzantine_commit: None,
@@ -104,17 +104,14 @@ macro_rules! log_push_next {
                 view_is_stable: true,
                 config_num: 1,
                 sig: None
-            },
-            replication_votes: HashSet::new(),
-            qc_sigs: HashMap::new(),
-        }).unwrap();
+            })).unwrap();
         $n += 1;
         $parent = $log.last_hash();
     };
 
     ( $log:expr, $n:expr, $parent:expr, $keys:expr ) => {
-        $log.push_and_sign(LogEntry {
-            block: ProtoBlock {
+        $log.push_and_sign(LogEntry::new(
+            ProtoBlock {
                 tx: Vec::new(),
                 n: $n,
                 parent: $parent.clone(),
@@ -124,10 +121,7 @@ macro_rules! log_push_next {
                 view_is_stable: true,
                 config_num: 1,
                 sig: None
-            },
-            replication_votes: HashSet::new(),
-            qc_sigs: HashMap::new(),
-        }, $keys).unwrap();
+            }), $keys).unwrap();
         $n += 1;
         $parent = $log.last_hash();
     };

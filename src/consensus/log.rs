@@ -23,6 +23,7 @@ use super::super::proto::consensus::{
 pub struct LogEntry {
     pub block: ProtoBlock,
     pub replication_votes: HashSet<String>,
+    pub block_hash: Vec<u8>,
 
     /// Accumulate signatures in the leader.
     /// Used as signature cache in the followers.
@@ -31,10 +32,14 @@ pub struct LogEntry {
 
 impl LogEntry {
     pub fn new(block: ProtoBlock) -> LogEntry {
+        let mut buf = Vec::new();
+        block.encode(&mut buf).unwrap();
+        
         LogEntry {
             block,
             replication_votes: HashSet::new(),
             qc_sigs: HashMap::new(),
+            block_hash: hash(&buf)
         }
     }
 
@@ -206,11 +211,7 @@ impl Log {
                     match res {
                         Ok(block) => {
                             if block.n == n {
-                                return Ok(LogEntry {
-                                    block,
-                                    replication_votes: HashSet::new(),
-                                    qc_sigs: HashMap::new(),
-                                });
+                                return Ok(LogEntry::new(block));
                             }
                             // Go back one more block
                             if block.n == 1 {
@@ -433,16 +434,23 @@ impl Log {
             return None;
         }
 
-        let mut buf = Vec::new();
+        // let mut buf = Vec::new();
 
-        if n > 0 {
-            self.get(n).unwrap()
-                .block
-                .encode(&mut buf)
-                .unwrap();
+        // if n > 0 {
+        //     self.get(n).unwrap()
+        //         .block
+        //         .encode(&mut buf)
+        //         .unwrap();
+        // }
+
+        // Some(hash(&buf))
+
+        if n == 0 {
+            let buf = Vec::new();
+            Some(hash(&buf))
+        } else {
+            Some(self.get(n).unwrap().block_hash.clone())
         }
-
-        Some(hash(&buf))
     }
 
     pub fn last_hash(&self) -> Vec<u8> {
@@ -461,6 +469,10 @@ impl Log {
         let sig = keys.sign(&self.last_hash());
         let len = self.entries.len();
         self.entries[len - 1].block.sig = Some(Sig::ProposerSig(sig.to_vec()));
+
+        let mut buf = Vec::new();
+        self.entries[len - 1].block.encode(&mut buf).unwrap();
+        self.entries[len - 1].block_hash.copy_from_slice(&hash(&buf));
 
         Ok(n)
     }
@@ -667,11 +679,7 @@ impl Log {
         self.truncate(fork.blocks[0].n - 1).unwrap(); // This should not fail!!
         
         for block in &fork.blocks {
-            let entry = LogEntry {
-                block: block.clone(),
-                replication_votes: HashSet::new(),
-                qc_sigs: HashMap::new()
-            };
+            let entry = LogEntry::new(block.clone());
             
             self.push(entry).unwrap();      // This should all pass after the truncation. 
         }

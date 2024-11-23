@@ -266,10 +266,11 @@ def plot_tput_vs_latency_multi(stat_list: List[Dict[int, Stats]], legends: List[
             # hex color
             # color=convert_legend_to_rgb_color(legends[i])
         )
-    plt.yscale("log")
+    # plt.yscale("log")
     plt.xlabel("Throughput (k req/s)")
     plt.ylabel("Latency (ms)")
     plt.grid()
+    # plt.ylim((0, 400))
 
     # Legend to the top and horizontal
     plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=max(1, len(legends)//2))

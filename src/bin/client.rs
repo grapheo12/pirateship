@@ -173,7 +173,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
                         // but node1 is still leader for node2 and
                         // the curr_leader will ping pong until node2 changes view.
                         
-                        PinnedClient::drop_connection(&client, &curr_leader);
+                        PinnedClient::drop_connection(&client, &curr_leader).await;
     
     
                         curr_leader = l.name.clone();

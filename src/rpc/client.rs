@@ -5,14 +5,14 @@ use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}};
 use log::{debug, info, trace, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use std::{
-    collections::{HashMap, HashSet}, fs::File, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::{Arc, RwLock}
+    collections::{HashMap, HashSet}, fs::File, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::Arc,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufWriter},
     net::TcpStream,
     sync::{
-        mpsc::{self, UnboundedSender},
-        Mutex,
+        mpsc::{self, Sender, UnboundedSender},
+        Mutex, RwLock
     },
 };
 use std::time::Instant;
@@ -132,7 +132,7 @@ pub struct Client {
     pub config: AtomicConfig,
     pub tls_ca_root_cert: RootCertStore,
     pub sock_map: PinnedHashMap<String, PinnedTlsStream>,
-    pub chan_map: PinnedHashMap<String, UnboundedSender<(PinnedMessage, LatencyProfile)>>,
+    pub chan_map: PinnedHashMap<String, Sender<(PinnedMessage, LatencyProfile)>>,
     pub worker_ready: PinnedHashSet<String>,
     pub key_store: AtomicKeyStore,
     do_auth: bool,
@@ -241,7 +241,7 @@ impl PinnedClient {
             .sock_map
             .0
             .write()
-            .unwrap()
+            .await
             .insert(name.to_string(), stream_safe.clone());
         Ok(stream_safe)
     }
@@ -250,7 +250,7 @@ impl PinnedClient {
         // Is there an open connection?
         let mut sock: Option<PinnedTlsStream> = None;
         {
-            let sock_map_reader = client.0.sock_map.0.read().unwrap();
+            let sock_map_reader = client.0.sock_map.0.read().await;
 
             let sock_ = sock_map_reader.get(name);
             if sock_.is_some() {
@@ -297,7 +297,7 @@ impl PinnedClient {
                 );
             }
 
-            client.0.sock_map.0.write().unwrap().remove(name);
+            client.0.sock_map.0.write().await.remove(name);
             debug!("Socket removed from sock_map");
             return Err(e);
         }
@@ -424,22 +424,22 @@ impl PinnedClient {
     ) -> Result<(), Error> {
         let mut need_to_spawn_workers = Vec::new();
         for name in names {
-            let lworkers = client.0.worker_ready.0.read().unwrap();
+            let lworkers = client.0.worker_ready.0.read().await;
             if !lworkers.contains(name) {
                 need_to_spawn_workers.push(name.clone());
             }
         }
 
         for name in &need_to_spawn_workers {
-            let (tx, mut rx) = mpsc::unbounded_channel(); // (client.0.config.rpc_config.channel_depth as usize);
-            let mut lchans = client.0.chan_map.0.write().unwrap();
+            let (tx, mut rx) = mpsc::channel(10);
+            let mut lchans = client.0.chan_map.0.write().await;
             lchans.insert(name.clone(), tx);
 
             let _name = name.clone();
             let _client = client.clone();
             // Register as ready.
             {
-                let mut lworkers = _client.0.worker_ready.0.write().unwrap();
+                let mut lworkers = _client.0.worker_ready.0.write().await;
                 lworkers.insert(_name.clone());
             }
             tokio::spawn(async move {
@@ -511,7 +511,7 @@ impl PinnedClient {
 
                 // Deregister as ready.
                 {
-                    let mut lworkers = _client.0.worker_ready.0.write().unwrap();
+                    let mut lworkers = _client.0.worker_ready.0.write().await;
                     lworkers.remove(&_name);
                 }
             });
@@ -520,11 +520,11 @@ impl PinnedClient {
         // At this point, all name in names have a dedicated broadcast worker running.
         // let mut chans = Vec::new();
         {
-            let lchans = client.0.chan_map.0.read().unwrap();
+            let lchans = client.0.chan_map.0.read().await;
             for name in names {
                 let chan = lchans.get(name).unwrap();
                 // chans.push(chan.clone());
-                if let Err(e) = chan.send((data.clone(), profile.clone())) {
+                if let Err(e) = chan.send((data.clone(), profile.clone())).await {
                     warn!("Broadcast error: {}", e);
                 }
             }
@@ -538,9 +538,9 @@ impl PinnedClient {
     }
 
 
-    pub fn drop_connection(client: &PinnedClient, name: &String) {
+    pub async fn drop_connection(client: &PinnedClient, name: &String) {
         let _sock = {
-            let mut lsock = client.0.sock_map.0.write().unwrap();
+            let mut lsock = client.0.sock_map.0.write().await;
             lsock.remove(name)
         };
 
@@ -551,15 +551,15 @@ impl PinnedClient {
         // }
     }
 
-    pub fn drop_all_connections(client: &PinnedClient) {
-        let lsock_map = client.0.sock_map.0.read().unwrap();
+    pub async fn drop_all_connections(client: &PinnedClient) {
+        let lsock_map = client.0.sock_map.0.read().await;
         let names = lsock_map.iter().map(|(k, _v)| {
             k.clone()
         }).collect::<Vec<_>>();
         drop(lsock_map);
 
         for name in &names {
-            PinnedClient::drop_connection(client, name);
+            PinnedClient::drop_connection(client, name).await;
         }
     }
 }

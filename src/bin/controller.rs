@@ -204,7 +204,7 @@ async fn main() -> io::Result<()> {
             pft::proto::client::proto_client_reply::Reply::Leader(l) => {
                 if curr_leader != l.name {
                     trace!("Switching leader: {} --> {}", curr_leader, l.name);
-                    PinnedClient::drop_connection(&client, &curr_leader);    
+                    PinnedClient::drop_connection(&client, &curr_leader).await;    
                     curr_leader = l.name.clone();
                 }
                 continue;

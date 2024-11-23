@@ -101,6 +101,7 @@ def create_dirs_and_copy_files(node_conns, client_conns, wd, repeat, git_hash, c
         conn.put(f"{cfg['rpc_config']['signing_priv_key_path']}", remote=f"pft/{wd}/configs/")
         conn.put(f"configs/{node}{CONFIG_SUFFIX}", remote=f"pft/{wd}/configs/")
         conn.put("target/release/server", remote=f"pft/{wd}/target/release/server_{node}")
+        conn.put("target/release/net-perf", remote=f"pft/{wd}/target/release/net-perf")
 
     for client, conn in client_conns.items():
         run_all([
@@ -147,6 +148,16 @@ def run_nodes(node_conns: Dict[str, Connection], repeat_num: int, wd: str) -> Li
 
     return promises
 
+def run_nodes_with_net_perf(node_conns: Dict[str, Connection], repeat_num: int, wd: str) -> List:
+    promises = []
+    
+    for node, conn in node_conns.items():
+        prom = conn.run(f"cd pft/{wd} && ./target/release/net-perf configs/{node}{CONFIG_SUFFIX} > logs/{repeat_num}/{node}.log 2> logs/{repeat_num}/{node}.err",
+                 pty=True, asynchronous=True, hide=True)
+        promises.append(prom)
+
+    return promises
+
 
 
 def run_clients(client_conns: Dict[str, Connection], repeat_num: int, wd: str) -> List:
@@ -176,6 +187,11 @@ def kill_nodes(node_conns: Dict[str, Connection]):
         ], conn)
 
 
+def kill_nodes_with_net_perf(node_conns: Dict[str, Connection]):
+    for node, conn in node_conns.items():
+        run_all([
+            f"pkill -c net-perf",           # There better not be any other process that matches this.
+        ], conn)
 
 def copy_log(name: str, conn: Connection, repeat_num: int, wd: str):
     conn.get(f"pft/{wd}/logs/{repeat_num}/{name}.log", local=f"logs/{wd}/{repeat_num}/")
