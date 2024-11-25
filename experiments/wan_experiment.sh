@@ -7,13 +7,13 @@ set -o xtrace
 
 # ALL_CLIENTS="-c 1000 -c 2000 -c 5000"
 # ALL_CLIENTS="-c 7000 -c 9000 -c 10000 -c 15000 -c 20000 -c 25000"
-ALL_CLIENTS="-c 3000 -c 6000 -c 9000 -c 12000 -c 15000 -c 18000"
+ALL_CLIENTS="-c 500 -c 1000 -c 2000 -c 3000 -c 6000 -c 9000 -c 12000"
 # ALL_CLIENTS="-c 12000 -c 15000 -c 18000"
 # ALL_CLIENTS="-c 15000 -c 18000 -c 25000 -c 35000 -c 45000"
 # ALL_CLIENTS="-c 25000 -c 30000 -c 40000 -c 45000"
 # ALL_CLIENTS="-c 40000 -c 45000"
-EXPERIMENT_CONFIG="-r 3 -s 180 -up 90 -down 5"
-PLOT_CONFIG="-r 3 -c 5 -up 90 -down 5 -l node1"
+EXPERIMENT_CONFIG="-r 3 -s 180 -up 90 -down 20"
+PLOT_CONFIG="-r 3 -c 5 -up 90 -down 20 -l node1"
 
 make
 
