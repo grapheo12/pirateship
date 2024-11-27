@@ -442,6 +442,7 @@ where
     let mut curr_client_req = Vec::new();
     let mut curr_client_req_num = 0;
     let mut signature_timer_tick = false;
+    let mut batch_timer_tick = false;
 
     let majority = get_majority_num(&ctx);
     let super_majority = get_super_majority_num(&ctx);
@@ -454,9 +455,16 @@ where
         cfg.consensus_config.signature_max_delay_ms,
     ));
 
+    let batch_timer = ResettableTimer::new(Duration::from_millis(
+        cfg.consensus_config.batch_max_delay_ms
+    ));
+
     let signature_timer_handle = signature_timer.run().await;
+    let batch_timer_handler = batch_timer.run().await;
 
     let mut pending_signatures = 0;
+
+    let mut request_batch = Vec::new();
 
     #[cfg(not(feature = "view_change"))]
     {
@@ -475,10 +483,13 @@ where
             },
             tick = signature_timer.wait() => {
                 signature_timer_tick = tick;
+            },
+            tick = batch_timer.wait() => {
+                batch_timer_tick = tick;
             }
         }
 
-        if curr_client_req_num == 0 && signature_timer_tick == false {
+        if curr_client_req_num == 0 && signature_timer_tick == false && batch_timer_tick == false {
             // Channels are all closed.
             break;
         }
@@ -498,6 +509,7 @@ where
             curr_client_req.clear();
             curr_client_req_num = 0;
             signature_timer_tick = false;
+            batch_timer_tick = false;
             continue;
         }
 
@@ -510,20 +522,30 @@ where
         //     continue;
         // }
 
+        request_batch.extend_from_slice(&curr_client_req);
+
         if !ctx.i_am_leader.load(Ordering::SeqCst) {
             if curr_client_req.len() > 0 {
-                do_respond_with_current_leader(&ctx, &curr_client_req).await;
+                do_respond_with_current_leader(&ctx, &request_batch).await;
             }
             // Reset for next iteration
+            request_batch.clear();
             curr_client_req.clear();
             curr_client_req_num = 0;
             signature_timer_tick = false;
+            batch_timer_tick = false;
+            continue;
+        }
+        let cfg = ctx.config.get();
+
+        if !(signature_timer_tick || batch_timer_tick || request_batch.len() >= cfg.consensus_config.max_backlog_batch_size) {
+            curr_client_req.clear();
+            curr_client_req_num = 0;
+            signature_timer_tick = false;
+            batch_timer_tick = false;
             continue;
         }
 
-
-
-        let cfg = ctx.config.get();
         // Ok I am the leader.
         pending_signatures += 1;
         #[cfg(feature = "always_sign")]
@@ -535,11 +557,12 @@ where
             || (pending_signatures >= cfg.consensus_config.signature_max_delay_blocks);
         // Or I actually got some transactions and I really need to sign
 
-        if signature_timer_tick && curr_client_req.len() == 0 {
+        if signature_timer_tick && curr_client_req.len() == 0 && !batch_timer_tick {
             trace!("Blank heartbeat");
             force_noop(&ctx).await;
             curr_client_req_num = 0;
             signature_timer.reset();
+            batch_timer.reset();
             continue;
         }
 
@@ -548,16 +571,16 @@ where
         #[cfg(feature = "no_pipeline")]
         ctx.should_progress.acquire().await.unwrap().forget();
 
-        trace!("AppendEntries with {} entries", curr_client_req.len());
+        trace!("AppendEntries with {} entries", request_batch.len());
         match do_append_entries(
             ctx.clone(), &engine.clone(), client.clone(),
-            &mut curr_client_req, should_sig,
+            &mut request_batch, should_sig,
             &ctx.send_list.get(), majority, super_majority, 0 // View is stable; so no OldFullNode
         ).await {
             Ok(_) => {}
             Err(e) => {
                 warn!("Error doing append entries {}", e);
-                do_respond_with_current_leader(&ctx, &curr_client_req).await;
+                do_respond_with_current_leader(&ctx, &request_batch).await;
                 should_sig = false;
             }
         };
@@ -568,14 +591,17 @@ where
         }
 
         // Reset for next iteration
+        request_batch.clear();
         curr_client_req.clear();
         curr_client_req_num = 0;
         signature_timer_tick = false;
+        batch_timer_tick = false;
     }
 
     warn!("Client handler dying!");
 
     let _ = join!(signature_timer_handle);
+    let _ = join!(batch_timer_handler);
     Ok(())
 }
 

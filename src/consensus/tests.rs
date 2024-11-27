@@ -54,6 +54,7 @@ fn gen_config() -> Config {
         signature_max_delay_ms: 100,
         vote_processing_workers: 128,
         view_timeout_ms: 150,
+        batch_max_delay_ms: 10,
 
         #[cfg(feature = "storage")]
         // log_storage_config: crate::config::StorageConfig::FileStorage(FileStorageConfig::default()),
