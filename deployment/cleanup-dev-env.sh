@@ -20,6 +20,7 @@ now_time=$(date +%s)
 log_dir=logs/$now_time
 mkdir -p $log_dir
 scp -r -i deployment/$DEV_SSH_KEY $DEV_USER@$DEV_VM:~/pft-dev/plot.png logs/$now_time
+scp -r -i deployment/$DEV_SSH_KEY $DEV_USER@$DEV_VM:~/pft-dev/plot.png.pkl logs/$now_time
 scp -r -i deployment/$DEV_SSH_KEY $DEV_USER@$DEV_VM:~/pft-dev/logs logs/$now_time
 
 

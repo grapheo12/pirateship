@@ -1,0 +1,5 @@
+platform_locations = ["westus"]
+sevpool_count = [7]
+tdxpool_count = [0]
+nonteepool_count = [0]
+clientpool_count = [3]

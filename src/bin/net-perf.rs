@@ -112,7 +112,7 @@ impl ProfilerNode
 
         js.spawn(async move {
             let payload = vec![2u8; 1024];
-            let msg = PinnedMessage::from(payload, 1024, pft::rpc::SenderType::Anon);
+            let msg = PinnedMessage::from(payload, 4096, pft::rpc::SenderType::Anon);
             let send_list = get_everyone_except_me(
                 &node2.ctx.0.config.net_config.name,
                 &node2.ctx.0.config.consensus_config.node_list);
@@ -127,7 +127,7 @@ impl ProfilerNode
                         &send_list,
                         &msg, &mut profile).await;
 
-                    node2.ctx.0.bytes_completed_bcasts.fetch_add(1024, Ordering::SeqCst);
+                    node2.ctx.0.bytes_completed_bcasts.fetch_add(4096 * send_list.len(), Ordering::SeqCst);
                 }
             }
 

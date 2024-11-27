@@ -7,6 +7,7 @@ import click
 from plot_utils import plot_tput_vs_latency_multi, parse_log_dir_with_total_clients, plot_tput_vs_latency
 import os
 from dateutil.parser import isoparse
+import pickle
 
 @click.command()
 @click.option(
@@ -88,6 +89,8 @@ def main(path, start, end, repeats, num_clients, leader, ramp_up, ramp_down, out
         legend = [a[:-8] if a.endswith("+onlybyz") else a for a in legend]
         legend.extend(byz_legends)
         stats.extend(byz_stats)
+        with open(f"{out}.pkl", "wb") as f:
+            pickle.dump(stats, f)
 
         pprint(stats)
         plot_tput_vs_latency_multi(stats, legend, out)

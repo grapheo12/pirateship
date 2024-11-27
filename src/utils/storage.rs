@@ -30,9 +30,11 @@ impl RocksDBStorageEngine {
             opts.set_target_file_size_base(config.write_buffer_size as u64);
 
             opts.set_manual_wal_flush(true);
-            opts.set_compaction_style(DBCompactionStyle::Fifo);
+            opts.set_compaction_style(DBCompactionStyle::Universal);
             opts.set_allow_mmap_reads(true);
             opts.set_allow_mmap_writes(true);
+
+            // opts.increase_parallelism(3);
 
             let path = config.db_path.clone();
             RocksDBStorageEngine {

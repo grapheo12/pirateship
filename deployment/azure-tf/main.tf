@@ -376,7 +376,7 @@ resource "azurerm_linux_virtual_machine" "nonteepool_vm" {
   location              = var.platform_locations[local.nonteepool_ids_flattened_[count.index][0]]
   resource_group_name   = azurerm_resource_group.rg.name
   network_interface_ids = [azurerm_network_interface.nonteepool_nic[count.index].id]
-  size                  = "Standard_D8ds_v5"
+  size                  = "Standard_E8ds_v5"
 
 #   delete_os_disk_on_termination    = true
 #   delete_data_disks_on_termination = true
