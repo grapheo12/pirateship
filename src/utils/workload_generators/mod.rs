@@ -1,7 +1,17 @@
 use crate::proto::execution::{ProtoTransaction, ProtoTransactionResult};
 
+pub enum Executor {
+    Leader = 1,
+    Any = 2
+}
+
+pub struct WorkloadUnit {
+    pub tx: ProtoTransaction,
+    pub executor: Executor
+}
+
 pub trait PerWorkerWorkloadGenerator: Send {
-    fn next(&mut self) -> ProtoTransaction;
+    fn next(&mut self) -> WorkloadUnit;
     fn check_result(&mut self, result: &Option<ProtoTransactionResult>) -> bool;
 }
 

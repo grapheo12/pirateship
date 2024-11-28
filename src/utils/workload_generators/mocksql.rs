@@ -1,6 +1,6 @@
-use crate::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult};
+use crate::{proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}, utils::workload_generators::Executor};
 
-use super::PerWorkerWorkloadGenerator;
+use super::{PerWorkerWorkloadGenerator, WorkloadUnit};
 
 pub struct MockSQLGenerator { 
     pub query_num: usize
@@ -15,7 +15,7 @@ impl MockSQLGenerator {
 }
 
 impl PerWorkerWorkloadGenerator for MockSQLGenerator {
-    fn next(&mut self) -> ProtoTransaction {
+    fn next(&mut self) -> WorkloadUnit {
         let query = match self.query_num {
             0 => String::from("CREATE TABLE foo(id INT PRIMARY KEY, num INT);"),
             1 => String::from("INSERT INTO foo VALUES (1, 1);"),
@@ -30,17 +30,19 @@ impl PerWorkerWorkloadGenerator for MockSQLGenerator {
         self.query_num += 1;
 
         let query_vec = query.as_bytes().to_vec();
-
-        ProtoTransaction{
-            on_receive: None,
-            on_crash_commit: Some(ProtoTransactionPhase {
-                ops: vec![ProtoTransactionOp {
-                    op_type: ProtoTransactionOpType::Custom.into(),
-                    operands: vec![query_vec],
-                }],
-            }),
-            on_byzantine_commit: None,
-            is_reconfiguration: false,
+        WorkloadUnit {
+            tx: ProtoTransaction{
+                on_receive: None,
+                on_crash_commit: Some(ProtoTransactionPhase {
+                    ops: vec![ProtoTransactionOp {
+                        op_type: ProtoTransactionOpType::Custom.into(),
+                        operands: vec![query_vec],
+                    }],
+                }),
+                on_byzantine_commit: None,
+                is_reconfiguration: false,
+            },
+            executor: Executor::Leader
         }
     }
     

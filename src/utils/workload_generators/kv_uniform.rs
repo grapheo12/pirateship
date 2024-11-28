@@ -4,7 +4,7 @@ use rand::prelude::*;
 
 use crate::{config::KVReadWriteUniform, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}};
 
-use super::PerWorkerWorkloadGenerator;
+use super::{Executor, PerWorkerWorkloadGenerator, WorkloadUnit};
 
 #[derive(Clone)]
 enum TxOpType {
@@ -58,31 +58,35 @@ impl KVReadWriteUniformGenerator {
 }
 
 impl PerWorkerWorkloadGenerator for KVReadWriteUniformGenerator {
-    fn next(&mut self) -> ProtoTransaction {
+    fn next(&mut self) -> WorkloadUnit {
         let next_op = &self.sample_item[self.weight_dist.sample(&mut self.rng)].0;
         self.last_request_type = next_op.clone();
 
-        let mut ret = ProtoTransaction{
-            on_receive: None,
-            on_crash_commit: None,
-            on_byzantine_commit: None,
-            is_reconfiguration: false,
+        let mut ret = WorkloadUnit {
+            tx: ProtoTransaction {
+                on_receive: None,
+                on_crash_commit: None,
+                on_byzantine_commit: None,
+                is_reconfiguration: false,
+            },
+            executor: Executor::Leader
         };
-        
+
         match next_op {
             TxOpType::Read => {
                 let key = self.get_next_key();
-                ret.on_receive = Some(ProtoTransactionPhase {
+                ret.tx.on_receive = Some(ProtoTransactionPhase {
                     ops: vec![ProtoTransactionOp {
                         op_type: ProtoTransactionOpType::Read.into(),
                         operands: vec![key] 
                     }]
                 });
+                ret.executor = Executor::Any;
             },
             TxOpType::WriteCrash => {
                 let key = self.get_next_key();
                 let val = vec![0u8; self.config.val_size];
-                ret.on_crash_commit = Some(ProtoTransactionPhase {
+                ret.tx.on_crash_commit = Some(ProtoTransactionPhase {
                     ops: vec![ProtoTransactionOp {
                         op_type: ProtoTransactionOpType::Write.into(),
                         operands: vec![key, val]
@@ -92,7 +96,7 @@ impl PerWorkerWorkloadGenerator for KVReadWriteUniformGenerator {
             TxOpType::WriteByz => {
                 let key = self.get_next_key();
                 let val = vec![0u8; self.config.val_size];
-                ret.on_byzantine_commit = Some(ProtoTransactionPhase {
+                ret.tx.on_byzantine_commit = Some(ProtoTransactionPhase {
                     ops: vec![ProtoTransactionOp {
                         op_type: ProtoTransactionOpType::Write.into(),
                         operands: vec![key, val]

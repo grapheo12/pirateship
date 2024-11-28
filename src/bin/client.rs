@@ -9,7 +9,7 @@ use pft::{
     }, rpc::{
         client::{Client, PinnedClient},
         MessageRef, PinnedMessage,
-    }, utils::workload_generators::{BlankWorkloadGenerator, KVReadWriteUniformGenerator, KVReadWriteYCSBGenerator, MockSQLGenerator, PerWorkerWorkloadGenerator}
+    }, utils::workload_generators::{BlankWorkloadGenerator, Executor, KVReadWriteUniformGenerator, KVReadWriteYCSBGenerator, MockSQLGenerator, PerWorkerWorkloadGenerator}
 };
 use prost::Message;
 use rand::{distributions::WeightedIndex, prelude::*};
@@ -68,7 +68,9 @@ macro_rules! reset_backoff {
 async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, config: ClientConfig, byz_resp: Arc<Pin<Box<Mutex<HashMap<(u64, u64), Instant>>>>>) -> io::Result<()> {    
     let mut config = config.clone();
     let mut leader_rr = 0;
-    let mut curr_leader = config.net_config.nodes.keys().into_iter().collect::<Vec<_>>()[leader_rr].clone();
+    let mut any_node_rr = 0;
+    let mut node_list = config.net_config.nodes.keys().map(|e| e.clone()).collect::<Vec<_>>();
+    let mut curr_leader = node_list[leader_rr].clone();
     let mut i = 0;
 
     let mut rng = ChaCha20Rng::seed_from_u64(42 + idx as u64);
@@ -90,8 +92,10 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
     reset_backoff!(current_backoff_ms);
 
     while i < num_requests {
+        let work = workload_generator.next();
+        let executor = work.executor;
         let client_req = ProtoClientRequest {
-            tx: Some(workload_generator.next()),
+            tx: Some(work.tx),
             // tx: None,
             origin: config.net_config.name.clone(),
             // sig: vec![0u8; SIGNATURE_LENGTH],
@@ -110,12 +114,27 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
         let start = Instant::now();
         loop {          // Retry loop
             // info!("Client {}: Sending request", idx);
-            let msg = PinnedClient::send_and_await_reply(
-                &client,
-                &curr_leader,
-                MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon),
-            )
-            .await;
+
+            let msg = match &executor {
+                Executor::Leader => {
+                    PinnedClient::send_and_await_reply(
+                        &client,
+                        &curr_leader,
+                        MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon),
+                    ).await
+                },
+                Executor::Any => {
+                    let recv_node = &node_list[any_node_rr % node_list.len()];
+                    any_node_rr += 1;
+                    PinnedClient::send_and_await_reply(
+                        &client,
+                        recv_node,
+                        MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon),
+                    ).await
+                },
+            };
+            
+            
             // info!("Client {}: Received response", idx);
 
 
@@ -145,6 +164,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
                         config.net_config.nodes.insert(k.clone(), v.clone());
                     }
                     client.0.config.set(Box::new(config.fill_missing()));
+                    node_list = config.net_config.nodes.keys().map(|e| e.clone()).collect::<Vec<_>>();
                     debug!("New Net Info: {:#?}", config.net_config.nodes);
                     backoff!(current_backoff_ms);
                     continue;
@@ -156,6 +176,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
                         config.net_config.nodes.insert(k.clone(), v.clone());
                     }
                     client.0.config.set(Box::new(config.fill_missing()));
+                    node_list = config.net_config.nodes.keys().map(|e| e.clone()).collect::<Vec<_>>();
                     debug!("New Net Info: {:#?}", config.net_config.nodes);
                     if curr_leader != l.name {
                         trace!("Switching leader: {} --> {}", curr_leader, l.name);

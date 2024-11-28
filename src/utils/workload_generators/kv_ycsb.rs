@@ -6,9 +6,9 @@ use rand_chacha::ChaCha20Rng;
 use rand::prelude::*;
 use zipf::ZipfDistribution;
 
-use crate::{config::KVReadWriteYCSB, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}};
+use crate::{config::KVReadWriteYCSB, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}, utils::workload_generators::Executor};
 
-use super::PerWorkerWorkloadGenerator;
+use super::{PerWorkerWorkloadGenerator, WorkloadUnit};
 
 /// This is enough for YCSB-A, B, C
 #[derive(Clone)]
@@ -140,7 +140,7 @@ impl KVReadWriteYCSBGenerator {
         self.get_key_str_from_num(key_num)
     }
 
-    fn load_phase_next(&mut self) -> ProtoTransaction {
+    fn load_phase_next(&mut self) -> WorkloadUnit {
         // Write Transaction with the next key to be loaded.
         // Always write on crash commit
 
@@ -161,13 +161,16 @@ impl KVReadWriteYCSBGenerator {
 
         self.last_request_type = TxOpType::Update;
 
-        ProtoTransaction {
-            on_receive: None,
-            on_crash_commit: Some(ProtoTransactionPhase {
-                ops,
-            }),
-            on_byzantine_commit: None,
-            is_reconfiguration: false,
+        WorkloadUnit {
+            tx: ProtoTransaction {
+                on_receive: None,
+                on_crash_commit: Some(ProtoTransactionPhase {
+                    ops,
+                }),
+                on_byzantine_commit: None,
+                is_reconfiguration: false,
+            },
+            executor: Executor::Leader
         }
     }
 
@@ -251,10 +254,10 @@ impl KVReadWriteYCSBGenerator {
         }
     }
 
-    fn run_phase_next(&mut self) -> ProtoTransaction {
-        let next_op = &self.read_write_weights[self.read_write_dist.sample(&mut self.rng)].0;
+    fn run_phase_next(&mut self) -> WorkloadUnit {
+        let next_op = self.read_write_weights[self.read_write_dist.sample(&mut self.rng)].0.clone();
 
-        match next_op {
+        let tx = match next_op {
             TxOpType::Read => {
                 self.last_request_type = TxOpType::Read;
                 if self.config.linearizable_reads {
@@ -276,13 +279,28 @@ impl KVReadWriteYCSBGenerator {
                         TxPhaseType::Byz => self.update_byz_next(),
                     }
             },
+        };
+
+        let executor = match next_op {
+            TxOpType::Read => {
+                if self.config.linearizable_reads {
+                    Executor::Leader
+                } else {
+                    Executor::Any
+                }
+            },
+            TxOpType::Update => Executor::Leader,
+        };
+
+        WorkloadUnit {
+            tx, executor
         }
 
     }
 }
 
 impl PerWorkerWorkloadGenerator for KVReadWriteYCSBGenerator {
-    fn next(&mut self) -> ProtoTransaction {
+    fn next(&mut self) -> WorkloadUnit {
         if self.config.load_phase && self.load_phase_cnt < self.config.num_keys {
             return self.load_phase_next();
         } else {
