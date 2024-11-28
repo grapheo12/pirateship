@@ -13,7 +13,7 @@ impl PerWorkerWorkloadGenerator for BlankWorkloadGenerator {
                 ops: vec![ProtoTransactionOp {
                     op_type: crate::proto::execution::ProtoTransactionOpType::Noop.into(),
                     operands: vec![vec![2u8; 512]],
-                }; 2],
+                }; 1],
             }),
             on_byzantine_commit: None,
             is_reconfiguration: false,

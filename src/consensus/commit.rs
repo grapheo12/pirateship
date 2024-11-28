@@ -234,7 +234,7 @@ where
         let updated_bci = qc.n;
         
         if updated_bci > old_bci {
-            if updated_bci % 1000 == 1 {
+            if (updated_bci / 1000) > (old_bci / 1000) {
                 info!("Byzantine commit by fast path: {}", updated_bci);
             }
             do_byzantine_commit(ctx, client, engine, fork, updated_bci).await;

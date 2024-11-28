@@ -160,6 +160,7 @@ pub struct ServerContext {
     pub should_progress: Semaphore,
 
     pub total_blocks_forced_supermajority: AtomicUsize,
+    pub total_forced_signed_blocks: AtomicUsize,
 
     #[cfg(feature = "evil")]
     pub simulate_byz_behavior: bool,
@@ -215,6 +216,7 @@ impl PinnedServerContext {
             total_client_requests: AtomicUsize::new(0),
             should_progress: Semaphore::new(1),
             total_blocks_forced_supermajority: AtomicUsize::new(0),
+            total_forced_signed_blocks: AtomicUsize::new(0),
 
             #[cfg(feature = "evil")]
             simulate_byz_behavior: cfg.evil_config.simulate_byzantine_behavior,
@@ -559,6 +561,7 @@ where
 
         if signature_timer_tick && curr_client_req.len() == 0 && !batch_timer_tick {
             trace!("Blank heartbeat");
+            ctx.total_forced_signed_blocks.fetch_add(1, Ordering::SeqCst);
             force_noop(&ctx).await;
             curr_client_req_num = 0;
             signature_timer.reset();

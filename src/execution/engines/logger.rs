@@ -117,6 +117,7 @@ impl PinnedLoggerEngine {
             info!("Storage GC Hi watermark: {}", fork.gc_hiwm());
 
             info!("Blocks forced to supermajority: {}", self.ctx.total_blocks_forced_supermajority.load(Ordering::SeqCst));
+            info!("Force signed blocks: {}", self.ctx.total_forced_signed_blocks.load(Ordering::SeqCst));
         }
 
         let mut rback_chan = self.rback_chan.1.lock().await;

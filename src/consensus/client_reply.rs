@@ -215,7 +215,7 @@ pub fn get_all_byz_responses(ctx: &PinnedServerContext, client_name: &String) ->
 }
 
 pub fn should_await_byz_response(bn: u64, txn: usize) -> bool {
-    bn > 0 && bn % 173 == 1 && txn == 0
+    bn > 0 && ((bn % 173 == 1 && txn == 0) || (bn % 229 == 5 && txn == 400))
 }
 
 pub fn register_tx_with_client(ctx: &PinnedServerContext, client_name: &String, bn: u64, txn: usize) {
