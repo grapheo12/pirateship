@@ -16,6 +16,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from pprint import pprint
+from os.path import exists
 
 # Log format follows the log4rs config.
 # Capture the time from the 3rd []
@@ -29,7 +30,7 @@ client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Client Id\: ([0-9]+), Msg Id\: 
 client_byz_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Client Id\: ([0-9]+), Block num\: ([0-9]+), Tx num\: ([0-9]+), Byz Latency\: ([.0-9]+) us")
 
 
-def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, read_points=[]):
+def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, read_points=[[]]):
     points = [
         (
             isoparse(a[0]),    # ISO format is used in run_remote
@@ -51,11 +52,14 @@ def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, 
     ]
 
     read_points = [
-        (
-            isoparse(a[0]),
-            int(a[1])
-        )
-        for a in read_points
+        [
+            (
+                isoparse(a[0]),
+                int(a[1])
+            )
+            for a in _rp
+        ]
+        for _rp in read_points
     ]
 
     # Filter points, only keep if after ramp_up time and before ramp_down time
@@ -64,7 +68,10 @@ def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, 
     end_time = points[-1][0] - datetime.timedelta(seconds=ramp_down)
 
     points = [p for p in points if p[0] >= start_time and p[0] <= end_time]
-    read_points = [p for p in read_points if p[0] >= start_time and p[0] <= end_time]
+    read_points = [
+        [p for p in _rp if p[0] >= start_time and p[0] <= end_time]
+        for _rp in read_points
+    ]
 
     total_runtime = (points[-1][0] - points[0][0]).total_seconds()
     if byz:
@@ -74,11 +81,11 @@ def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, 
         total_commit = points[-1][3] - points[0][3]
         total_tx = points[-1][7] - points[0][7]
     
-    
-    if len(read_points) > 0:
-        total_reads = read_points[-1][1] - read_points[0][1]
-    else:
-        total_reads = 0
+    total_reads = 0
+
+    for _rp in read_points:
+        if len(_rp) > 0:
+            total_reads += _rp[-1][1] - _rp[0][1]
     
     total_tx += total_reads
 
@@ -152,9 +159,21 @@ def parse_log_dir(dir, repeats, num_clients, leader, ramp_up, ramp_down, byz=Fal
                 if len(captures) == 1:
                     points.append(captures[0])
 
-                captures = node_rgx2.findall(line)
-                if len(captures) == 1:
-                    read_points.append(captures[0])
+        total_nodes = 0
+        while True:
+            if exists(f"{dir}/{i}/node{total_nodes + 1}.log"):
+                total_nodes += 1
+            else:
+                break
+        for node_num in range(1, total_nodes + 1):
+            _rp = []
+            with open(f"{dir}/{i}/node{node_num}.log", "r") as f:
+                for line in f.readlines():
+                    captures = node_rgx2.findall(line)
+                    if len(captures) == 1:
+                        _rp.append(captures[0])
+            read_points.append(_rp)
+
         try:
             process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz, read_points)
         except:
