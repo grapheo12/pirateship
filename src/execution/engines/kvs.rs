@@ -1,13 +1,14 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use std::{collections::HashMap, ops::Deref, pin::Pin, sync::{atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}, Arc, Mutex, MutexGuard}};
+use std::{collections::HashMap, ops::Deref, pin::Pin, sync::{atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}, Arc, Mutex, MutexGuard}, time::Duration};
 
+use hex::ToHex;
 use log::{info, trace, warn};
 use prost::Message;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use crate::{config::NodeInfo, consensus::{handler::PinnedServerContext, log::Log}, crypto::hash, execution::Engine, proto::{client::{ProtoClientReply, ProtoTryAgain}, execution::{ProtoTransactionOpResult, ProtoTransactionResult}}, rpc::PinnedMessage};
+use crate::{config::NodeInfo, consensus::{handler::PinnedServerContext, log::Log, timer::ResettableTimer}, crypto::hash, execution::Engine, proto::{client::{ProtoClientReply, ProtoTryAgain}, execution::{ProtoTransactionOpResult, ProtoTransactionResult}}, rpc::PinnedMessage};
 
 enum Event {
     CiUpd(u64),
@@ -24,7 +25,7 @@ pub struct KVStoreEngine {
     pub ci_state: Mutex<HashMap<Vec<u8>, Vec<(u64, Vec<u8>) /* versions */>>>,
     pub bci_state: Mutex<HashMap<Vec<u8>, Vec<u8>>>,
 
-    event_chan: (UnboundedSender<Event>, Mutex<UnboundedReceiver<Event>>),
+    event_chan: (UnboundedSender<Event>, tokio::sync::Mutex<UnboundedReceiver<Event>>),
 
     pub num_crash_committed_writes: AtomicUsize,
     pub num_byz_committed_writes: AtomicUsize,
@@ -52,7 +53,7 @@ impl KVStoreEngine {
             quit_signal: AtomicBool::new(false),
             ci_state: Mutex::new(HashMap::new()),
             bci_state: Mutex::new(HashMap::new()),
-            event_chan: (chan.0, Mutex::new(chan.1)),
+            event_chan: (chan.0, tokio::sync::Mutex::new(chan.1)),
             num_crash_committed_writes: AtomicUsize::new(0),
             num_byz_committed_writes: AtomicUsize::new(0),
             num_reads: AtomicUsize::new(0),
@@ -60,17 +61,15 @@ impl KVStoreEngine {
     }
 
     fn execute_ops(&self,
-        fork: &tokio::sync::MutexGuard<Log>,
+        fork: &mut tokio::sync::MutexGuard<Log>,
         ci_state: &mut MutexGuard<HashMap<Vec<u8>, Vec<(u64, Vec<u8>)>>>,
         bci_state: &mut MutexGuard<HashMap<Vec<u8>, Vec<u8>>>,
-        event_recv: &mut MutexGuard<UnboundedReceiver<Event>>
+        msg: &Event
     ) {
-        while let Ok(msg) = event_recv.try_recv() {
-            match msg {
-                Event::CiUpd(ci) => self.execute_crash_commit(ci, fork, ci_state, bci_state),
-                Event::BciUpd(bci) => self.execute_byz_commit(bci, fork, ci_state, bci_state),
-                Event::Rback(ci) => self.execute_rollback(ci, fork, ci_state, bci_state),
-            }
+        match msg {
+            Event::CiUpd(ci) => self.execute_crash_commit(*ci, fork, ci_state, bci_state),
+            Event::BciUpd(bci) => self.execute_byz_commit(*bci, fork, ci_state, bci_state),
+            Event::Rback(ci) => self.execute_rollback(*ci, fork, ci_state, bci_state),
         }
     }
 
@@ -97,7 +96,7 @@ impl KVStoreEngine {
                         crate::proto::execution::ProtoTransactionOpType::Write => {
                             let num_crash_writes = self.num_crash_committed_writes.fetch_add(1, Ordering::SeqCst) + 1;
                             if num_crash_writes % 10000 == 0 {
-                                info!("Num Crash Committed Write Requests: {}; Num Keys only crash committed: {}", num_crash_writes, ci_state.len());
+                                trace!("Num Crash Committed Write Requests: {}; Num Keys only crash committed: {}", num_crash_writes, ci_state.len());
                             }
                             // Sanity check
                             // Format (key, val)
@@ -131,7 +130,7 @@ impl KVStoreEngine {
     }
 
     fn execute_byz_commit(&self, bci: u64,
-        fork: &tokio::sync::MutexGuard<Log>,
+        fork: &mut tokio::sync::MutexGuard<Log>,
         ci_state: &mut MutexGuard<HashMap<Vec<u8>, Vec<(u64, Vec<u8>)>>>,
         bci_state: &mut MutexGuard<HashMap<Vec<u8>, Vec<u8>>>,
     ) {
@@ -154,7 +153,7 @@ impl KVStoreEngine {
                         crate::proto::execution::ProtoTransactionOpType::Write => {
                             let num_byz_writes = self.num_byz_committed_writes.fetch_add(1, Ordering::SeqCst) + 1;
                             if num_byz_writes % 10000 == 0 {
-                                info!("Num Byz Committed Write Requests: {}; Num keys byz committed: {}; BCI: {}",
+                                trace!("Num Byz Committed Write Requests: {}; Num keys byz committed: {}; BCI: {}",
                                     num_byz_writes, bci_state.len(), self.last_bci.load(Ordering::SeqCst));
                             }
                             // Sanity check
@@ -192,6 +191,19 @@ impl KVStoreEngine {
         ci_state.retain(|_, v| v.len() > 0);
 
         self.last_bci.store(bci, Ordering::SeqCst);
+
+
+        // Garbage collection
+        #[cfg(feature = "storage")]
+        {
+            if !self.ctx.i_am_leader.load(Ordering::SeqCst){
+                self.ctx.client_replied_bci.store(bci, Ordering::SeqCst);
+            }
+            let replied_upto = self.ctx.client_replied_bci.load(Ordering::SeqCst);
+            if replied_upto > 0 {
+                fork.garbage_collect_upto(replied_upto);
+            }
+        }
 
     }
 
@@ -273,13 +285,72 @@ impl Engine for PinnedKVStoreEngine {
     /// fork -> ci_state -> bci_state -> event_chan receiver. Helps avoid deadlocks.
     /// First check key in ci_state, if not found, check bci_state.
     async fn run(&self) {
+        let mut event_recv = self.event_chan.1.lock().await;
+        let mut event = None;
+        let mut tick = false;
+        let stat_timer = ResettableTimer::new(Duration::from_millis(
+            self.ctx.config.get().app_config.logger_stats_report_ms
+        ));
+        let stat_timer_handle = stat_timer.run().await;
+
+
         while !self.quit_signal.load(Ordering::SeqCst) {
-            let fork = self.ctx.state.fork.lock().await;
+            tokio::select! {
+                _e = event_recv.recv() => {
+                    event = _e
+                },
+                _tick = stat_timer.wait() => {
+                    tick = _tick
+                }
+            }
+
+            if event.is_none() && !tick {
+                break;
+            }
+
+            let mut fork = self.ctx.state.fork.lock().await;
+            let lack_pend = self.ctx.client_ack_pending.lock().await;
+            let byz_qc_pending = self.ctx.state.byz_qc_pending.lock().await;
             let mut ci_state = self.ci_state.lock().unwrap();
             let mut bci_state = self.bci_state.lock().unwrap();
-            let mut event_recv = self.event_chan.1.lock().unwrap();
-            self.execute_ops(&fork, &mut ci_state, &mut bci_state, &mut event_recv);
+            
+            if let Some(_e) = &event {
+                // Execute ops from event.
+                self.execute_ops(&mut fork, &mut ci_state, &mut bci_state, _e);
+            } else {
+                // Log stats
+        
+                info!("fork.last = {}, fork.last_qc = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, pending_qcs = {} num_crash_committed_txs = {}, num_byz_committed_txs = {}, fork.last_hash = {}, total_client_request = {}, view = {}, view_is_stable = {}, i_am_leader: {}",
+                    fork.last(), fork.last_qc(),
+                    self.ctx.state.commit_index.load(Ordering::SeqCst),
+                    self.ctx.state.byz_commit_index.load(Ordering::SeqCst),
+                    lack_pend.len(),
+                    byz_qc_pending.len(),
+                    self.ctx.state.num_committed_txs.load(Ordering::SeqCst),
+                    self.ctx.state.num_byz_committed_txs.load(Ordering::SeqCst),
+                    fork.last_hash().encode_hex::<String>(),
+                    self.ctx.total_client_requests.load(Ordering::SeqCst),
+                    self.ctx.state.view.load(Ordering::SeqCst),
+                    self.ctx.view_is_stable.load(Ordering::SeqCst),
+                    self.ctx.i_am_leader.load(Ordering::SeqCst)
+                );
+
+
+                #[cfg(feature = "storage")]
+                info!("Storage GC Hi watermark: {}", fork.gc_hiwm());
+
+                info!("Blocks forced to supermajority: {}", self.ctx.total_blocks_forced_supermajority.load(Ordering::SeqCst));
+                info!("Force signed blocks: {}", self.ctx.total_forced_signed_blocks.load(Ordering::SeqCst));
+
+                info!("Crash Committed Keys: {}; Byz Committed Keys: {}", ci_state.len(), bci_state.len());
+            }
+
+            // Reset for the next iteration
+            event = None;
+            tick = false;
         }
+
+        let _ = tokio::join!(stat_timer_handle);
     }
 
     fn signal_quit(&self) {

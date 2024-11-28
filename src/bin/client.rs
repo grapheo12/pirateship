@@ -80,7 +80,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
     let mut workload_generator: Box<dyn PerWorkerWorkloadGenerator> = match &config.workload_config.request_config {
         pft::config::RequestConfig::Blanks => Box::new(BlankWorkloadGenerator{}),
         pft::config::RequestConfig::KVReadWriteUniform(config) => Box::new(KVReadWriteUniformGenerator::new(config)),
-        pft::config::RequestConfig::KVReadWriteYCSB(config) => Box::new(KVReadWriteYCSBGenerator::new(config)),
+        pft::config::RequestConfig::KVReadWriteYCSB(_config) => Box::new(KVReadWriteYCSBGenerator::new(_config, idx, config.workload_config.num_clients)),
         pft::config::RequestConfig::MockSQL() => Box::new(MockSQLGenerator::new()),
     };
 

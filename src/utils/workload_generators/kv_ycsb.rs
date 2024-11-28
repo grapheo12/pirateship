@@ -52,10 +52,11 @@ pub struct KVReadWriteYCSBGenerator {
     
     last_request_type: TxOpType,
     load_phase_cnt: usize,
+    total_clients: usize,
 }
 
 impl KVReadWriteYCSBGenerator {
-    pub fn new(config: &KVReadWriteYCSB) -> KVReadWriteYCSBGenerator {
+    pub fn new(config: &KVReadWriteYCSB, client_idx: usize, total_clients: usize) -> KVReadWriteYCSBGenerator {
         #[cfg(not(feature = "reply_from_app"))]
         {
             if config.linearizable_reads {
@@ -101,7 +102,8 @@ impl KVReadWriteYCSBGenerator {
             key_selection_dist,
             val_gen_dist,
             last_request_type: TxOpType::Read,
-            load_phase_cnt: 0
+            load_phase_cnt: client_idx,
+            total_clients
         }
     
     }
@@ -143,7 +145,7 @@ impl KVReadWriteYCSBGenerator {
         // Always write on crash commit
 
         let key = self.get_key_str_from_num(self.transform_key_num(self.load_phase_cnt));
-        self.load_phase_cnt += 1;
+        self.load_phase_cnt += self.total_clients;
 
         let mut ops = Vec::new();
         for i in 0..self.config.num_fields {
@@ -288,7 +290,7 @@ impl PerWorkerWorkloadGenerator for KVReadWriteYCSBGenerator {
         }
     }
     
-    fn check_result(&self, result: &Option<ProtoTransactionResult>) -> bool {
+    fn check_result(&mut self, result: &Option<ProtoTransactionResult>) -> bool {
         if let TxOpType::Read = self.last_request_type {
             if result.is_none() || result.as_ref().unwrap().result.len() != self.config.num_fields {
                 return false;
@@ -303,9 +305,10 @@ impl PerWorkerWorkloadGenerator for KVReadWriteYCSBGenerator {
             return true;
         }
 
-        if self.config.load_phase && self.load_phase_cnt == self.config.num_keys {
+        if self.config.load_phase && self.load_phase_cnt >= self.config.num_keys {
             info!("End of Load phase");
-            exit(0);
+            // exit(0);
+            self.config.load_phase = false;
         }
 
         true

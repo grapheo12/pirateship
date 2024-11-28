@@ -105,7 +105,7 @@ impl PerWorkerWorkloadGenerator for KVReadWriteUniformGenerator {
         ret      
     }
     
-    fn check_result(&self, result: &Option<ProtoTransactionResult>) -> bool {
+    fn check_result(&mut self, result: &Option<ProtoTransactionResult>) -> bool {
         if let TxOpType::Read = self.last_request_type {
             if result.is_none() || result.as_ref().unwrap().result.len() == 0 {
                 return false;

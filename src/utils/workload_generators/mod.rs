@@ -2,7 +2,7 @@ use crate::proto::execution::{ProtoTransaction, ProtoTransactionResult};
 
 pub trait PerWorkerWorkloadGenerator: Send {
     fn next(&mut self) -> ProtoTransaction;
-    fn check_result(&self, result: &Option<ProtoTransactionResult>) -> bool;
+    fn check_result(&mut self, result: &Option<ProtoTransactionResult>) -> bool;
 }
 
 mod blanks;

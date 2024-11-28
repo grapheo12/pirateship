@@ -13,13 +13,13 @@
         "num_requests": 10000000,
         "request_config": {
             "KVReadWriteYCSB": {
-                "num_keys": 100000,
+                "num_keys": 300000,
                 "num_fields": 1,
                 "val_size": 100,
-                "read_ratio": 0.5,
+                "read_ratio": 0.0,
                 "linearizable_reads": false,
                 "byz_commit_ratio": 0.0,
-                "load_phase": false,
+                "load_phase": true,
                 "zipf_exponent": 0.99
             }
         }

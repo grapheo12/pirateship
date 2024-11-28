@@ -7,6 +7,11 @@ pirateship_logger:
 	CC=clang CXX=clang++ cargo build --release
 
 
+.PHONY: pirateship_kvs
+pirateship_kvs:
+	CC=clang CXX=clang++ cargo build --release --features pirateship,app_kvs,storage,fast_path,platforms --no-default-features
+
+
 .PHONY: pirateship_logger_basic
 pirateship_logger_basic:
 	CC=clang CXX=clang++ cargo build --release --features pirateship,app_logger --no-default-features

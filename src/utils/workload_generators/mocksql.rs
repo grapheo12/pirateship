@@ -44,7 +44,7 @@ impl PerWorkerWorkloadGenerator for MockSQLGenerator {
         }
     }
     
-    fn check_result(&self, _result: &Option<ProtoTransactionResult>) -> bool {
+    fn check_result(&mut self, _result: &Option<ProtoTransactionResult>) -> bool {
         true
     }
 }
