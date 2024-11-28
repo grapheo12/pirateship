@@ -343,6 +343,8 @@ impl Engine for PinnedKVStoreEngine {
                 info!("Force signed blocks: {}", self.ctx.total_forced_signed_blocks.load(Ordering::SeqCst));
 
                 info!("Crash Committed Keys: {}; Byz Committed Keys: {}", ci_state.len(), bci_state.len());
+
+                info!("num_reads = {}", self.num_reads.load(Ordering::SeqCst));
             }
 
             // Reset for the next iteration

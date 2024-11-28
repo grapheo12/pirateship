@@ -22,13 +22,14 @@ from pprint import pprint
 
 # Sample log: [INFO][pft::execution::engines::logger][2024-08-06T10:28:13.926997933+00:00] fork.last = 2172, fork.last_qc = 2169, commit_index = 2171, byz_commit_index = 2166, pending_acks = 200, pending_qcs = 1 num_crash_committed_txs = 100, num_byz_committed_txs = 100, fork.last_hash = b7da989badce213929ab457e5301b587593e0781e081ba7261d57cd7778e1b7b, total_client_request = 388706, view = 1, view_is_stable = true, i_am_leader: true
 node_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] fork\.last = ([0-9]+), fork\.last_qc = ([0-9]+), commit_index = ([0-9]+), byz_commit_index = ([0-9]+), pending_acks = ([0-9]+), pending_qcs = ([0-9]+) num_crash_committed_txs = ([0-9]+), num_byz_committed_txs = ([0-9]+), fork\.last_hash = (.+), total_client_request = ([0-9]+), view = ([0-9]+), view_is_stable = (.+), i_am_leader\: (.+)")
+node_rgx2 = re.compile(r"\[INFO\]\[.*\]\[(.*)\] num_reads = ([0-9]+)")
 
 # Sample log: [INFO][client][2024-08-06T10:28:12.352816849+00:00] Client Id: 264, Msg Id: 224, Block num: 1000, Tx num: 145, Latency: 4073 us, Current Leader: node1
 client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Client Id\: ([0-9]+), Msg Id\: ([0-9]+), Block num\: ([0-9]+), Tx num\: ([0-9]+), Latency\: ([.0-9]+) us, Current Leader\: (.+)")
 client_byz_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Client Id\: ([0-9]+), Block num\: ([0-9]+), Tx num\: ([0-9]+), Byz Latency\: ([.0-9]+) us")
 
 
-def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False):
+def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, read_points=[]):
     points = [
         (
             isoparse(a[0]),    # ISO format is used in run_remote
@@ -49,12 +50,21 @@ def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False):
         for a in points
     ]
 
+    read_points = [
+        (
+            isoparse(a[0]),
+            int(a[1])
+        )
+        for a in read_points
+    ]
+
     # Filter points, only keep if after ramp_up time and before ramp_down time
 
     start_time = points[0][0] + datetime.timedelta(seconds=ramp_up)
     end_time = points[-1][0] - datetime.timedelta(seconds=ramp_down)
 
     points = [p for p in points if p[0] >= start_time and p[0] <= end_time]
+    read_points = [p for p in read_points if p[0] >= start_time and p[0] <= end_time]
 
     total_runtime = (points[-1][0] - points[0][0]).total_seconds()
     if byz:
@@ -63,6 +73,14 @@ def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False):
     else:
         total_commit = points[-1][3] - points[0][3]
         total_tx = points[-1][7] - points[0][7]
+    
+    
+    if len(read_points) > 0:
+        total_reads = read_points[-1][1] - read_points[0][1]
+    else:
+        total_reads = 0
+    
+    total_tx += total_reads
 
     print(total_commit, total_tx, total_runtime)
 
@@ -126,14 +144,19 @@ def parse_log_dir(dir, repeats, num_clients, leader, ramp_up, ramp_down, byz=Fal
     
     for i in range(repeats):
         points = []
+        read_points = []
         with open(f"{dir}/{i}/{leader}.log", "r") as f:
             for line in f.readlines():
                 captures = node_rgx.findall(line)
                 # print(captures)
                 if len(captures) == 1:
                     points.append(captures[0])
+
+                captures = node_rgx2.findall(line)
+                if len(captures) == 1:
+                    read_points.append(captures[0])
         try:
-            process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz)
+            process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz, read_points)
         except:
             continue
 
