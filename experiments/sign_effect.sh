@@ -5,56 +5,56 @@
 
 set -o xtrace
 
-ALL_CLIENTS="-c 100"
+ALL_CLIENTS="-c 1200"
 
 
 start_time=$(date -Ins)
 # start_time='2024-08-07T10:39:54.859389+00:00'
 RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt /tmp/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i ../cluster_key.pem -r 1 -s 120 -up 40 -down 20 $ALL_CLIENTS"
 
-jq '.consensus_config.max_backlog_batch_size = 500 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 1 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 2000' scripts/local_template.json > /tmp/local_template.json
+jq '.consensus_config.max_backlog_batch_size = 1000 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 1 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 4000' scripts/local_template.json > /tmp/local_template.json
 
 # Run pirateship
-make
+make signed_raft_logger
 $RUN_CMD
 
-jq '.consensus_config.max_backlog_batch_size = 500 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 2 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 2000' scripts/local_template.json > /tmp/local_template.json
+jq '.consensus_config.max_backlog_batch_size = 1000 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 2 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 4000' scripts/local_template.json > /tmp/local_template.json
 
 # Run pirateship
-make
+make signed_raft_logger
 $RUN_CMD
 
-jq '.consensus_config.max_backlog_batch_size = 500 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 5 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 2000' scripts/local_template.json > /tmp/local_template.json
+jq '.consensus_config.max_backlog_batch_size = 1000 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 5 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 4000' scripts/local_template.json > /tmp/local_template.json
 
 # Run pirateship
-make
+make signed_raft_logger
 $RUN_CMD
 
-jq '.consensus_config.max_backlog_batch_size = 500 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 10 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 2000' scripts/local_template.json > /tmp/local_template.json
+jq '.consensus_config.max_backlog_batch_size = 1000 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 10 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 4000' scripts/local_template.json > /tmp/local_template.json
 
 # Run pirateship
-make
+make signed_raft_logger
 $RUN_CMD
 
-# jq '.consensus_config.max_backlog_batch_size = 500 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 10 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 2000' scripts/local_template.json > /tmp/local_template.json
+# jq '.consensus_config.max_backlog_batch_size = 1000 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 10 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 4000' scripts/local_template.json > /tmp/local_template.json
 
 # # Run pirateship
 # make signed_raft_logger
 # $RUN_CMD
 
-# jq '.consensus_config.max_backlog_batch_size = 500 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 20 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 2000' scripts/local_template.json > /tmp/local_template.json
+# jq '.consensus_config.max_backlog_batch_size = 1000 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 20 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 4000' scripts/local_template.json > /tmp/local_template.json
 
 # # Run pirateship
 # make signed_raft_logger
 # $RUN_CMD
 
-# jq '.consensus_config.max_backlog_batch_size = 500 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 50 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 2000' scripts/local_template.json > /tmp/local_template.json
+# jq '.consensus_config.max_backlog_batch_size = 1000 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 50 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 4000' scripts/local_template.json > /tmp/local_template.json
 
 # # Run pirateship
 # make signed_raft_logger
 # $RUN_CMD
 
-jq '.consensus_config.max_backlog_batch_size = 500 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 50 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 2000' scripts/local_template.json > /tmp/local_template.json
+jq '.consensus_config.max_backlog_batch_size = 1000 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 50 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 4000' scripts/local_template.json > /tmp/local_template.json
 
 # Run pirateship
 make lucky_raft_logger

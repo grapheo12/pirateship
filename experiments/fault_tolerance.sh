@@ -8,7 +8,7 @@ set -o xtrace
 ALL_CLIENTS="-c 500"
 
 
-jq '.consensus_config.max_backlog_batch_size = 500 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 50 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 2000' scripts/local_template.json > /tmp/local_template.json
+jq '.consensus_config.max_backlog_batch_size = 500 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 50 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 4000' scripts/local_template.json > /tmp/local_template.json
 make pirateship_logger_evil
 
 python3 scripts/run_remote_equivocation_test.py \
