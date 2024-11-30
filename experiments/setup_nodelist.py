@@ -8,7 +8,7 @@ from copy import deepcopy
 import shutil
 from os.path import exists
 
-NUM_REGIONS = 4
+NUM_REGIONS = 5
 NUM_RECONFIG_VMS = 8
 NUM_ORIGINAL_VMS = 4
 
@@ -68,20 +68,23 @@ c1_config = {
     "loc1": 1,
     "loc2": 1,
     "loc3": 1,
+    "loc4": 0
 }
 
 c2_config = {
     "loc0": 2,
     "loc1": 2,
-    "loc2": 1,
-    "loc3": 0,
+    "loc2": 2,
+    "loc3": 1,
+    "loc4": 0
 }
 
 c3_config = {
-    "loc0": 3,
-    "loc1": 0,
-    "loc2": 3,
-    "loc3": 0,
+    "loc0": 2,
+    "loc1": 2,
+    "loc2": 2,
+    "loc3": 2,
+    "loc4": 1
 }
 
 configs = {
