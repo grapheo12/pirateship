@@ -183,7 +183,7 @@ def kill_nodes(node_conns: Dict[str, Connection]):
     for node, conn in node_conns.items():
         run_all([
             f"pkill -c server_{node}",           # There better not be any other process that matches this.
-            f"sleep 1 && rm -rf /tmp/{node}_db"  # Give some time to cool off after pkill so that db can be cleared off better.
+            f"sleep 1 && rm -rf /home/pftadmin/pft/{node}_db"  # Give some time to cool off after pkill so that db can be cleared off better.
         ], conn)
 
 

@@ -20,9 +20,9 @@
     "quorum_diversity_k": 3,
     "max_backlog_batch_size": 1200,
     "signature_max_delay_blocks": 50,
-    "batch_max_delay_ms": 5,
+    "batch_max_delay_ms": 1,
     "signature_max_delay_ms": 500,
-    "vote_processing_workers": 8,
+    "vote_processing_workers": 2,
     "view_timeout_ms": 2000,
     "liveness_u": 1,
     "log_storage_config": {

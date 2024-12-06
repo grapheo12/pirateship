@@ -296,7 +296,7 @@ def gen_node_config(i, node, tmpl, caname, root_path):
     # This will help colocate multiple nodes onto the same machine.
     if "log_storage_config" in tmpl["consensus_config"]:
         if "RocksDB" in tmpl["consensus_config"]["log_storage_config"]:
-            tmpl["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"/tmp/{node}_db"
+            tmpl["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"/home/pftadmin/pft/{node}_db"
 
     with open(node + CONFIG_SUFFIX, "w") as f:
         json.dump(tmpl, f, indent=4)

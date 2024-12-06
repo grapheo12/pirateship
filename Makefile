@@ -12,7 +12,7 @@ pirateship_kvs:
 	CC=clang CXX=clang++ cargo build --release --features pirateship,app_kvs,storage,fast_path,platforms --no-default-features
 
 .PHONY: signed_raft_kvs
-pirateship_kvs:
+signed_raft_kvs:
 	CC=clang CXX=clang++ cargo build --release --features signed_raft,app_kvs,storage --no-default-features
 
 
