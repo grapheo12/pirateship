@@ -82,7 +82,7 @@ async fn run_main(cfg: Config) -> io::Result<()> {
     Ok(())
 }
 
-const NUM_THREADS: usize = 8;
+const NUM_THREADS: usize = 6;
 
 fn main() {
     log4rs::init_config(config::default_log4rs_config()).unwrap();

@@ -147,7 +147,7 @@ pub fn do_create_qcs(
     }
 
     // Fast path QCs can only be formed once, since it takes ALL votes to create one
-    // Once disseminated, fast path QCs fo byzantine commit.
+    // Once disseminated, fast path QCs do byzantine commit.
     // So for deduplication (in case a vote is sent twice), only need to compare with bci.
 
     let bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
@@ -166,7 +166,11 @@ pub fn do_create_qcs(
         };
 
         next_qc_list.insert((qc.n, qc.view), qc);
-        info!("Fast path qc for {}", n);
+        if *n % 1000 == 0 {
+            trace!("Fast path QC formed for index: {}", n);
+        } else {
+            debug!("Fast path QC formed for index: {}", n);
+        }
     }
 }
 
@@ -274,7 +278,7 @@ where Engine: crate::execution::Engine
                 }).count();
 
                 #[cfg(feature = "fast_path")]
-                if !ctx.view_is_stable.load(Ordering::SeqCst) {
+                if ctx.view_is_stable.load(Ordering::SeqCst) {
                     // Fast path can't be done if the view is not stable.
                     debug!("For fast path: {} {}", fullnode_sigs, get_all_nodes_num(&ctx));
                     if fullnode_sigs == get_all_nodes_num(&ctx) as usize {
@@ -322,6 +326,10 @@ where Engine: crate::execution::Engine
             &fast_path_qcs,
         );
     }
+
+
+    // New QCs may have been created so this is a great time to see if anything Byz committed
+    maybe_byzantine_commit(&ctx, &client, engine, &fork).await;
 
     let ci = ctx.state.commit_index.load(Ordering::SeqCst);
     let mut updated_ci = ci;
