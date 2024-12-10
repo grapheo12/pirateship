@@ -63,7 +63,7 @@ def plot_all_latency_cdfs(path, start, end, num_clients, ramp_up, ramp_down, out
             continue
         latencies, stat = parse_only_client_latencies(d, num_clients, ramp_up, ramp_down)
         latencies = [l / 1000.0 for l in latencies]
-        lat_p99 = quantiles(latencies, n=100)[97]
+        lat_p99 = quantiles(latencies, n=100)[90]
         lat_min = min(latencies)
 
         if lat_p99 > max_p99:
@@ -75,8 +75,9 @@ def plot_all_latency_cdfs(path, start, end, num_clients, ramp_up, ramp_down, out
         plt.plot(stat[0] / 1000.0, stat[1], label=legend[i])
 
     plt.xlim(min_min, max_p99)
+    # plt.xscale("log")
     plt.ylim(0, 1)
-    plt.legend()
+    plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.4), ncol=len(legend) //2)
 
     plt.xlabel("Latency (ms)")
     plt.ylabel("CDF")

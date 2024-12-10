@@ -22,7 +22,7 @@ start_time=$(date -Ins)
 
 python3 experiments/setup_nodelist.py c1 ..
 
-jq '.consensus_config.batch_max_delay_ms = 25 | .consensus_config.signature_max_delay_ms = 2500 | .consensus_config.max_backlog_batch_size = 1000 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 50 | .consensus_config.liveness_u = 1 | .consensus_config.view_timeout_ms = 8000' scripts/local_template.json > /tmp/local_template.json
+jq '.consensus_config.batch_max_delay_ms = 2 | .consensus_config.signature_max_delay_ms = 2500 | .consensus_config.max_backlog_batch_size = 1000 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 50 | .consensus_config.liveness_u = 1 | .consensus_config.view_timeout_ms = 8000' scripts/local_template.json > /tmp/local_template.json
 
 python3 scripts/run_remote_client_sweep.py \
     -nt /tmp/local_template.json \
@@ -34,7 +34,7 @@ python3 experiments/setup_nodelist.py restore ..
 
 python3 experiments/setup_nodelist.py c2 ..
 
-jq '.consensus_config.batch_max_delay_ms = 25 | .consensus_config.signature_max_delay_ms = 2500 | .consensus_config.max_backlog_batch_size = 1000 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 50 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 8000' scripts/local_template.json > /tmp/local_template.json
+jq '.consensus_config.batch_max_delay_ms = 2 | .consensus_config.signature_max_delay_ms = 2500 | .consensus_config.max_backlog_batch_size = 1000 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 50 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 8000' scripts/local_template.json > /tmp/local_template.json
 
 python3 scripts/run_remote_client_sweep.py \
     -nt /tmp/local_template.json \
@@ -47,7 +47,7 @@ python3 experiments/setup_nodelist.py restore ..
 
 python3 experiments/setup_nodelist.py c3 ..
 
-jq '.consensus_config.batch_max_delay_ms = 25 | .consensus_config.signature_max_delay_ms = 2500 | .consensus_config.max_backlog_batch_size = 1000 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 50 | .consensus_config.liveness_u = 3 | .consensus_config.view_timeout_ms = 8000' scripts/local_template.json > /tmp/local_template.json
+jq '.consensus_config.batch_max_delay_ms = 2 | .consensus_config.signature_max_delay_ms = 2500 | .consensus_config.max_backlog_batch_size = 1000 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 50 | .consensus_config.liveness_u = 3 | .consensus_config.view_timeout_ms = 8000' scripts/local_template.json > /tmp/local_template.json
 
 python3 scripts/run_remote_client_sweep.py \
     -nt /tmp/local_template.json \
