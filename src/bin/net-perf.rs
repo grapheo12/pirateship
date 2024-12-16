@@ -12,16 +12,18 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 /// Fetch json config file from command line path.
 /// Panic if not found or parsed properly.
-fn process_args() -> Config {
+const DEFAULT_PAYLOAD_SIZE: usize = 4096;
+
+fn process_args() -> (Config, usize) {
     macro_rules! usage_str {
         () => {
-            "\x1b[31;1mUsage: {} path/to/config.json\x1b[0m"
+            "\x1b[31;1mUsage: {} path/to/config.json [payload_size]\x1b[0m"
         };
     }
 
     let args: Vec<_> = env::args().collect();
 
-    if args.len() != 2 {
+    if args.len() != 2 && args.len() != 3 {
         panic!(usage_str!(), args[0]);
     }
 
@@ -32,7 +34,19 @@ fn process_args() -> Config {
 
     let cfg_contents = fs::read_to_string(cfg_path).expect("Invalid file path");
 
-    Config::deserialize(&cfg_contents)
+    let payload_size = if args.len() == 2 {
+        DEFAULT_PAYLOAD_SIZE
+    } else {
+        let res = usize::from_str_radix(&args[2], 10);
+        match res {
+            Ok(sz) => sz,
+            Err(_) => {
+                panic!(usage_str!(), args[0]);
+            },
+        }
+    };
+
+    (Config::deserialize(&cfg_contents), payload_size)
 }
 
 
@@ -81,6 +95,7 @@ pub fn profiler_rpc_handler<'a>(
     Ok(RespType::NoResp)
 }
 
+
 impl ProfilerNode
 {
     pub fn new(config: &Config) -> ProfilerNode {
@@ -97,7 +112,7 @@ impl ProfilerNode
         }
     }
 
-    pub fn run(node: Arc<Self>) -> JoinSet<()> {
+    pub fn run(node: Arc<Self>, payload_sz: usize) -> JoinSet<()> {
         // These are just increasing ref counts.
         // It is pointing to the same server instance.
         let mut js = JoinSet::new();
@@ -111,8 +126,8 @@ impl ProfilerNode
         });
 
         js.spawn(async move {
-            let payload = vec![2u8; 1024];
-            let msg = PinnedMessage::from(payload, 4096, pft::rpc::SenderType::Anon);
+            let payload = vec![2u8; payload_sz];
+            let msg = PinnedMessage::from(payload, payload_sz, pft::rpc::SenderType::Anon);
             let send_list = get_everyone_except_me(
                 &node2.ctx.0.config.net_config.name,
                 &node2.ctx.0.config.consensus_config.node_list);
@@ -127,7 +142,7 @@ impl ProfilerNode
                         &send_list,
                         &msg, &mut profile).await;
 
-                    node2.ctx.0.bytes_completed_bcasts.fetch_add(4096 * send_list.len(), Ordering::SeqCst);
+                    node2.ctx.0.bytes_completed_bcasts.fetch_add(payload_sz * send_list.len(), Ordering::SeqCst);
                 }
             }
 
@@ -155,9 +170,9 @@ impl ProfilerNode
 
 
 
-async fn run_main(cfg: Config) -> io::Result<()> {
+async fn run_main(cfg: Config, payload_sz: usize) -> io::Result<()> {
     let node = Arc::new(ProfilerNode::new(&cfg));
-    let mut handles = ProfilerNode::run(node);
+    let mut handles = ProfilerNode::run(node, payload_sz);
 
     match signal::ctrl_c().await {
         Ok(_) => {
@@ -180,7 +195,7 @@ const NUM_THREADS: usize = 8;
 fn main() {
     log4rs::init_config(config::default_log4rs_config()).unwrap();
 
-    let cfg = process_args();
+    let (cfg, payload_sz) = process_args();
 
     let core_ids = 
         Arc::new(Mutex::new(Box::pin(core_affinity::get_core_ids().unwrap())));
@@ -218,5 +233,5 @@ fn main() {
         .build()
         .unwrap();
 
-    let _ = runtime.block_on(run_main(cfg));
+    let _ = runtime.block_on(run_main(cfg, payload_sz));
 }
