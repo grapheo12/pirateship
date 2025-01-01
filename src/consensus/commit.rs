@@ -71,6 +71,9 @@ pub fn maybe_rollback<Engine>(
     }
 }
 
+/// Update Byzantine Commit Index to updated_bci.
+/// This function blindly Byz commits, not responsible for checking.
+/// Signal the execution engine.
 pub async fn do_byzantine_commit<'a, Engine>(
     ctx: &PinnedServerContext,
     client: &PinnedClient,
@@ -97,9 +100,12 @@ pub async fn do_byzantine_commit<'a, Engine>(
     ctx.state
         .byz_commit_index
         .store(updated_bci, Ordering::SeqCst);
+
+    // Crash commit actions must precede byz commit actions.
     do_commit(ctx, client, engine, fork, updated_bci).await;
 
     engine.signal_byzantine_commit(updated_bci);
+
     for bn in (old_bci + 1)..(updated_bci + 1) {
         trace!("do_byz_commit: Getting {} gc_hiwm {}", bn, fork.gc_hiwm());
         let entry = fork.get(bn).unwrap();
@@ -118,6 +124,7 @@ pub async fn do_byzantine_commit<'a, Engine>(
             let _ = ctx.reconf_channel.0.send(_tx.clone());
         }
 
+        // Stats
         let num_txs = entry.block.tx.iter().map(|e| {
             let crash_committed = if e.on_crash_commit.is_some() {
                 e.on_crash_commit.as_ref().unwrap().ops.len()
@@ -147,6 +154,7 @@ pub async fn do_byzantine_commit<'a, Engine>(
             let gc_hiwm = fork.gc_hiwm();
             let replied_bci = ctx.client_replied_bci.load(Ordering::SeqCst);
 
+            // Make sure every GCed tx is replied.
             if replied_bci < gc_hiwm {
                 ctx.client_replied_bci.store(gc_hiwm, Ordering::SeqCst);
             }
@@ -220,6 +228,8 @@ where
 
     for qc in qcs {
         let num_votes = qc.sig.len() as u64;
+
+        // Find a QC with votes from all nodes.
         if get_all_nodes_num(ctx) > num_votes {
             continue;
         }
@@ -263,6 +273,9 @@ where
     // due pipelined proposals.
 
     let last_qc_view = fork.last_qc_view();
+
+    // Note: fork.last_qc() is the last block that has a QC on it (in some later block)
+    // So for byz commit, need to find SOME block which is an ancestor of fork.last_qc() that has a QC on it.
     let mut check_qc = fork.last_qc();
 
 
@@ -283,6 +296,8 @@ where
     new_bci > old_bci
 }
 
+/// Update Crash Commit Index to n. Signal the execution.
+/// This function doesn't check.
 pub async fn do_commit<'a, Engine>(
     ctx: &PinnedServerContext,
     client: &PinnedClient,
