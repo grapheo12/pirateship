@@ -23,15 +23,29 @@ use crate::{
     }
 };
 
-
+/// Leader of new view receives View Change messages from (n - u) followers.
+/// The fork in these View Change messages maybe divergent from the leaders.
+/// This function backfills from the followers until the fork included in the View Change has a common prefix with the leader.
+/// For example:
+/// Leader's fork: 1 <- 2 <- 3 <- 4 <- 5 <- 6 <- 7 <- 8 <- 9 <- 10
+///                                \
+/// VC fork:                        \          <- 7' <- 8' <- 9'
+///                                  \
+/// After backfill, VC fork:          \- 5' <- 6' <- 7' <- 8' <- 9'
+/// Returns the modified View Change message.
 pub async fn maybe_backfill_fork_till_prefix_match(ctx: PinnedServerContext, client: PinnedClient, vc: &ProtoViewChange, sender: &String) -> Option<ProtoViewChange> {
+    // If vc_fork extends my fork, then the highest matching prefix will be my fork.last() or something extending from it.
+    // Backfill seq nums between fork.last() and start of vc_fork.
     let mut vc_fork = vc.fork.clone().unwrap();
     {
         let fork = ctx.state.fork.lock().await;
         vc_fork = maybe_backfill_fork_till_last_match(&ctx, &client, &vc_fork, fork.last(), sender).await;
     }
+
+    // Guarantees that vc_fork.blocks[0].n <= fork.last().
     
     while vc_fork.blocks[0].n > 0 {
+        // Check if vc_fork's parent is in my fork.
         let my_parent_hash = {
             let fork = ctx.state.fork.lock().await;
             match fork.hash_at_n(vc_fork.blocks[0].n - 1) {
@@ -46,6 +60,7 @@ pub async fn maybe_backfill_fork_till_prefix_match(ctx: PinnedServerContext, cli
             break;
         }
 
+        // If not, backfill 1000 more blocks and do this again.
         let start = if vc_fork.blocks[0].n >= 1000 {
             vc_fork.blocks[0].n - 1000
         }else {
@@ -53,9 +68,8 @@ pub async fn maybe_backfill_fork_till_prefix_match(ctx: PinnedServerContext, cli
         };
         
         vc_fork = maybe_backfill_fork(&ctx, &client, &vc_fork, sender,
-            start,   // Fetch 10 blocks at a time. A better approach is to bin search first.
+            start,   // Fetch 1000 blocks at a time. A better approach is to bin search first.
             vc_fork.blocks[0].n - 1).await;
-        
     }
 
     Some(ProtoViewChange {
@@ -69,6 +83,7 @@ pub async fn maybe_backfill_fork_till_prefix_match(ctx: PinnedServerContext, cli
 }
 
 
+/// Server side of backfilling. Clients will be blocking on this to receive backfill responses.
 pub async fn do_process_backfill_request(ctx: PinnedServerContext, ack_tx: &mut UnboundedSender<(PinnedMessage, LatencyProfile)>, bfr: &ProtoBackFillRequest, _sender: &String) {
     let block_start = bfr.block_start;
     let block_end = bfr.block_end;
@@ -87,6 +102,8 @@ pub async fn do_process_backfill_request(ctx: PinnedServerContext, ack_tx: &mut 
             fork  
         }
     };
+
+    // Fetch all blocks from block_start to block_end.
     let mut resp_fork = fork.serialize_range(block_start, block_end);
 
     #[cfg(feature = "evil")]
@@ -127,6 +144,8 @@ pub async fn do_process_backfill_request(ctx: PinnedServerContext, ack_tx: &mut 
 
 }
 
+/// Fills up the gap between fork_last and the first block in the given fork.
+/// If fork_last is higher, no change.
 pub async fn maybe_backfill_fork_till_last_match<'a>(ctx: &PinnedServerContext, client: &PinnedClient, f: &ProtoFork, fork_last: u64, sender: &String) -> ProtoFork {
     let start = fork_last + 1;
     let end = f.blocks[0].n - 1;
@@ -139,16 +158,11 @@ pub async fn maybe_backfill_fork_till_last_match<'a>(ctx: &PinnedServerContext, 
     
 }
 
-
+/// Fills blocks from block_start to block_end and appends them to f.
 pub async fn maybe_backfill_fork<'a>(_ctx: &PinnedServerContext, client: &PinnedClient, f: &ProtoFork, sender: &String, block_start: u64, block_end: u64) -> ProtoFork {
-    // Currently, just backfill if the current log is lagging behind.
     if f.blocks.len() == 0 {
         return f.clone();
     }
-
-    // if f.blocks[0].n <= fork.last() + 1{
-    //     return f.clone();
-    // }
 
     
     let backfill_req = ProtoBackFillRequest {
@@ -164,6 +178,9 @@ pub async fn maybe_backfill_fork<'a>(_ctx: &PinnedServerContext, client: &Pinned
     let backfill_resp = if let Ok(_) = rpc_msg_body.encode(&mut buf) {
         let sz = buf.len();
         let request = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
+
+        // Current task blocks until a reply is received.
+        // WARNING: This is vulnerable to a DoS attack.
         let resp = PinnedClient::send_and_await_reply(client, sender, request.as_ref()).await;
         if let Err(e) = resp {
             warn!("Error backfilling: {}", e);
