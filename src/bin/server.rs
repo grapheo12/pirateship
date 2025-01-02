@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 use log::{debug, error, info, warn};
-use pft::{config::{self, Config}, consensus, execution::engines::{kvs::PinnedKVStoreEngine, logger::PinnedLoggerEngine, sql::PinnedSQLEngine}};
+use pft::{config::{self, Config}, consensus_legacy, execution_legacy::engines::{kvs::PinnedKVStoreEngine, logger::PinnedLoggerEngine, sql::PinnedSQLEngine}};
 use tokio::{runtime, signal};
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
 use std::io::Write;
@@ -56,15 +56,15 @@ fn get_feature_set() -> (&'static str, &'static str) {
 
 async fn run_main(cfg: Config) -> io::Result<()> {
     #[cfg(feature = "app_logger")]
-    let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
+    let node = Arc::new(consensus_legacy::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
     
     #[cfg(feature = "app_kvs")]
-    let node = Arc::new(consensus::ConsensusNode::<PinnedKVStoreEngine>::new(&cfg));
+    let node = Arc::new(consensus_legacy::ConsensusNode::<PinnedKVStoreEngine>::new(&cfg));
     
     #[cfg(feature = "app_sql")]
-    let node = Arc::new(consensus::ConsensusNode::<PinnedSQLEngine>::new(&cfg));
+    let node = Arc::new(consensus_legacy::ConsensusNode::<PinnedSQLEngine>::new(&cfg));
     
-    let mut handles = consensus::ConsensusNode::run(node);
+    let mut handles = consensus_legacy::ConsensusNode::run(node);
 
     match signal::ctrl_c().await {
         Ok(_) => {

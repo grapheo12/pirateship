@@ -4,7 +4,7 @@
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use log::{debug, error, info, trace};
 use pft::{
-    config::{default_log4rs_config, ClientConfig}, consensus::utils::get_f_plus_one_send_list, crypto::{cmp_hash, KeyStore}, proto::{
+    config::{default_log4rs_config, ClientConfig}, consensus_legacy::utils::get_f_plus_one_send_list, crypto::{cmp_hash, KeyStore}, proto::{
         client::{self, ProtoByzPollRequest, ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload
     }, rpc::{
         client::{Client, PinnedClient},

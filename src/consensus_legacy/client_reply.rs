@@ -8,12 +8,12 @@ use prost::Message;
 use tokio::{fs::read, sync::MutexGuard};
 
 use crate::{
-    config::NodeInfo, consensus::handler::{ForwardedMessageWithAckChan, PinnedServerContext}, crypto::{hash, DIGEST_LENGTH}, proto::{client::{
+    config::NodeInfo, consensus_legacy::handler::{ForwardedMessageWithAckChan, PinnedServerContext}, crypto::{hash, DIGEST_LENGTH}, proto::{client::{
             ProtoByzResponse, ProtoClientReply, ProtoCurrentLeader, ProtoTransactionReceipt, ProtoTryAgain
         }, execution::ProtoTransactionResult}, rpc::PinnedMessage
 };
 
-use crate::consensus::utils::*;
+use crate::consensus_legacy::utils::*;
 
 use super::log::Log;
 
@@ -69,7 +69,7 @@ pub async fn do_respond_to_read_requests<Engine>(
     engine: &Engine,
     reqs: &mut Vec<ForwardedMessageWithAckChan>
 ) where 
-    Engine: crate::execution::Engine + Clone + Send + Sync + 'static
+    Engine: crate::execution_legacy::Engine + Clone + Send + Sync + 'static
 {
     reqs.retain(|req| {
         match &req.0 {

@@ -334,7 +334,7 @@ pub async fn process_node_request<Engine>(
     old_super_majority: u64,
     ms: &mut ForwardedMessageWithAckChan,
 ) -> Result<(), Error>
-where Engine: crate::execution::Engine
+where Engine: crate::execution_legacy::Engine
 {
     let (msg, sender, ack_tx, profile) = ms;
     let _sender = sender.clone();
@@ -438,7 +438,7 @@ pub async fn handle_client_messages<Engine>(
     engine: Engine
 ) -> Result<(), Error> 
 where 
-    Engine: crate::execution::Engine + Clone + Send + Sync + 'static
+    Engine: crate::execution_legacy::Engine + Clone + Send + Sync + 'static
 {
     let mut client_rx = ctx.0.client_queue.1.lock().await;
     let mut curr_client_req = Vec::new();
@@ -613,7 +613,7 @@ pub async fn handle_node_messages<Engine>(
     client: PinnedClient,
     engine: Engine
 ) -> Result<(), Error>
-    where Engine: crate::execution::Engine + Clone + Send + Sync + 'static
+    where Engine: crate::execution_legacy::Engine + Clone + Send + Sync + 'static
 {
     let view_timer_handle = ctx.view_timer.run().await;
 

@@ -7,7 +7,7 @@ use rand_chacha::ChaCha20Rng;
 use std::sync::atomic::Ordering;
 
 use crate::{
-    config::ClientConfig, consensus::{
+    config::ClientConfig, consensus_legacy::{
         handler::PinnedServerContext,
         leader_rotation::get_current_leader,
     }, crypto::hash, proto::{

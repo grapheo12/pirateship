@@ -12,7 +12,7 @@ use std::{
 use tokio::sync::MutexGuard;
 
 use crate::{
-    consensus::{
+    consensus_legacy::{
         handler::{LifecycleStage, PinnedServerContext},
         log::{Log, LogEntry}, reconfiguration::fast_forward_config_from_vc,
     }, crypto::{cmp_hash, hash, KeyStore},
@@ -30,10 +30,10 @@ use crate::{
     }, utils::AgnosticRef
 };
 
-use crate::consensus::backfill::*;
-use crate::consensus::commit::*;
-use crate::consensus::steady_state::*;
-use crate::consensus::utils::*;
+use crate::consensus_legacy::backfill::*;
+use crate::consensus_legacy::commit::*;
+use crate::consensus_legacy::steady_state::*;
+use crate::consensus_legacy::utils::*;
 
 #[derive(Clone, Debug)]
 struct ForkStat {
@@ -396,7 +396,7 @@ pub async fn do_init_view_change<Engine>(
     super_majority: u64,
     old_super_majority: u64,
 ) -> Result<(), Error>
-where Engine: crate::execution::Engine
+where Engine: crate::execution_legacy::Engine
 {
     // Stop accepting new client requests, immediately.
     ctx.view_is_stable.store(false, Ordering::SeqCst);
@@ -503,7 +503,7 @@ pub async fn do_process_view_change<Engine>(
     sender: &String,
     super_majority: u64,
     old_super_majority: u64,
-) where Engine: crate::execution::Engine
+) where Engine: crate::execution_legacy::Engine
 {
     let vc = if vc.config_num < ctx.state.config_num.load(Ordering::SeqCst) {
         warn!("VC from older config({}) [My config = {}]. Rejected.", vc.config_num, ctx.state.config_num.load(Ordering::SeqCst));
@@ -703,7 +703,7 @@ pub async fn do_init_new_leader<Engine>(
     fork_set: HashMap<String, ProtoViewChange>,
     super_majority: u64,
     old_super_majority: u64,
-) where Engine: crate::execution::Engine
+) where Engine: crate::execution_legacy::Engine
 {
     let _cfg = ctx.config.get();
     let _keys = ctx.keys.get();

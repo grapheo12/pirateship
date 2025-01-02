@@ -9,7 +9,7 @@ use log::{error, info, warn};
 use prost::Message;
 use tokio::{sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, task::yield_now};
 
-use crate::{config::NodeInfo, consensus::{handler::PinnedServerContext, log::Log}, crypto::hash, execution::Engine, proto::{client::{ProtoClientReply, ProtoTransactionReceipt, ProtoTryAgain}, execution::{ProtoTransactionOpResult, ProtoTransactionResult}}, rpc::PinnedMessage};
+use crate::{config::NodeInfo, consensus_legacy::{handler::PinnedServerContext, log::Log}, crypto::hash, execution_legacy::Engine, proto::{client::{ProtoClientReply, ProtoTransactionReceipt, ProtoTryAgain}, execution::{ProtoTransactionOpResult, ProtoTransactionResult}}, rpc::PinnedMessage};
 
 enum Event {
     CiUpd(u64),

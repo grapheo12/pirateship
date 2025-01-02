@@ -7,7 +7,7 @@ use hex::ToHex;
 use log::info;
 use tokio::{sync::{mpsc::{self, UnboundedReceiver, UnboundedSender}, Mutex}, time::sleep};
 
-use crate::{consensus::handler::PinnedServerContext, execution::Engine, proto::execution::{ProtoTransactionPhase, ProtoTransactionResult}};
+use crate::{consensus_legacy::handler::PinnedServerContext, execution_legacy::Engine, proto::execution::{ProtoTransactionPhase, ProtoTransactionResult}};
 
 pub struct LoggerEngine {
     pub ctx: PinnedServerContext,

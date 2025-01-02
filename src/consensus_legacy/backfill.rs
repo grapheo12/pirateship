@@ -8,7 +8,7 @@ use prost::Message;
 use tokio::sync::{mpsc::UnboundedSender, MutexGuard};
 
 use crate::{
-    consensus::{
+    consensus_legacy::{
         handler::PinnedServerContext,
         log::Log,
     }, crypto::cmp_hash, proto::{

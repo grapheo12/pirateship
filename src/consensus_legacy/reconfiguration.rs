@@ -10,7 +10,7 @@ use nix::sys::signal;
 use nix::sys::signal::Signal::SIGINT;
 use nix::unistd::Pid;
 
-use crate::{config::{Config, NodeNetInfo}, consensus::utils::get_everyone_except_me, crypto::KeyStore, proto::{consensus::{ProtoAppendEntries, ProtoViewChange}, execution::{ProtoTransaction, ProtoTransactionOp}}, rpc::client::PinnedClient};
+use crate::{config::{Config, NodeNetInfo}, consensus_legacy::utils::get_everyone_except_me, crypto::KeyStore, proto::{consensus::{ProtoAppendEntries, ProtoViewChange}, execution::{ProtoTransaction, ProtoTransactionOp}}, rpc::client::PinnedClient};
 
 use super::{backfill::maybe_backfill_fork_till_last_match, commit::do_byzantine_commit, handler::{LifecycleStage, PinnedServerContext}, view_change::do_reply_all_with_tentative_receipt};
 
@@ -474,7 +474,7 @@ pub async fn fast_forward_config<Engine>(
     ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine,
     ae: &ProtoAppendEntries, sender: &String
 ) -> ProtoAppendEntries
-where Engine: crate::execution::Engine
+where Engine: crate::execution_legacy::Engine
 {
     if ctx.state.config_num.load(Ordering::SeqCst) >= ae.config_num {
         return ae.clone();
@@ -582,7 +582,7 @@ pub async fn fast_forward_config_from_vc<Engine>(
     ctx: &PinnedServerContext, client: &PinnedClient, engine: &Engine,
     vc: &ProtoViewChange, sender: &String
 ) -> ProtoViewChange
-where Engine: crate::execution::Engine
+where Engine: crate::execution_legacy::Engine
 {
     if ctx.state.config_num.load(Ordering::SeqCst) >= vc.config_num {
         return vc.clone();

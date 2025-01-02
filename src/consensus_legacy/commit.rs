@@ -10,7 +10,7 @@ use tokio::sync::MutexGuard;
 
 use crate::{
     config::NodeInfo,
-    consensus::{
+    consensus_legacy::{
         client_reply::{bulk_register_byz_response, do_reply_transaction_receipt}, handler::PinnedServerContext, log::Log,
         reconfiguration::maybe_execute_reconfiguration_transaction,
     },
@@ -36,7 +36,7 @@ pub fn maybe_rollback<Engine>(
     overwriting_fork: &ProtoFork,
     _fork: &MutexGuard<Log>,
 ) where
-    Engine: crate::execution::Engine,
+    Engine: crate::execution_legacy::Engine,
 {
     if overwriting_fork.blocks.len() == 0 {
         return;
@@ -81,7 +81,7 @@ pub async fn do_byzantine_commit<'a, Engine>(
     fork: &'a MutexGuard<'a, Log>,
     updated_bci: u64,
 ) where
-    Engine: crate::execution::Engine,
+    Engine: crate::execution_legacy::Engine,
 {
     let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
     trace!(
@@ -176,7 +176,7 @@ async fn maybe_byzantine_commit_with_n_and_view<'a, Engine>(
     view: u64,
 ) -> bool
 where
-    Engine: crate::execution::Engine,
+    Engine: crate::execution_legacy::Engine,
 {
     // 2-chain commit rule.
 
@@ -218,7 +218,7 @@ pub async fn maybe_byzantine_commit_by_fast_path<'a, Engine>(
     fork: &'a MutexGuard<'a, Log>
 )
 where
-    Engine: crate::execution::Engine,
+    Engine: crate::execution_legacy::Engine,
 {
     let last_block_with_qc = fork.last_block_with_qc();
     if last_block_with_qc == 0 {
@@ -260,7 +260,7 @@ pub async fn maybe_byzantine_commit<'a, Engine>(
     fork: &'a MutexGuard<'a, Log>,
 ) -> bool
 where
-    Engine: crate::execution::Engine,
+    Engine: crate::execution_legacy::Engine,
 {
 
     let old_bci = ctx.state.byz_commit_index.load(Ordering::SeqCst);
@@ -305,7 +305,7 @@ pub async fn do_commit<'a, Engine>(
     fork: &'a MutexGuard<'a, Log>,
     n: u64,
 ) where
-    Engine: crate::execution::Engine,
+    Engine: crate::execution_legacy::Engine,
 {
     let ci = ctx.state.commit_index.load(Ordering::SeqCst);
     if fork.last() < n {

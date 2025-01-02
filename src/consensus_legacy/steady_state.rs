@@ -11,7 +11,7 @@ use std::{
 use tokio::sync::MutexGuard;
 
 use crate::{
-    consensus::{
+    consensus_legacy::{
         backfill::maybe_backfill_fork_till_last_match, handler::{ForwardedMessageWithAckChan, PinnedServerContext}, log::{Log, LogEntry}, reconfiguration::decide_my_lifecycle_stage
     }, crypto::{cmp_hash, hash, DIGEST_LENGTH}, proto::{
         consensus::{
@@ -24,9 +24,9 @@ use crate::{
     }
 };
 
-use crate::consensus::commit::*;
-use crate::consensus::view_change::*;
-use crate::consensus::utils::*;
+use crate::consensus_legacy::commit::*;
+use crate::consensus_legacy::view_change::*;
+use crate::consensus_legacy::utils::*;
 
 use super::reconfiguration::fast_forward_config;
 
@@ -182,7 +182,7 @@ pub async fn do_process_vote<Engine>(
     super_majority: u64,
     old_super_majority: u64
 ) -> Result<(), Error>
-where Engine: crate::execution::Engine
+where Engine: crate::execution_legacy::Engine
 {
     // let mut fork = ctx.state.fork.lock().await;
     let _cfg = ctx.config.get();
@@ -403,6 +403,12 @@ where Engine: crate::execution::Engine
 }
 
 
+/// Algorithm for pushing to fork:
+/// 1. Reject if from lower config. Fast forward to newer config if possible.
+/// 2. Reject if from lower view.
+/// 3. If from higher views, verify the sequence of view changes then overwrite fork if necessary.
+/// 4. Only append blocks from the current views (do not overwrite).
+/// 5. If all goes well respond with a vote.
 pub async fn do_push_append_entries_to_fork<Engine>(
     ctx: PinnedServerContext, engine: &Engine,
     client: PinnedClient,
@@ -414,7 +420,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
     u64,      /* updated_last_n */
     Vec<u64>, /* Sequence numbers */
     bool      /* Should update ci */
-) where Engine: crate::execution::Engine
+) where Engine: crate::execution_legacy::Engine
 {
     let ae = if ae.config_num < ctx.state.config_num.load(Ordering::SeqCst) {
         trace!("Message from older config! Rejected; Sent by: {} Is New leader? {} Msg config: {} Current config {}",
@@ -454,15 +460,15 @@ pub async fn do_push_append_entries_to_fork<Engine>(
 
 
     if ae.view < ctx.state.view.load(Ordering::SeqCst) {
-        if false && ctx.last_stable_view.load(Ordering::SeqCst) <= ae.view && ae.view_is_stable {
-            info!("I timed out due to network partition; Now going back to view {} from {}",
-                ctx.state.view.load(Ordering::SeqCst), ae.view);
-            ctx.state.view.store(ae.view, Ordering::SeqCst);
-        } else {
-            trace!("Message from older view! Rejected; Sent by: {} Is New leader? {} Msg view: {} Current View {}",
-                sender, !ae.fork.as_ref().unwrap().blocks[0].view_is_stable, ae.view, ctx.state.view.load(Ordering::SeqCst));
-            return (last_n, last_n, seq_nums, false);
-        }
+        // if false && ctx.last_stable_view.load(Ordering::SeqCst) <= ae.view && ae.view_is_stable {
+        //     info!("I timed out due to network partition; Now going back to view {} from {}",
+        //         ctx.state.view.load(Ordering::SeqCst), ae.view);
+        //     ctx.state.view.store(ae.view, Ordering::SeqCst);
+        // } else {
+        trace!("Message from older view! Rejected; Sent by: {} Is New leader? {} Msg view: {} Current View {}",
+            sender, !ae.fork.as_ref().unwrap().blocks[0].view_is_stable, ae.view, ctx.state.view.load(Ordering::SeqCst));
+        return (last_n, last_n, seq_nums, false);
+        // }
     }
     if ae.view > ctx.state.view.load(Ordering::SeqCst) {
         ctx.state.view.store(ae.view, Ordering::SeqCst);
@@ -503,6 +509,9 @@ pub async fn do_push_append_entries_to_fork<Engine>(
             maybe_backfill_fork_till_last_match(&ctx, &client, f, fork.last(), sender).await
         };
 
+        // Either return Error if the view change sequence couldn't be verified.
+        // Or, split the supplied fork into a part that needs to be overwritten and the suffix that needs to be appended.
+        // If the view didn't change, the overwritten part will be empty.
         let res = {
             let fork = ctx.state.fork.lock().await;
             maybe_verify_view_change_sequence(&ctx, &f, super_majority, &fork).await
@@ -525,7 +534,10 @@ pub async fn do_push_append_entries_to_fork<Engine>(
             let overwrite_blocks = fork.trim_matching_prefix(overwrite_blocks);
             if overwrite_blocks.blocks.len() > 0 {
                 trace!("Trimmed fork start: {}", overwrite_blocks.blocks[0].n);
+                // Rollback first.
                 maybe_rollback(&ctx, engine, &overwrite_blocks, &fork);
+
+                // Then overwrite fork.
                 let overwrite_res = fork.overwrite(&overwrite_blocks);
                 match overwrite_res {
                     Ok(n) => {
@@ -540,6 +552,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
         }
         
         let mut fork = ctx.state.fork.lock().await;
+        // Append part
         for b in view_lock_blocks.blocks {
             trace!("Inserting block {} with {} txs", b.n, b.tx.len());
             let entry = LogEntry::new(b.clone());
@@ -636,7 +649,7 @@ pub async fn create_and_push_block<Engine>(
     reqs: &mut Vec<ForwardedMessageWithAckChan>,
     should_sign: bool,
 ) -> Result<(ProtoAppendEntries, LatencyProfile), Error>
-where Engine: crate::execution::Engine
+where Engine: crate::execution_legacy::Engine
 {
     let _cfg = ctx.config.get();
     let _keys = ctx.keys.get();
@@ -657,7 +670,7 @@ where Engine: crate::execution::Engine
     let block_n = fork.last() + 1;
     let mut profile = LatencyProfile::new();
 
-    {
+    { // Store the channels for client requests for replies after commit.
         let mut lack_pend = ctx.client_ack_pending.lock().await;
         for (ms, sender, chan, profile) in reqs {
             profile.register("Client channel recv");
@@ -703,6 +716,8 @@ where Engine: crate::execution::Engine
     let entry = LogEntry::new(block);
     let __qc_trace: Vec<(u64, u64)> = entry.block.qc.iter().map(|x| (x.n, x.view)).collect();
 
+    // Push block to fork (with or without signature)
+    // This prepares the block to be broadcast.
     let res = match should_sign {
         true => fork.push_and_sign(entry, &_keys),
         false => fork.push(entry),
@@ -902,7 +917,7 @@ pub async fn do_append_entries<Engine>(
     super_majority: u64,
     old_super_majority: u64,
 ) -> Result<(), Error>
-where Engine: crate::execution::Engine
+where Engine: crate::execution_legacy::Engine
 {
     // Create the block, holding a lock on the fork state.
     let _cfg = ctx.config.get();

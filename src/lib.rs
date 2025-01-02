@@ -8,3 +8,6 @@ pub mod crypto;
 pub mod rpc;
 pub mod execution;
 pub mod proto;
+
+pub mod consensus_legacy;
+pub mod execution_legacy;
