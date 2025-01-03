@@ -1,8 +1,10 @@
 use std::{cmp::Reverse, collections::BinaryHeap, io::{Error, ErrorKind}};
 
-use crate::proto::consensus::ProtoBlock;
+use tokio::sync::mpsc::Sender;
 
-use super::entry::LogEntry;
+use crate::{crypto::hash, proto::consensus::ProtoBlock, utils::AgnosticRef};
+
+use super::{entry::LogEntry, LogPartitionRequest};
 
 #[derive(Clone, Debug)]
 pub struct LogPartitionConfig {
@@ -58,7 +60,19 @@ impl LogPartition {
         }
     }
 
-    pub fn push(&mut self, block: ProtoBlock) -> Result<u64, Error> {
+    fn would_be_out_of_order(&self, n: u64) -> bool {
+        let last_n = self.last();
+        if last_n == 0 {
+            // No entries, so the first n, should be partition_id + 1
+            n != (self.config.partition_id + 1)
+        } else {
+            // Next index mys
+            n != (last_n + self.config.partition_total)
+        }
+        
+    }
+
+    pub fn push_unchecked(&mut self, block: ProtoBlock) -> Result<u64, Error> {
         if block.n % self.config.partition_total != self.config.partition_id + 1 {
             return Err(Error::new(ErrorKind::InvalidData, "Wrong partition"))
         }
@@ -69,7 +83,7 @@ impl LogPartition {
                 return Err(Error::new(ErrorKind::InvalidData, "block.n <= last_n"))
             }
 
-            if block.n != last_n + self.config.partition_total {
+            if self.would_be_out_of_order(block.n) {
                 let oo_entry = OutOfOrderEntry::new(block);
                 self.out_of_order_entries.push(oo_entry);
                 return Err(Error::new(ErrorKind::Other, "Out of order"))
@@ -105,11 +119,66 @@ impl LogPartition {
         Ok(block_n)
     }
 
+    pub async fn push(&mut self, mut block: ProtoBlock, req_chan: &Vec<Sender<LogPartitionRequest>>) -> Result<u64, Error> {
+        if self.would_be_out_of_order(block.n) {
+            return self.push_unchecked(block)
+        }
+
+
+    }
+
     pub fn last_n(&self) -> Option<u64> {
         if self.entries.len() == 0 {
             return None
         }
 
         Some(self.entries.last().unwrap().block.n)
+    }
+
+    pub fn last(&self) -> u64 {
+        self.last_n().unwrap_or(0)
+    }
+
+    pub fn get(&self, n: u64) -> Result<AgnosticRef<LogEntry>, Error> {
+        if n > self.last() || n == 0 {
+            return Err(Error::new(ErrorKind::InvalidInput, format!("Out of bounds {}, last() = {}", n, self.last())));
+        }
+
+        // #[cfg(feature = "storage")]
+        // if n <= self.gc_hiwm {
+        //     let res = self.get_gc_block(n);
+        //     match res {
+        //         Ok(entry) => {
+        //             return Ok(AgnosticRef::from(entry))
+        //         },
+        //         Err(e) => {
+        //             return Err(e)
+        //         },
+        //     }
+        // }
+
+        // #[cfg(feature = "storage")]
+        // return Ok(AgnosticRef::from(
+        //     self.entries.get((n - self.gc_hiwm - 1) as usize).unwrap()
+        // ));
+
+
+        // #[cfg(not(feature = "storage"))]
+        Ok(AgnosticRef::from(
+            self.entries.get((n - 1) as usize).unwrap()
+        ))
+    }
+
+    pub fn hash_at_n(&self, n: u64) -> Option<Vec<u8>> {
+        if n > self.last() {
+            return None;
+        }
+
+        if n == 0 {
+            let buf = Vec::new();
+            Some(hash(&buf))
+        } else {
+            Some(self.get(n).unwrap().block_hash.clone())
+        }
     }
 }

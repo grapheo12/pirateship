@@ -25,19 +25,19 @@ pub fn test_partition_push() {
         sig: None,
     };
 
-    log_partition.push(block.clone()).expect_err("Block_n shouldn't match");
+    log_partition.push_unchecked(block.clone()).expect_err("Block_n shouldn't match");
     
 
     block.n += 1;
-    log_partition.push(block.clone()).expect("Should be able to push this");
+    log_partition.push_unchecked(block.clone()).expect("Should be able to push this");
 
     block.n += 2 * config.partition_total;
-    log_partition.push(block.clone()).expect_err("Should be out of order error");
+    log_partition.push_unchecked(block.clone()).expect_err("Should be out of order error");
 
-    log_partition.push(block.clone()).expect_err("Should be out of order error");
+    log_partition.push_unchecked(block.clone()).expect_err("Should be out of order error");
 
     block.n -= config.partition_total;
-    assert_eq!(log_partition.push(block.clone()).unwrap(), block.n + config.partition_total);
+    assert_eq!(log_partition.push_unchecked(block.clone()).unwrap(), block.n + config.partition_total);
 
     assert_eq!(log_partition.last_n(), Some(block.n + config.partition_total));
 

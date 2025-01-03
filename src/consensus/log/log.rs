@@ -17,12 +17,14 @@ pub struct LogConfig {
 pub enum LogPartitionResponse {
     Push(Result<u64, Error>),
     LastN(Option<u64>),
+    HashAtN(Option<Vec<u8>>)
 }
 
 #[derive(Debug)]
 pub enum LogPartitionRequestType {
     Push(ProtoBlock),
     LastN,
+    HashAtN(u64)
 }
 
 pub struct LogPartitionRequest {
@@ -77,7 +79,7 @@ impl Deref for PinnedLog {
 }
 
 impl PinnedLog {
-    async fn partition_worker(ctx: Arc<Pin<Box<Log>>>, idx: u64) {
+    async fn partition_worker(ctx: Arc<Pin<Box<Log>>>, idx: u64, tx_vec: Vec<Sender<LogPartitionRequest>>) {
         let mut rx = ctx.req_rx[idx as usize].lock().await;
         let mut log_partition = LogPartition::new(LogPartitionConfig {
             partition_id: idx,
@@ -86,8 +88,19 @@ impl PinnedLog {
 
         while let Some(msg) = rx.recv().await {
             let resp = match msg.req {
-                LogPartitionRequestType::Push(block) => LogPartitionResponse::Push(log_partition.push(block)),
+                LogPartitionRequestType::Push(block) => LogPartitionResponse::Push(log_partition.push(block, &tx_vec).await),
                 LogPartitionRequestType::LastN => LogPartitionResponse::LastN(log_partition.last_n()),
+                LogPartitionRequestType::HashAtN(n) => {
+                    match log_partition.hash_at_n(n) {
+                        Some(h) => LogPartitionResponse::HashAtN(Some(h)),
+                        None => {
+                            let __tx = tx_vec[idx as usize].clone();
+                            __tx.send(msg).await;
+                            continue;
+                        },
+                    }
+                    
+                },
             };
 
             let _ = msg.resp_chan.send(resp);
@@ -98,8 +111,10 @@ impl PinnedLog {
     pub async fn init(&mut self) {
         for idx in 0..self.config.partition_total {
             let ctx = self.0.clone();
+            let tx_vec = self.0.req_tx.iter()
+                .map(|e| e.clone()).collect::<Vec<_>>();
             self.1.spawn(async move {
-                PinnedLog::partition_worker(ctx, idx).await;
+                PinnedLog::partition_worker(ctx, idx, tx_vec).await;
             });
         }
     }
