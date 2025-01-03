@@ -20,7 +20,7 @@ use crate::{
         client::{
             ProtoClientReply, ProtoClientRequest, ProtoTentativeReceipt
         }, consensus::{
-            DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoForkValidation, ProtoQuorumCertificate, ProtoViewChange
+            DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoForkValidation, ProtoQuorumCertificate, ProtoTransactionList, ProtoViewChange
         }, execution::ProtoTransaction, rpc::ProtoPayload
     },
     rpc::{
@@ -809,7 +809,7 @@ pub async fn do_init_new_leader<Engine>(
     let mut chosen_fork_last_qc = None;
     // Broadcast fork and wait for responses.
     let mut block = ProtoBlock {
-        tx: Vec::new(),
+        tx: Some(crate::proto::consensus::proto_block::Tx::TxList(ProtoTransactionList { tx_list: Vec::new() })),
         n: last_n + 1,
         parent: last_hash,
         view,

@@ -9,22 +9,18 @@ use std::{collections::HashMap, sync::atomic::Ordering};
 use tokio::sync::MutexGuard;
 
 use crate::{
-    config::NodeInfo,
-    consensus::{
+    config::NodeInfo, consensus::{
         client_reply::{bulk_register_byz_response, do_reply_transaction_receipt}, handler::PinnedServerContext, log::Log,
         reconfiguration::maybe_execute_reconfiguration_transaction,
-    },
-    crypto::hash,
-    proto::{
+    }, crypto::hash, get_tx_list, proto::{
         client::{ProtoClientReply, ProtoTransactionReceipt, ProtoTryAgain},
         consensus::ProtoFork,
         execution::ProtoTransactionResult,
-    },
-    rpc::{
+    }, rpc::{
         client::PinnedClient,
         server::{LatencyProfile, MsgAckChan},
         PinnedMessage,
-    },
+    }
 };
 
 use super::utils::get_all_nodes_num;
@@ -109,7 +105,7 @@ pub async fn do_byzantine_commit<'a, Engine>(
     for bn in (old_bci + 1)..(updated_bci + 1) {
         trace!("do_byz_commit: Getting {} gc_hiwm {}", bn, fork.gc_hiwm());
         let entry = fork.get(bn).unwrap();
-        for _tx in &entry.block.tx {
+        for _tx in get_tx_list!(entry.block) {
             if !_tx.is_reconfiguration {
                 continue;
             }
@@ -125,7 +121,7 @@ pub async fn do_byzantine_commit<'a, Engine>(
         }
 
         // Stats
-        let num_txs = entry.block.tx.iter().map(|e| {
+        let num_txs = get_tx_list!(entry.block).iter().map(|e| {
             let crash_committed = if e.on_crash_commit.is_some() {
                 e.on_crash_commit.as_ref().unwrap().ops.len()
             } else {
@@ -326,7 +322,7 @@ pub async fn do_commit<'a, Engine>(
     for bn in (ci + 1)..(n + 1) {
         trace!("do_commit {} gc_hiwm {}", bn, fork.gc_hiwm());
         let entry = fork.get(bn).unwrap();
-        for _tx in &entry.block.tx {
+        for _tx in get_tx_list!(entry.block) {
             if !_tx.is_reconfiguration {
                 continue;
             }
@@ -351,7 +347,7 @@ pub async fn do_commit<'a, Engine>(
     for i in (ci + 1)..(n + 1) {
         let num_txs = match fork.get(i) {
             Ok(entry) => {
-                entry.block.tx.iter().map(|e| {
+                get_tx_list!(entry.block).iter().map(|e| {
                     if e.on_crash_commit.is_some() {
                         e.on_crash_commit.as_ref().unwrap().ops.len()
                     } else {

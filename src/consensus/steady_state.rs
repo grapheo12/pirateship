@@ -13,9 +13,9 @@ use tokio::sync::MutexGuard;
 use crate::{
     consensus::{
         backfill::maybe_backfill_fork_till_last_match, handler::{ForwardedMessageWithAckChan, PinnedServerContext}, log::{Log, LogEntry}, reconfiguration::decide_my_lifecycle_stage
-    }, crypto::{cmp_hash, hash, DIGEST_LENGTH}, proto::{
+    }, crypto::{cmp_hash, hash, DIGEST_LENGTH}, get_tx_list, proto::{
         consensus::{
-            proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoVote,
+            proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoTransactionList, ProtoVote
         }, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase}, rpc::{self, ProtoPayload}
     }, rpc::{
         client::PinnedClient,
@@ -541,7 +541,7 @@ pub async fn do_push_append_entries_to_fork<Engine>(
         
         let mut fork = ctx.state.fork.lock().await;
         for b in view_lock_blocks.blocks {
-            trace!("Inserting block {} with {} txs", b.n, b.tx.len());
+            trace!("Inserting block {} with {} txs", b.n, get_tx_list!(b).len());
             let entry = LogEntry::new(b.clone());
 
             let res = if entry.has_signature() {
@@ -682,7 +682,9 @@ where Engine: crate::execution::Engine
     }
 
     let mut block = ProtoBlock {
-        tx,
+        tx: Some(crate::proto::consensus::proto_block::Tx::TxList(ProtoTransactionList {
+            tx_list: tx,
+        })),
         n: block_n,
         parent: fork.last_hash(),
         view: __view,

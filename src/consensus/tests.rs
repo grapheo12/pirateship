@@ -5,7 +5,7 @@ use std::{collections::{HashMap, HashSet}, fs::exists};
 
 use ed25519_dalek::{SigningKey, SECRET_KEY_LENGTH};
 
-use crate::{config::{AppConfig, Config, ConsensusConfig, EvilConfig, FileStorageConfig, NetConfig, NodeNetInfo, RocksDBConfig, RpcConfig}, crypto::KeyStore, proto::{consensus::ProtoBlock, execution::ProtoTransaction}};
+use crate::{config::{AppConfig, Config, ConsensusConfig, EvilConfig, FileStorageConfig, NetConfig, NodeNetInfo, RocksDBConfig, RpcConfig}, crypto::KeyStore, proto::{consensus::{ProtoBlock, ProtoTransactionList}, execution::ProtoTransaction}};
 
 use super::log::{Log, LogEntry};
 
@@ -89,14 +89,17 @@ fn gen_config() -> Config {
 
 macro_rules! log_push_next {
     ( $log:expr, $n:expr, $parent:expr ) => {
+        let tx_list = ProtoTransactionList {
+            tx_list: vec![ProtoTransaction {
+                on_crash_commit: None,
+                on_byzantine_commit: None,
+                on_receive: None,
+                is_reconfiguration: false,
+            }; 1000]
+        };
         $log.push(LogEntry::new(
             ProtoBlock {
-                tx: vec![ProtoTransaction {
-                    on_crash_commit: None,
-                    on_byzantine_commit: None,
-                    on_receive: None,
-                    is_reconfiguration: false,
-                }; 1000],
+                tx: Some(crate::proto::consensus::proto_block::Tx::TxList(tx_list)),
                 n: $n,
                 parent: $parent.clone(),
                 view: 1,
@@ -111,9 +114,12 @@ macro_rules! log_push_next {
     };
 
     ( $log:expr, $n:expr, $parent:expr, $keys:expr ) => {
+        let tx_list = ProtoTransactionList {
+            tx_list: vec![]
+        };
         $log.push_and_sign(LogEntry::new(
             ProtoBlock {
-                tx: Vec::new(),
+                tx: Some(crate::proto::consensus::proto_block::Tx::TxList(tx_list)),
                 n: $n,
                 parent: $parent.clone(),
                 view: 1,

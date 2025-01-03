@@ -8,7 +8,7 @@ use prost::Message;
 use tokio::{fs::read, sync::MutexGuard};
 
 use crate::{
-    config::NodeInfo, consensus::handler::{ForwardedMessageWithAckChan, PinnedServerContext}, crypto::{hash, DIGEST_LENGTH}, proto::{client::{
+    config::NodeInfo, consensus::handler::{ForwardedMessageWithAckChan, PinnedServerContext}, crypto::{hash, DIGEST_LENGTH}, get_tx_list, proto::{client::{
             ProtoByzResponse, ProtoClientReply, ProtoCurrentLeader, ProtoTransactionReceipt, ProtoTryAgain
         }, execution::ProtoTransactionResult}, rpc::PinnedMessage
 };
@@ -133,7 +133,7 @@ pub async fn do_reply_transaction_receipt<'a, F>(
         }
         trace!("Replying tx receipt for {}, gc_hiwm {}", *bn, fork.gc_hiwm());
         let entry = fork.get(*bn).unwrap();
-        let response = if entry.block.tx.len() <= *txn {
+        let response = if get_tx_list!(entry.block).len() <= *txn {
             if ctx.i_am_leader.load(Ordering::SeqCst) {
                 warn!("Missing transaction as a leader!");
             }
@@ -152,7 +152,7 @@ pub async fn do_reply_transaction_receipt<'a, F>(
                 )),
             }
         }else {
-            let h = hash(&entry.block.tx[*txn].encode_to_vec());
+            let h = hash(&get_tx_list!(entry.block)[*txn].encode_to_vec());
             let byz_responses = get_all_byz_responses(ctx, &chan.2);
             let await_byz_response = should_await_byz_response(*bn, *txn);
             if await_byz_response {
@@ -249,7 +249,7 @@ pub fn bulk_register_byz_response(ctx: &PinnedServerContext, updated_bci: u64, f
     for bn in (old_bci + 1)..(updated_bci + 1) {
         trace!("Registering byz reply for {}, gc_hiwm {}", bn, fork.gc_hiwm());
         let entry = &fork.get(bn).unwrap();
-        for txn in 0..entry.block.tx.len() {
+        for txn in 0..get_tx_list!(entry.block).len() {
             let client_name = pop_client_for_tx(ctx, bn, txn);
             if let None = client_name {
                 continue;
