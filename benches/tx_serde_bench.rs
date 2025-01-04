@@ -1,5 +1,5 @@
 
-use pft::proto::{client::ProtoClientRequest, consensus::{ProtoBlock, ProtoFork}, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}};
+use pft::proto::{client::ProtoClientRequest, consensus::{ProtoBlock, ProtoFork, ProtoTransactionList}, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}};
 use prost::Message;
 
 fn get_small_tx_msg() -> ProtoClientRequest {
@@ -17,7 +17,7 @@ fn get_small_tx_msg() -> ProtoClientRequest {
         }),
         origin: String::from("client1"),
         // sig: vec![0u8; SIGNATURE_LENGTH],
-        sig: vec![rand::random(); 1]
+        sig: vec![rand::random(); 1],
     }
 }
 
@@ -41,7 +41,7 @@ fn get_large_tx_msg() -> ProtoClientRequest {
         }),
         origin: String::from("client1"),
         // sig: vec![0u8; SIGNATURE_LENGTH],
-        sig: vec![0u8; 1]
+        sig: vec![0u8; 1],
     }
 }
 
@@ -56,7 +56,7 @@ fn main() {
         let v = tx.encode_to_vec();
         large_lens.push(v.len());
         large_fork.blocks.push(ProtoBlock {
-            tx: vec![tx.tx.unwrap()],
+            tx: Some(pft::proto::consensus::proto_block::Tx::TxList(ProtoTransactionList {tx_list: vec![tx.tx.unwrap()]})),
             n: i as u64,
             parent: vec![0u8; 32],
             view: 1,
@@ -82,7 +82,7 @@ fn main() {
         let v = tx.encode_to_vec();
         small_lens.push(v.len());
         small_fork.blocks.push(ProtoBlock {
-            tx: vec![tx.tx.unwrap()],
+            tx: Some(pft::proto::consensus::proto_block::Tx::TxList(ProtoTransactionList {tx_list: vec![tx.tx.unwrap()]})),
             n: i as u64,
             parent: vec![0u8; 32],
             view: 1,

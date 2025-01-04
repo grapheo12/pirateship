@@ -167,6 +167,7 @@ async fn main() -> io::Result<()> {
         }),
         origin: client_cfg.net_config.name.clone(),
         sig: vec![0u8; 1],
+        client_tag: 1,
     };
 
     let rpc_msg_body = ProtoPayload {

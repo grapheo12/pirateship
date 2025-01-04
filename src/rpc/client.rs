@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}};
+use futures::{FutureExt, TryFutureExt};
 use log::{debug, info, trace, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use std::{
@@ -363,6 +364,53 @@ impl PinnedClient {
                 sz as usize,
                 super::SenderType::Auth(name.clone()),
             ))
+        }
+    }
+
+    pub async fn await_reply<'b>(
+        client: &PinnedClient,
+        name: &String,
+    ) -> Result<PinnedMessage, Error> {
+        let sock = Self::get_sock(client, name).await?;
+        let mut lsock = sock.0.lock().await;
+        let mut resp_buf = vec![0u8; 256];
+        let sz = lsock.get_next_frame(&mut resp_buf).await? as usize;
+        if sz == 0 {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "socket probably closed!",
+            ));
+        }
+        
+        Ok(PinnedMessage::from(
+            resp_buf,
+            sz as usize,
+            super::SenderType::Auth(name.clone()),
+        ))
+    }
+
+    pub async fn try_await_reply<'b>(
+        client: &PinnedClient,
+        name: &String,
+    ) -> Result<PinnedMessage, Error> {
+        let is_readable = {
+            // Is there a partial message in the buffer?
+            let sock = Self::get_sock(client, name).await?;
+            let mut lsock = sock.0.lock().await;
+
+            if lsock.bound != lsock.offset {
+                true
+            } else {
+                // TODO: Is the underlying Tcpstream readable?
+                false
+            }
+        
+        };
+
+        if is_readable {
+            PinnedClient::await_reply(client, name).await
+        } else {
+            Err(Error::new(ErrorKind::WouldBlock, "Reading would block"))
         }
     }
 

@@ -9,7 +9,7 @@ use tokio::{fs::read, sync::MutexGuard};
 
 use crate::{
     config::NodeInfo, consensus::handler::{ForwardedMessageWithAckChan, PinnedServerContext}, crypto::{hash, DIGEST_LENGTH}, get_tx_list, proto::{client::{
-            ProtoByzResponse, ProtoClientReply, ProtoCurrentLeader, ProtoTransactionReceipt, ProtoTryAgain
+            proto_client_reply::Reply, ProtoByzResponse, ProtoClientReply, ProtoCurrentLeader, ProtoTransactionReceipt, ProtoTryAgain
         }, execution::ProtoTransactionResult}, rpc::PinnedMessage
 };
 
@@ -17,27 +17,44 @@ use crate::consensus::utils::*;
 
 use super::log::Log;
 
-pub async fn bulk_reply_to_client(reqs: &Vec<ForwardedMessageWithAckChan>, msg: PinnedMessage) {
-    for (_, _, chan, profile) in reqs {
-        chan.send((msg.clone(), profile.clone())).unwrap();
+pub async fn bulk_reply_to_client(reqs: &Vec<ForwardedMessageWithAckChan>, reply: Option<Reply>) {
+    for (req, _, chan, profile) in reqs {
+        if let crate::proto::rpc::proto_payload::Message::ClientRequest(req) = req {
+            let client_tag = req.client_tag;
+            let reply_body = ProtoClientReply {
+                reply: reply.clone(),
+                client_tag
+            };
+
+            let mut buf = Vec::new();
+            reply_body.encode(&mut buf).unwrap();
+            let sz = buf.len();
+            let msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
+
+            
+            chan.send((msg.clone(), profile.clone())).unwrap();
+        }
     }
 }
 
 pub async fn do_respond_with_try_again(reqs: &Vec<ForwardedMessageWithAckChan>, node_infos: NodeInfo) {
-    let try_again = ProtoClientReply {
-        reply: Some(
-            crate::proto::client::proto_client_reply::Reply::TryAgain(ProtoTryAgain {
-                serialized_node_infos: node_infos.serialize(),
-            }),
-        ),
-    };
+    let reply = crate::proto::client::proto_client_reply::Reply::TryAgain(ProtoTryAgain {
+        serialized_node_infos: node_infos.serialize(),
+    });
+    // let try_again = ProtoClientReply {
+    //     reply: Some(
+    //         crate::proto::client::proto_client_reply::Reply::TryAgain(ProtoTryAgain {
+    //             serialized_node_infos: node_infos.serialize(),
+    //         }),
+    //     ),
+    // };
 
-    let mut buf = Vec::new();
-    try_again.encode(&mut buf).unwrap();
-    let sz = buf.len();
-    let msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
+    // let mut buf = Vec::new();
+    // try_again.encode(&mut buf).unwrap();
+    // let sz = buf.len();
+    // let msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
-    bulk_reply_to_client(reqs, msg).await;
+    bulk_reply_to_client(reqs, Some(reply)).await;
 }
 
 pub async fn do_respond_with_current_leader(
@@ -47,21 +64,27 @@ pub async fn do_respond_with_current_leader(
     let node_infos = NodeInfo {
         nodes: ctx.config.get().net_config.nodes.clone(),
     };
-    let leader = ProtoClientReply {
-        reply: Some(crate::proto::client::proto_client_reply::Reply::Leader(
-            ProtoCurrentLeader {
-                name: get_leader_str(ctx),
-                serialized_node_infos: node_infos.serialize(),
-            },
-        )),
-    };
+    let leader = crate::proto::client::proto_client_reply::Reply::Leader(
+        ProtoCurrentLeader {
+            name: get_leader_str(ctx),
+            serialized_node_infos: node_infos.serialize(),
+        },
+    );
+    // let leader = ProtoClientReply {
+    //     reply: Some(crate::proto::client::proto_client_reply::Reply::Leader(
+    //         ProtoCurrentLeader {
+    //             name: get_leader_str(ctx),
+    //             serialized_node_infos: node_infos.serialize(),
+    //         },
+    //     )),
+    // };
 
-    let mut buf = Vec::new();
-    leader.encode(&mut buf).unwrap();
-    let sz = buf.len();
-    let msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
+    // let mut buf = Vec::new();
+    // leader.encode(&mut buf).unwrap();
+    // let sz = buf.len();
+    // let msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
-    bulk_reply_to_client(reqs, msg).await;
+    bulk_reply_to_client(reqs, Some(leader)).await;
 }
 
 pub async fn do_respond_to_read_requests<Engine>(
@@ -97,6 +120,7 @@ pub async fn do_respond_to_read_requests<Engine>(
                                     byz_responses: vec![]
                                 },
                         )),
+                        client_tag: proto_client_request.client_tag
                     };
 
                     // ... reply back to client.
@@ -131,6 +155,7 @@ pub async fn do_reply_transaction_receipt<'a, F>(
         if *bn > n {
             return true;
         }
+        let client_tag = chan.3;
         trace!("Replying tx receipt for {}, gc_hiwm {}", *bn, fork.gc_hiwm());
         let entry = fork.get(*bn).unwrap();
         let response = if get_tx_list!(entry.block).len() <= *txn {
@@ -150,6 +175,7 @@ pub async fn do_reply_transaction_receipt<'a, F>(
                     crate::proto::client::proto_client_reply::Reply::TryAgain(
                         ProtoTryAgain{ serialized_node_infos: node_infos.serialize() }
                 )),
+                client_tag
             }
         }else {
             let h = hash(&get_tx_list!(entry.block)[*txn].encode_to_vec());
@@ -170,6 +196,7 @@ pub async fn do_reply_transaction_receipt<'a, F>(
                             byz_responses,
                         },
                 )),
+                client_tag
             }
         };
 

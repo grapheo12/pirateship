@@ -78,7 +78,7 @@ pub type ForwardedMessageWithAckChan = (
     rpc::proto_payload::Message,
     String,
     MsgAckChan,
-    LatencyProfile,
+    LatencyProfile
 );
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,7 +114,7 @@ pub struct ServerContext {
     pub client_ack_pending: Mutex<
         HashMap<
             (u64, usize), // (block_id, tx_id)
-            (MsgAckChan, LatencyProfile, String), // (msg chan, latency, sender)
+            (MsgAckChan, LatencyProfile, String, u64), // (msg chan, latency, sender, client_tag)
         >,
     >,
 
