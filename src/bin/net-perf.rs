@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 use log::{debug, error, info, warn};
-use pft::{config::{self, Config}, consensus::{self, utils::get_everyone_except_me}, crypto::{AtomicKeyStore, KeyStore}, execution::engines::{kvs::PinnedKVStoreEngine, logger::PinnedLoggerEngine, sql::PinnedSQLEngine}, rpc::{client::{Client, PinnedClient}, server::{GetServerKeys, LatencyProfile, MsgAckChan, RespType, Server}, MessageRef, PinnedMessage}};
+use pft::{config::{self, Config}, consensus::{self, utils::get_everyone_except_me}, crypto::{AtomicKeyStore, KeyStore}, execution::engines::{kvs::PinnedKVStoreEngine, logger::PinnedLoggerEngine, sql::PinnedSQLEngine}, rpc::{client::{Client, PinnedClient}, server::{LatencyProfile, MsgAckChan, RespType, Server, ServerContextType}, MessageRef, PinnedMessage}};
 use tokio::{runtime, signal, task::JoinSet, time::sleep};
 use std::{env, fs, io::{self, Error}, path, pin::Pin, sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex}, time::{Duration, Instant}};
 use std::io::Write;
@@ -61,9 +61,13 @@ struct ProfilerContext {
 #[derive(Clone)]
 pub struct PinnedProfilerContext(pub Arc<Pin<Box<ProfilerContext>>>);
 
-impl GetServerKeys for PinnedProfilerContext {
+impl ServerContextType for PinnedProfilerContext {
     fn get_server_keys(&self) -> Arc<Box<pft::crypto::KeyStore>> {
         self.0.key_store.get()
+    }
+    
+    async fn handle_rpc(&self, msg: MessageRef<'_>, ack_chan: MsgAckChan) -> Result<RespType, Error> {
+        profiler_rpc_handler(self, msg, ack_chan)
     }
 }
 
@@ -106,7 +110,7 @@ impl ProfilerNode
         
         let ctx = PinnedProfilerContext::new(config, &key_store);
         ProfilerNode {
-            server: Arc::new(Server::new(config, profiler_rpc_handler, &key_store)),
+            server: Arc::new(Server::new(config, ctx.clone(), &key_store)),
             client: Client::new(config, &key_store).into(),
             ctx: ctx.clone(),
         }
@@ -121,7 +125,7 @@ impl ProfilerNode
         let node3 = node.clone();
 
         js.spawn(async move {
-            let _ = Server::<PinnedProfilerContext>::run(node1.server.clone(), node1.ctx.clone())
+            let _ = Server::<PinnedProfilerContext>::run(node1.server.clone())
                 .await;
         });
 

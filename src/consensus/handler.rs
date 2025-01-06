@@ -21,7 +21,7 @@ use tokio::{join, sync::{mpsc, Mutex, Semaphore}};
 
 use crate::{
     config::{AtomicConfig, Config, NodeInfo}, crypto::{AtomicKeyStore, KeyStore}, proto::{client::{ProtoByzPollRequest, ProtoByzResponse, ProtoClientRequest}, consensus::ProtoBlock, execution::ProtoTransaction, rpc::proto_payload}, rpc::{
-        client::PinnedClient, server::{GetServerKeys, LatencyProfile, MsgAckChan, RespType}, MessageRef, PinnedMessage
+        client::PinnedClient, server::{LatencyProfile, MsgAckChan, RespType, ServerContextType}, MessageRef, PinnedMessage
     }, utils::AtomicStruct
 };
 
@@ -241,10 +241,14 @@ impl Deref for PinnedServerContext {
     }
 }
 
-impl GetServerKeys for PinnedServerContext {
+impl ServerContextType for PinnedServerContext {
     fn get_server_keys(&self) -> Arc<Box<KeyStore>> {
         info!("Keys: {:?}", self.keys.get().pub_keys.keys());
         self.keys.get()
+    }
+    
+    async fn handle_rpc(&self, msg: MessageRef<'_>, ack_chan: MsgAckChan) -> Result<RespType, Error> {
+        consensus_rpc_handler(self, msg, ack_chan)
     }
 }
 /// This should be a very short running function.

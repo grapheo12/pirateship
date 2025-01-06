@@ -16,7 +16,7 @@ use tokio::{
 };
 use tokio_rustls::{client, server};
 
-use super::{client::PinnedClient, proto::auth::ProtoHandshakeResponse, server::{GetServerKeys, Server}};
+use super::{client::PinnedClient, proto::auth::ProtoHandshakeResponse, server::{ServerContextType, Server}};
 
 #[derive(Clone, Debug)]
 pub(crate) struct HandshakeResponse {
@@ -72,7 +72,7 @@ pub async fn handshake_server<S>(
     stream: &mut server::TlsStream<TcpStream>,
 ) -> Result<String, Error>
 where
-    S: GetServerKeys + Send + Sync + 'static,
+    S: ServerContextType + Send + Sync + 'static,
 {
     let mut rng = rand::rngs::OsRng;
     let nonce: u32 = rng.gen();

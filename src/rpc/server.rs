@@ -1,7 +1,7 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use std::{fs::File, io::{self, Cursor, Error}, path, sync::Arc, time::{Duration, Instant}};
+use std::{fs::File, future::Future, io::{self, Cursor, Error}, path, sync::Arc, time::{Duration, Instant}};
 
 use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, rpc::auth, utils::AtomicStruct};
 use indexmap::IndexMap;
@@ -81,19 +81,21 @@ pub type HandlerType<ServerContext> = fn(
         RespType,                   // Should the caller wait for a response from the channel?
         Error>;                 // Should this connection be dropped?
 
-pub trait GetServerKeys {
+pub trait ServerContextType {
     fn get_server_keys(&self) -> Arc<Box<KeyStore>>;
+    fn handle_rpc(&self, msg: MessageRef, ack_chan: MsgAckChan) -> impl Future<Output = Result<RespType, Error>> + Send;
 }
 
 pub struct Server<ServerContext>
 where
-    ServerContext: GetServerKeys + Send + Sync + 'static,
+    ServerContext: ServerContextType + Send + Sync + 'static,
 {
     pub config: AtomicConfig,
     pub tls_certs: Vec<CertificateDer<'static>>,
     pub tls_keys: PrivateKeyDer<'static>,
     pub key_store: AtomicKeyStore,
-    pub msg_handler: HandlerType<ServerContext>, // Can't be a closure as msg_handler is called from another thread.
+    pub ctx: ServerContext,
+    // pub msg_handler: HandlerType<ServerContext>, // Can't be a closure as msg_handler is called from another thread.
     do_auth: bool,
 }
 
@@ -171,7 +173,7 @@ impl<'a> FrameReader<'a> {
 
 impl<S> Server<S>
 where
-    S: GetServerKeys + Send + Clone + Sync + 'static,
+    S: ServerContextType + Send + Clone + Sync + 'static,
 {
     // Following two functions ported from: https://github.com/rustls/tokio-rustls/blob/main/examples/server.rs
     fn load_certs(path: &String) -> Vec<CertificateDer<'static>> {
@@ -224,25 +226,25 @@ where
 
     pub fn new(
         cfg: &Config,
-        handler: HandlerType<S>,
+        ctx: S,
         key_store: &KeyStore,
     ) -> Server<S> {
         Server {
             config: AtomicConfig::new(cfg.clone()),
             tls_certs: Server::<S>::load_certs(&cfg.net_config.tls_cert_path),
             tls_keys: Server::<S>::load_keys(&cfg.net_config.tls_key_path),
-            msg_handler: handler,
+            ctx,
             do_auth: true,
             key_store: AtomicKeyStore::new(key_store.to_owned()),
         }
     }
 
-    pub fn new_unauthenticated(cfg: &Config, handler: HandlerType<S>) -> Server<S> {
+    pub fn new_unauthenticated(cfg: &Config, ctx: S) -> Server<S> {
         Server {
             config: AtomicConfig::new(cfg.clone()),
             tls_certs: Server::<S>::load_certs(&cfg.net_config.tls_cert_path),
             tls_keys: Server::<S>::load_keys(&cfg.net_config.tls_key_path),
-            msg_handler: handler,
+            ctx,
             do_auth: false,
             key_store: AtomicStruct::new(KeyStore::empty().to_owned()),
         }
@@ -292,7 +294,7 @@ where
             // This is because:
             // 1. I am not nearly good enough in Rust to store an async function pointer in the underlying Server struct
             // 2. This function shouldn't have any blocking code at all. This should be a short running function to send messages to proper channel.
-            let resp = (server.msg_handler)(ctx, MessageRef::from(&read_buf, sz, &sender), ack_tx.clone());
+            let resp = server.ctx.handle_rpc(MessageRef::from(&read_buf, sz, &sender), ack_tx.clone()).await;
             if let Err(e) = resp {
                 warn!("Dropping connection: {}", e);
                 break;
@@ -371,7 +373,7 @@ where
         warn!("Dropping connection from {:?}", addr);
         Ok(())
     }
-    pub async fn run(server: Arc<Self>, ctx: S) -> io::Result<()> {
+    pub async fn run(server: Arc<Self>) -> io::Result<()> {
         let server_addr = &server.config.get().net_config.addr;
         info!("Listening on {}", server_addr);
 
@@ -394,7 +396,7 @@ where
             socket.set_nodelay(true)?;
             let acceptor = tls_acceptor.clone();
             let server_ = server.clone();
-            let ctx_ = ctx.clone();
+            let ctx_ = server.ctx.clone();
             // It is cheap to open a lot of green threads in tokio
             // No need to have a list of sockets to select() from.
             tokio::spawn(async move {

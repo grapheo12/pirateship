@@ -56,7 +56,7 @@ where
         
         let ctx = PinnedServerContext::new(config, &key_store);
         ConsensusNode{
-            server: Arc::new(Server::new(config, consensus_rpc_handler, &key_store)),
+            server: Arc::new(Server::new(config, ctx.clone(), &key_store)),
             client: Client::new(config, &key_store).into(),
             ctx: ctx.clone(),
             engine: Engine::new(ctx.clone()),
@@ -74,7 +74,7 @@ where
         let node5 = node.clone();
 
         js.spawn(async move {
-            let _ = Server::<PinnedServerContext>::run(node1.server.clone(), node1.ctx.clone())
+            let _ = Server::<PinnedServerContext>::run(node1.server.clone())
                 .await;
         });
         js.spawn(async move {
