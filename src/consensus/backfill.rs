@@ -84,7 +84,7 @@ pub async fn maybe_backfill_fork_till_prefix_match(ctx: PinnedServerContext, cli
 
 
 /// Server side of backfilling. Clients will be blocking on this to receive backfill responses.
-pub async fn do_process_backfill_request(ctx: PinnedServerContext, ack_tx: &mut UnboundedSender<(PinnedMessage, LatencyProfile)>, bfr: &ProtoBackFillRequest, _sender: &String) {
+pub async fn do_process_backfill_request(ctx: PinnedServerContext, ack_tx: &mut oneshot::Sender<(PinnedMessage, LatencyProfile)>, bfr: &ProtoBackFillRequest, _sender: &String) {
     let block_start = bfr.block_start;
     let block_end = bfr.block_end;
 

@@ -44,7 +44,7 @@ jq '.consensus_config.max_backlog_batch_size = 500 | .consensus_config.quorum_di
 
 # Run lucky_raft
 make lucky_raft_logger
-$RUN_CMD --max_nodes 4
+$RUN_CMD --max_nodes 1
 
 
 end_time=$(date -Ins)

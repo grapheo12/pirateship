@@ -5,7 +5,7 @@ use std::{fs::File, future::Future, io::{self, Cursor, Error}, path, sync::Arc, 
 
 use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, rpc::auth, utils::AtomicStruct};
 use indexmap::IndexMap;
-use tokio::{io::{BufWriter, ReadHalf}, sync::mpsc};
+use tokio::{io::{BufWriter, ReadHalf}, sync::{mpsc, oneshot}};
 use log::{debug, info, trace, warn};
 use rustls::{
     crypto::aws_lc_rs,
@@ -64,7 +64,7 @@ impl LatencyProfile {
 }
 
 
-pub type MsgAckChan = mpsc::UnboundedSender<(PinnedMessage, LatencyProfile)>;
+pub type MsgAckChan = oneshot::Sender<(PinnedMessage, LatencyProfile)>;
 
 pub enum RespType {
     Resp = 1,
@@ -275,7 +275,6 @@ where
         let mut read_buf = vec![0u8; server.config.get().rpc_config.recv_buffer_size as usize];
         let mut tx_buf = BufWriter::new(_tx);
         let mut rx_buf = FrameReader::new(rx);
-        let (ack_tx, mut ack_rx) = mpsc::unbounded_channel();
         loop {
             // Message format: Size(u32) | Message
             // Message size capped at 4GiB.
@@ -290,11 +289,8 @@ where
                 },
             };
             
-            // This handler is called from within an async function, although it is not async itself.
-            // This is because:
-            // 1. I am not nearly good enough in Rust to store an async function pointer in the underlying Server struct
-            // 2. This function shouldn't have any blocking code at all. This should be a short running function to send messages to proper channel.
-            let resp = server.ctx.handle_rpc(MessageRef::from(&read_buf, sz, &sender), ack_tx.clone()).await;
+            let (ack_tx, mut ack_rx) = oneshot::channel();
+            let resp = server.ctx.handle_rpc(MessageRef::from(&read_buf, sz, &sender), ack_tx).await;
             if let Err(e) = resp {
                 warn!("Dropping connection: {}", e);
                 break;
@@ -302,7 +298,7 @@ where
 
             if let Ok(RespType::Resp) = resp {            
                 debug!("Waiting for response!");
-                let mref = ack_rx.recv().await.unwrap();
+                let mref = ack_rx.await.unwrap();
                 let mref = mref.0.as_ref();
                 tx_buf.write_u32(mref.1 as u32).await?;
                 tx_buf.write_all(&mref.0[..mref.1]).await?;
@@ -316,9 +312,9 @@ where
 
             }
 
-            if let Ok(RespType::RespAndTrack) = resp {            
+            else if let Ok(RespType::RespAndTrack) = resp {            
                 debug!("Waiting for response!");
-                let (mref, mut profile) = ack_rx.recv().await.unwrap();
+                let (mref, mut profile) = ack_rx.await.unwrap();
                 profile.register("Ack Received");
                 let mref = mref.as_ref();
                 tx_buf.write_u32(mref.1 as u32).await?;
@@ -336,9 +332,9 @@ where
                 profile.print();
             }
 
-            if let Ok(RespType::RespAndTrackAndReconf) = resp {            
+            else if let Ok(RespType::RespAndTrackAndReconf) = resp {            
                 debug!("Waiting for response!");
-                let (mref, mut profile) = ack_rx.recv().await.unwrap();
+                let (mref, mut profile) = ack_rx.await.unwrap();
                 profile.register("Ack Received");
                 let mref = mref.as_ref();
                 tx_buf.write_u32(mref.1 as u32).await?;
@@ -363,7 +359,7 @@ where
 
             }
 
-            if let Ok(RespType::NoRespAndReconf) = resp {
+            else if let Ok(RespType::NoRespAndReconf) = resp {
                 // Reconfigure the server to use the new public keys.
                 let new_keys = ctx.get_server_keys();
                 server.key_store.set(new_keys.as_ref().clone());

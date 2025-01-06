@@ -107,8 +107,8 @@ pub struct ServerContext {
         Mutex<mpsc::UnboundedReceiver<ForwardedMessageWithAckChan>>,
     ),
     pub client_queue: (
-        mpsc::UnboundedSender<ForwardedMessageWithAckChan>,
-        Mutex<mpsc::UnboundedReceiver<ForwardedMessageWithAckChan>>,
+        mpsc::Sender<ForwardedMessageWithAckChan>,
+        Mutex<mpsc::Receiver<ForwardedMessageWithAckChan>>,
     ),
     pub state: ConsensusState,
     pub client_ack_pending: Mutex<
@@ -176,7 +176,7 @@ pub struct PinnedServerContext(pub Arc<Pin<Box<ServerContext>>>);
 impl PinnedServerContext {
     pub fn new(cfg: &Config, keys: &KeyStore) -> PinnedServerContext {
         let node_ch = mpsc::unbounded_channel();
-        let client_ch = mpsc::unbounded_channel();
+        let client_ch = mpsc::channel(10 * cfg.consensus_config.max_backlog_batch_size);
         let black_hole_ch = mpsc::unbounded_channel();
         let reconf_channel = mpsc::unbounded_channel();
         let send_list = get_everyone_except_me(&cfg.net_config.name, &cfg.consensus_config.node_list);
@@ -248,14 +248,14 @@ impl ServerContextType for PinnedServerContext {
     }
     
     async fn handle_rpc(&self, msg: MessageRef<'_>, ack_chan: MsgAckChan) -> Result<RespType, Error> {
-        consensus_rpc_handler(self, msg, ack_chan)
+        consensus_rpc_handler(self, msg, ack_chan).await
     }
 }
 /// This should be a very short running function.
 /// No blocking and/or locking allowed.
 /// The job is to filter old messages quickly and send them on the channel.
 /// The real consensus handler is a separate green thread that consumes these messages.
-pub fn consensus_rpc_handler<'a>(
+pub async fn consensus_rpc_handler<'a>(
     ctx: &PinnedServerContext,
     m: MessageRef<'a>,
     ack_tx: MsgAckChan,
@@ -296,7 +296,7 @@ pub fn consensus_rpc_handler<'a>(
             };
 
             let msg = (body.message.unwrap(), sender, ack_tx, profile);
-            if let Err(_) = ctx.client_queue.0.send(msg) {
+            if let Err(_) = ctx.client_queue.0.send(msg).await {
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }
 
@@ -304,7 +304,7 @@ pub fn consensus_rpc_handler<'a>(
         }
         rpc::proto_payload::Message::BackfillRequest(_) => {
             let msg = (body.message.unwrap(), sender, ack_tx, profile);
-            if let Err(_) = ctx.client_queue.0.send(msg) {
+            if let Err(_) = ctx.client_queue.0.send(msg).await {
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }
 

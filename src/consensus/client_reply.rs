@@ -17,7 +17,7 @@ use crate::consensus::utils::*;
 
 use super::log::Log;
 
-pub async fn bulk_reply_to_client(reqs: &Vec<ForwardedMessageWithAckChan>, reply: Option<Reply>) {
+pub async fn bulk_reply_to_client(reqs: Vec<ForwardedMessageWithAckChan>, reply: Option<Reply>) {
     for (req, _, chan, profile) in reqs {
         if let crate::proto::rpc::proto_payload::Message::ClientRequest(req) = req {
             let client_tag = req.client_tag;
@@ -32,12 +32,12 @@ pub async fn bulk_reply_to_client(reqs: &Vec<ForwardedMessageWithAckChan>, reply
             let msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
             
-            chan.send((msg.clone(), profile.clone())).unwrap();
+            chan.send((msg.clone(), profile.clone()));
         }
     }
 }
 
-pub async fn do_respond_with_try_again(reqs: &Vec<ForwardedMessageWithAckChan>, node_infos: NodeInfo) {
+pub async fn do_respond_with_try_again(reqs: Vec<ForwardedMessageWithAckChan>, node_infos: NodeInfo) {
     let reply = crate::proto::client::proto_client_reply::Reply::TryAgain(ProtoTryAgain {
         serialized_node_infos: node_infos.serialize(),
     });
@@ -59,7 +59,7 @@ pub async fn do_respond_with_try_again(reqs: &Vec<ForwardedMessageWithAckChan>, 
 
 pub async fn do_respond_with_current_leader(
     ctx: &PinnedServerContext,
-    reqs: &Vec<ForwardedMessageWithAckChan>,
+    reqs: Vec<ForwardedMessageWithAckChan>,
 ) {
     let node_infos = NodeInfo {
         nodes: ctx.config.get().net_config.nodes.clone(),
