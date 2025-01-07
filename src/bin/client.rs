@@ -65,7 +65,7 @@ macro_rules! reset_backoff {
     };
 }
 
-const MAX_OUTSTANDING_REQUESTS: usize = 1;
+const MAX_OUTSTANDING_REQUESTS: usize = 16;
 
 async fn check_response(
     idx: usize, client: &PinnedClient, num_requests: usize, config: &mut ClientConfig,
@@ -79,18 +79,18 @@ async fn check_response(
     sample_item: &[(bool, i32); 2],
     weight_dist: &WeightedIndex<i32>,
     rng: &mut ChaCha20Rng
-) -> Result<(), u64> {
+) -> Result<u64, u64> {
     let sz = msg.as_ref().1;
     let resp = ProtoClientReply::decode(&msg.as_ref().0.as_slice()[..sz]).unwrap();
     if let None = resp.reply {
         error!("Empty reply");
-        return Ok(());
+        return Ok(0);
     }
 
     let is_outstanding = outstanding_requests.iter().any(|e| e.0 == resp.client_tag);
     if !is_outstanding {
         warn!("Was not waiting for this request anymore: {}:{}", idx, resp.client_tag);
-        return Ok(());
+        return Ok(0);
     }
 
     let client_tag = resp.client_tag;
@@ -189,7 +189,7 @@ async fn check_response(
     }
 
     outstanding_requests.retain(|e| e.0 != client_tag);
-    Ok(())
+    Ok(client_tag)
 }
 
 async fn propose_new_request(
@@ -228,7 +228,7 @@ async fn propose_new_request(
     loop {
         let res = match &executor {
             Executor::Leader => {
-                PinnedClient::send(
+                PinnedClient::send_buffered(
                     &client,
                     &curr_leader,
                     MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon),
@@ -290,6 +290,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
     while i < num_requests || outstanding_requests.len() > 0 {
         // Propose new request.
         if i < num_requests && outstanding_requests.len() < MAX_OUTSTANDING_REQUESTS {
+            // info!("Client Id: {} Proposing request: {}", idx, i);
             propose_new_request(client, &mut config, &mut current_backoff_ms, &mut node_list, &mut outstanding_requests, &mut curr_leader, &mut workload_generator, &mut any_node_rr, &mut leader_rr, i as u64).await;
             i += 1;
         }
@@ -298,6 +299,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
 
         while let Ok(msg) = PinnedClient::try_await_reply(client, &curr_leader).await {
             let res = check_response(idx, client, num_requests, &mut config, &byz_resp, msg, &mut current_backoff_ms, &mut node_list, &mut outstanding_requests, &mut curr_leader, &mut workload_generator, &sample_item, &weight_dist, &mut rng).await;
+            // info!("Client Id: {}, Response for {:?}", idx, res);
             if let Err(j) = res {
                 let (_, buf, _) = outstanding_requests.iter().find(|e| e.0 == j).unwrap();
 
@@ -318,10 +320,12 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
         }
 
         // Force check on old requests
-        if outstanding_requests.len() == MAX_OUTSTANDING_REQUESTS {
+        if outstanding_requests.len() >= MAX_OUTSTANDING_REQUESTS {
+            PinnedClient::force_flush(client, &curr_leader).await.expect("Should be able to flush");
             while outstanding_requests.len() > 0 {
                 if let Ok(msg) = PinnedClient::await_reply(client, &curr_leader).await {
                     let res = check_response(idx, client, num_requests, &mut config, &byz_resp, msg, &mut current_backoff_ms, &mut node_list, &mut outstanding_requests, &mut curr_leader, &mut workload_generator, &sample_item, &weight_dist, &mut rng).await;
+                    // info!("Client Id: {}, Response for {:?} (force)", idx, res);
                     if let Err(j) = res {
                         if let Some((_, buf, _)) = outstanding_requests.iter().find(|e| e.0 == j) {
                             let res = PinnedClient::send(

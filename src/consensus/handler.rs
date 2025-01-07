@@ -13,6 +13,7 @@ use std::{
 };
 
 use indexmap::IndexMap;
+use kanal::{bounded_async, AsyncReceiver, AsyncSender};
 use log::{debug, error, info, trace, warn};
 use prost::Message;
 use rustls::crypto::hash::Hash;
@@ -103,9 +104,13 @@ pub struct ServerContext {
 
     pub lifecycle_stage: AtomicI8,
     pub node_queue: (
-        mpsc::UnboundedSender<ForwardedMessageWithAckChan>,
-        Mutex<mpsc::UnboundedReceiver<ForwardedMessageWithAckChan>>,
+        mpsc::Sender<ForwardedMessageWithAckChan>,
+        Mutex<mpsc::Receiver<ForwardedMessageWithAckChan>>,
     ),
+    // pub client_queue: (
+    //     mpsc::Sender<ForwardedMessageWithAckChan>,
+    //     Mutex<mpsc::Receiver<ForwardedMessageWithAckChan>>,
+    // ),
     pub client_queue: (
         mpsc::Sender<ForwardedMessageWithAckChan>,
         Mutex<mpsc::Receiver<ForwardedMessageWithAckChan>>,
@@ -139,15 +144,15 @@ pub struct ServerContext {
     /// For Noop blocks, there is no such client waiting,
     /// so we send the reply to a black hole.
     pub __client_black_hole_channel: (
-        mpsc::UnboundedSender<(PinnedMessage, LatencyProfile)>,
-        Mutex<mpsc::UnboundedReceiver<(PinnedMessage, LatencyProfile)>>,
+        mpsc::Sender<(PinnedMessage, LatencyProfile)>,
+        Mutex<mpsc::Receiver<(PinnedMessage, LatencyProfile)>>,
     ),
 
     pub __should_server_update_keys: AtomicBool,
 
     pub reconf_channel: (
-        mpsc::UnboundedSender<ProtoTransaction>,
-        Mutex<mpsc::UnboundedReceiver<ProtoTransaction>>,
+        mpsc::Sender<ProtoTransaction>,
+        Mutex<mpsc::Receiver<ProtoTransaction>>,
     ),
 
     pub view_timer: Arc<Pin<Box<RandomResettableTimer>>>,
@@ -175,10 +180,11 @@ pub struct PinnedServerContext(pub Arc<Pin<Box<ServerContext>>>);
 
 impl PinnedServerContext {
     pub fn new(cfg: &Config, keys: &KeyStore) -> PinnedServerContext {
-        let node_ch = mpsc::unbounded_channel();
-        let client_ch = mpsc::channel(10 * cfg.consensus_config.max_backlog_batch_size);
-        let black_hole_ch = mpsc::unbounded_channel();
-        let reconf_channel = mpsc::unbounded_channel();
+        let node_ch = mpsc::channel(1000 * cfg.consensus_config.max_backlog_batch_size);
+        // let client_ch = mpsc::channel(10 * cfg.consensus_config.max_backlog_batch_size);
+        let client_ch = mpsc::channel(50 * cfg.consensus_config.max_backlog_batch_size);
+        let black_hole_ch = mpsc::channel(1_000_000);
+        let reconf_channel = mpsc::channel(100 * cfg.consensus_config.max_backlog_batch_size);
         let send_list = get_everyone_except_me(&cfg.net_config.name, &cfg.consensus_config.node_list);
 
 
@@ -282,7 +288,7 @@ pub async fn consensus_rpc_handler<'a>(
     let msg = match &body.message {
         Some(m) => m,
         None => {
-            warn!("Nil message");
+            warn!("Nil message: {}", m.1);
             return Ok(RespType::NoResp);
         }
     };
@@ -312,7 +318,7 @@ pub async fn consensus_rpc_handler<'a>(
         }
         _ => {
             let msg = (body.message.unwrap(), sender, ack_tx, profile);
-            if let Err(_) = ctx.node_queue.0.send(msg) {
+            if let Err(_) = ctx.node_queue.0.send(msg).await {
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }
 
@@ -484,9 +490,13 @@ where
         let cfg = ctx.config.get();
         tokio::select! {
             biased;
-            n_ = client_rx.recv_many(&mut curr_client_req, cfg.consensus_config.max_backlog_batch_size) => {
-                curr_client_req_num = n_;
-            },
+            // n_ = client_rx.recv_many(&mut curr_client_req, cfg.consensus_config.max_backlog_batch_size) => {
+            //     curr_client_req_num = n_;
+            // },
+            msg = client_rx.recv() => {
+                curr_client_req_num = 1;
+                curr_client_req.push(msg.unwrap());
+            }
             tick = signature_timer.wait() => {
                 signature_timer_tick = tick;
             },

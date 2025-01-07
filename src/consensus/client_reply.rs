@@ -3,6 +3,7 @@
 
 use std::sync::atomic::Ordering;
 
+use gluesql::core::sqlparser::keywords::PROGRAM;
 use log::{error, info, trace, warn};
 use prost::Message;
 use tokio::{fs::read, sync::MutexGuard};
@@ -17,7 +18,7 @@ use crate::consensus::utils::*;
 
 use super::log::Log;
 
-pub async fn bulk_reply_to_client(reqs: Vec<ForwardedMessageWithAckChan>, reply: Option<Reply>) {
+pub async fn bulk_reply_to_client(reqs: &Vec<ForwardedMessageWithAckChan>, reply: Option<Reply>) {
     for (req, _, chan, profile) in reqs {
         if let crate::proto::rpc::proto_payload::Message::ClientRequest(req) = req {
             let client_tag = req.client_tag;
@@ -32,12 +33,12 @@ pub async fn bulk_reply_to_client(reqs: Vec<ForwardedMessageWithAckChan>, reply:
             let msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
             
-            chan.send((msg.clone(), profile.clone()));
+            let _ = chan.send((msg.clone(), profile.clone())).await;
         }
     }
 }
 
-pub async fn do_respond_with_try_again(reqs: Vec<ForwardedMessageWithAckChan>, node_infos: NodeInfo) {
+pub async fn do_respond_with_try_again(reqs: &Vec<ForwardedMessageWithAckChan>, node_infos: NodeInfo) {
     let reply = crate::proto::client::proto_client_reply::Reply::TryAgain(ProtoTryAgain {
         serialized_node_infos: node_infos.serialize(),
     });
@@ -59,7 +60,7 @@ pub async fn do_respond_with_try_again(reqs: Vec<ForwardedMessageWithAckChan>, n
 
 pub async fn do_respond_with_current_leader(
     ctx: &PinnedServerContext,
-    reqs: Vec<ForwardedMessageWithAckChan>,
+    reqs: &Vec<ForwardedMessageWithAckChan>,
 ) {
     let node_infos = NodeInfo {
         nodes: ctx.config.get().net_config.nodes.clone(),
@@ -84,7 +85,7 @@ pub async fn do_respond_with_current_leader(
     // let sz = buf.len();
     // let msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
-    bulk_reply_to_client(reqs, Some(leader)).await;
+    bulk_reply_to_client(&reqs, Some(leader)).await;
 }
 
 pub async fn do_respond_to_read_requests<Engine>(
@@ -94,6 +95,7 @@ pub async fn do_respond_to_read_requests<Engine>(
 ) where 
     Engine: crate::execution::Engine + Clone + Send + Sync + 'static
 {
+    let mut outgoing = Vec::new();
     reqs.retain(|req| {
         match &req.0 {
             crate::proto::rpc::proto_payload::Message::ClientRequest(proto_client_request) => {
@@ -128,7 +130,9 @@ pub async fn do_respond_to_read_requests<Engine>(
                     let vlen = v.len();
         
                     let msg = PinnedMessage::from(v, vlen, crate::rpc::SenderType::Anon);
-                    let _ = req.2.send((msg, req.3.clone()));
+                    
+                    outgoing.push((req.2.clone(), msg, req.3.clone()));
+                    // let _ = req.2.send((msg, req.3.clone())).await;
         
                     // Do not include this request for creating a block
                     return false;
@@ -141,6 +145,10 @@ pub async fn do_respond_to_read_requests<Engine>(
             }
         }
     });
+
+    for (chan, msg, profile) in outgoing.drain(..) {
+        let _ = chan.send((msg, profile)).await;
+    }
 }
 
 pub async fn do_reply_transaction_receipt<'a, F>(
@@ -151,6 +159,7 @@ pub async fn do_reply_transaction_receipt<'a, F>(
 ) where F: Fn(u64 /* bn */, usize /* txn */) -> ProtoTransactionResult
 {
     let mut lack_pend = ctx.client_ack_pending.lock().await;
+    let mut outgoing = Vec::new();
     lack_pend.retain(|(bn, txn), chan| {
         if *bn > n {
             return true;
@@ -211,15 +220,20 @@ pub async fn do_reply_transaction_receipt<'a, F>(
             profile.should_print = true;
             profile.prefix = String::from(format!("Block: {}, Txn: {}", *bn, *txn));
         }
-        let send_res = chan.0.send((msg, profile));
-        match send_res {
-            Ok(_) => false,
-            Err(e) => {
-                error!("Error sending response: {}", e);
-                true
-            },
-        }
+        outgoing.push((chan.clone(), msg, profile));
+        false
+        // let send_res = chan.0.send((msg, profile));
+        // match send_res {
+        //     Ok(_) => false,
+        //     Err(e) => {
+        //         error!("Error sending response: {}", e);
+        //         true
+        //     },
+        // }
     });
+    for (chan, msg, profile) in outgoing.drain(..) {
+        chan.0.send((msg, profile)).await;
+    }
 }
 
 pub fn register_byz_response(ctx: &PinnedServerContext, client_name: &String, resp: ProtoByzResponse) {

@@ -5,7 +5,7 @@ use std::{ops::Index, sync::atomic::Ordering};
 
 use log::{debug, error, info, warn};
 use prost::Message;
-use tokio::sync::{mpsc::UnboundedSender, MutexGuard};
+use tokio::sync::{mpsc::{self, UnboundedSender}, MutexGuard};
 
 use crate::{
     consensus::{
@@ -84,7 +84,7 @@ pub async fn maybe_backfill_fork_till_prefix_match(ctx: PinnedServerContext, cli
 
 
 /// Server side of backfilling. Clients will be blocking on this to receive backfill responses.
-pub async fn do_process_backfill_request(ctx: PinnedServerContext, ack_tx: &mut oneshot::Sender<(PinnedMessage, LatencyProfile)>, bfr: &ProtoBackFillRequest, _sender: &String) {
+pub async fn do_process_backfill_request(ctx: PinnedServerContext, ack_tx: &mut mpsc::Sender<(PinnedMessage, LatencyProfile)>, bfr: &ProtoBackFillRequest, _sender: &String) {
     let block_start = bfr.block_start;
     let block_end = bfr.block_end;
 
@@ -140,7 +140,7 @@ pub async fn do_process_backfill_request(ctx: PinnedServerContext, ack_tx: &mut 
     rpc_msg_body.encode(&mut buf).unwrap();
     let sz = buf.len();
     let reply = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
-    ack_tx.send((reply, profile)).unwrap();
+    ack_tx.send((reply, profile)).await.unwrap();
 
 }
 

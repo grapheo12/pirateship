@@ -39,6 +39,7 @@ rocksdb = "0.22.0"
 lz4_flex = { version = "0.11" }
 gluesql = "0.15"
 zipf = "7.0.1"
+kanal = "0.1.0-pre8"
 
 [build-dependencies]
 prost-build = { version = "0.12" }

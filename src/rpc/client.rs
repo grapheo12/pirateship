@@ -38,8 +38,10 @@ impl<K> PinnedHashSet<K> {
 }
 
 struct BufferedTlsStream {
-    stream: BufWriter<TlsStream<TcpStream>>,
+    stream: TlsStream<TcpStream>,
     buffer: Vec<u8>,
+    write_buffer: Vec<u8>,
+    write_offset: usize,
     offset: usize,
     bound: usize
 }
@@ -47,11 +49,55 @@ struct BufferedTlsStream {
 impl BufferedTlsStream {
     pub fn new(stream: TlsStream<TcpStream>) -> BufferedTlsStream {
         BufferedTlsStream {
-            stream: BufWriter::new(stream),
+            stream, // : BufWriter::with_capacity(16 * 1024, stream),
             buffer: vec![0u8; 4096],
+            write_buffer: vec![0u8; 4096],
             bound: 0,
-            offset: 0
+            offset: 0,
+            write_offset: 0
         }
+    }
+
+    pub async fn flush_write_buffer(&mut self) -> Result<(), Error> {
+        self.stream.write_all(&self.write_buffer[..self.write_offset]).await?;
+        if self.write_offset > 0 && self.write_offset < self.write_buffer.len() {
+            info!("Flush underfull: {}", self.write_offset);
+        } else if self.write_offset == self.write_buffer.len() {
+            info!("Flush full");
+        }
+        // info!("self.write_offset = {} buff: {:?}", self.write_offset, self.buffer);
+        self.write_offset = 0;
+        self.stream.flush().await?;
+        Ok(())
+    }
+
+    pub async fn write_all_bufffered(&mut self, buff: &[u8], len: usize) -> Result<(), Error> {
+        let mut n = len;
+        while n > 0 {
+            let space_left = self.write_buffer.len() - self.write_offset;
+            if space_left == 0 {
+                self.flush_write_buffer().await?;
+                continue;
+            }
+            let to_write = if n < space_left {
+                n
+            } else {
+                space_left
+            };
+            
+            // info!("self.write_offset = {}, to_write = {}, len = {}", self.write_offset, to_write, len);
+            self.write_buffer[self.write_offset..][..to_write].copy_from_slice(&buff[(len - n)..(len - n + to_write)]);
+            n -= to_write;
+            self.write_offset += to_write;
+        }
+
+        Ok(())
+    }
+
+    pub async fn write_u32_buffered(&mut self, data: u32) -> Result<(), Error> {
+        let buff = data.to_be_bytes();
+        self.write_all_bufffered(&buff, 4).await?;
+        Ok(())
     }
 
     async fn read_next_bytes(&mut self, n: usize, v: &mut Vec<u8>) -> io::Result<()> {
@@ -107,7 +153,7 @@ impl BufferedTlsStream {
 }
 
 impl Deref for BufferedTlsStream {
-    type Target = BufWriter<TlsStream<TcpStream>>;
+    type Target = TlsStream<TcpStream>;
 
     fn deref(&self) -> &Self::Target {
         &self.stream
@@ -275,11 +321,12 @@ impl PinnedClient {
         let e = match data {
             SendDataType::ByteType(d) => {
                 let mut lsock = sock.0.lock().await;
-                lsock.write_all(&d).await
+                // info!("lsock.write_all_bufffered(&d.0 {}, d.1 {}).await", d.0.len(), d.1);
+                lsock.write_all_bufffered(&d.0, d.1).await
             }
             SendDataType::SizeType(d) => {
                 let mut lsock = sock.0.lock().await;
-                lsock.write_u32(d).await // Does this take care of endianness?
+                lsock.write_u32_buffered(d).await // Does this take care of endianness?
             }
         };
 
@@ -319,9 +366,38 @@ impl PinnedClient {
 
         {
             // This finally sends the message.
-            sock.0.lock().await.flush().await?;
+            sock.0.lock().await.flush_write_buffer().await?;
         }
 
+        Ok(())
+    }
+
+    pub async fn send_buffered<'b>(
+        client: &PinnedClient,
+        name: &String,
+        data: MessageRef<'b>,
+    ) -> Result<(), Error> {
+        let sock = Self::get_sock(client, name).await?;
+        let len = data.len() as u32;
+
+        // These two calls will be buffered.
+        Self::send_raw(client, name, &sock, SendDataType::SizeType(len)).await?;
+        Self::send_raw(client, name, &sock, SendDataType::ByteType(data)).await?;
+
+        // {
+        //     // This finally sends the message.
+        //     sock.0.lock().await.flush().await?;
+        // }
+
+        Ok(())
+    }
+
+    pub async fn force_flush<'b>(
+        client: &PinnedClient,
+        name: &String
+    ) -> Result<(), Error> {
+        let sock = Self::get_sock(client, name).await?;
+        sock.0.lock().await.flush_write_buffer().await?;
         Ok(())
     }
 
@@ -348,7 +424,7 @@ impl PinnedClient {
 
         {
             let mut lsock = sock.0.lock().await;
-            lsock.flush().await?;  // Need this flush; otherwise it is a deadlock.
+            lsock.flush_write_buffer().await?;  // Need this flush; otherwise it is a deadlock.
 
             let mut resp_buf = vec![0u8; 256];
             let sz = lsock.get_next_frame(&mut resp_buf).await? as usize;
