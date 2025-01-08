@@ -8,4 +8,6 @@ package proto.auth;
 message ProtoHandshakeResponse {
     string name = 1;
     bytes signature = 2;
+    bool is_reply_channel = 3;
+    uint64 client_sub_id = 4;
 }

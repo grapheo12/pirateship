@@ -65,7 +65,7 @@ macro_rules! reset_backoff {
     };
 }
 
-const MAX_OUTSTANDING_REQUESTS: usize = 16;
+const MAX_OUTSTANDING_REQUESTS: usize = 256;
 
 async fn check_response(
     idx: usize, client: &PinnedClient, num_requests: usize, config: &mut ClientConfig,
@@ -637,7 +637,7 @@ async fn main() -> io::Result<()> {
         // let tx = tx_vec[tx_id].clone();
         let client_config = config.clone();
         let net_config = client_config.fill_missing();
-        let c = Client::new(&net_config, &keys).into();
+        let c = Client::new(&net_config, &keys, true, i as u64).into();
         // let _tx = tx.clone();
         let _resp_store = resp_store.clone();
         client_handles.spawn(async move { client_runner(i, &c, config.workload_config.num_requests, client_config.clone(), _resp_store).await });

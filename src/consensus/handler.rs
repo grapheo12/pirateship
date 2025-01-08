@@ -21,8 +21,8 @@ use std::time::Instant;
 use tokio::{join, sync::{mpsc, Mutex, Semaphore}};
 
 use crate::{
-    config::{AtomicConfig, Config, NodeInfo}, crypto::{AtomicKeyStore, KeyStore}, proto::{client::{ProtoByzPollRequest, ProtoByzResponse, ProtoClientRequest}, consensus::ProtoBlock, execution::ProtoTransaction, rpc::proto_payload}, rpc::{
-        client::PinnedClient, server::{LatencyProfile, MsgAckChan, RespType, ServerContextType}, MessageRef, PinnedMessage
+    config::{AtomicConfig, Config, NodeInfo}, crypto::{AtomicKeyStore, KeyStore, DIGEST_LENGTH}, proto::{client::{ProtoByzPollRequest, ProtoByzResponse, ProtoClientReply, ProtoClientRequest, ProtoTransactionReceipt}, consensus::ProtoBlock, execution::ProtoTransaction, rpc::proto_payload}, rpc::{
+        client::PinnedClient, server::{LatencyProfile, MsgAckChan, RespType, ServerContextType}, MessageRef, PinnedMessage, SenderType
     }, utils::AtomicStruct
 };
 
@@ -295,6 +295,7 @@ pub async fn consensus_rpc_handler<'a>(
 
     match &msg {
         rpc::proto_payload::Message::ClientRequest(client_req) => {
+            let client_tag = client_req.client_tag;
             let ret = if client_req.tx.as_ref().is_some() && client_req.tx.as_ref().unwrap().is_reconfiguration {
                 Ok(RespType::RespAndTrackAndReconf)
             } else {
@@ -302,9 +303,31 @@ pub async fn consensus_rpc_handler<'a>(
             };
 
             let msg = (body.message.unwrap(), sender, ack_tx, profile);
-            if let Err(_) = ctx.client_queue.0.send(msg).await {
-                return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
-            }
+
+            let receipt = ProtoClientReply {
+                reply: Some(
+                    crate::proto::client::proto_client_reply::Reply::Receipt(
+                        ProtoTransactionReceipt {
+                            req_digest: vec![0u8; DIGEST_LENGTH],
+                            block_n: 0,
+                            tx_n: 0,
+                            results:None,
+                            await_byz_response: false,
+                            byz_responses: vec![],
+                        },
+                )),
+                client_tag
+            };
+
+            let mut buf = Vec::new();
+            receipt.encode(&mut buf);
+            let sz = buf.len();
+            let reply = PinnedMessage::from(buf, sz, SenderType::Anon);
+            msg.2.send((reply, msg.3.clone())).await;
+
+            // if let Err(_) = ctx.client_queue.0.send(msg).await {
+            //     return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
+            // }
 
             return ret;
         }
@@ -490,13 +513,13 @@ where
         let cfg = ctx.config.get();
         tokio::select! {
             biased;
-            // n_ = client_rx.recv_many(&mut curr_client_req, cfg.consensus_config.max_backlog_batch_size) => {
-            //     curr_client_req_num = n_;
-            // },
-            msg = client_rx.recv() => {
-                curr_client_req_num = 1;
-                curr_client_req.push(msg.unwrap());
-            }
+            n_ = client_rx.recv_many(&mut curr_client_req, 16 * cfg.consensus_config.max_backlog_batch_size) => {
+                curr_client_req_num = n_;
+            },
+            // msg = client_rx.recv() => {
+            //     curr_client_req_num = 1;
+            //     curr_client_req.push(msg.unwrap());
+            // }
             tick = signature_timer.wait() => {
                 signature_timer_tick = tick;
             },

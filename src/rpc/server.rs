@@ -1,7 +1,7 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use std::{fs::File, future::Future, io::{self, Cursor, Error}, path, sync::{atomic::AtomicBool, Arc}, time::{Duration, Instant}};
+use std::{collections::HashMap, fs::File, future::Future, io::{self, Cursor, Error}, path, sync::{atomic::AtomicBool, Arc}, time::{Duration, Instant}};
 
 use crate::{config::{AtomicConfig, Config}, consensus::handler::ForwardedMessage, crypto::{AtomicKeyStore, KeyStore}, rpc::auth, utils::AtomicStruct};
 use indexmap::IndexMap;
@@ -109,7 +109,7 @@ pub struct FrameReader {
 impl FrameReader {
     pub fn new(stream: ReadHalf<TlsStream<TcpStream>>) -> FrameReader {
         FrameReader {
-            buffer: vec![0u8; 4096],
+            buffer: vec![0u8; 65536],
             stream,
             offset: 0,
             bound: 0
@@ -266,17 +266,21 @@ where
         }
     }
 
-    pub async fn handle_stream(
+    pub async fn handle_auth(
         server: Arc<Self>,
-        mut stream: TlsStream<TcpStream>,
-        addr: core::net::SocketAddr,
-    ) -> io::Result<()> {
+        stream: &mut TlsStream<TcpStream>,
+        addr: core::net::SocketAddr
+    ) -> io::Result<(SenderType, bool, u64)> {
         let mut sender = SenderType::Anon;
+        let mut reply_chan = false;
+        let mut client_sub_id = 0;
         if server.do_auth {
-            let res = auth::handshake_server(&server, &mut stream).await;
+            let res = auth::handshake_server(&server, stream).await;
             let name = match res {
-                Ok(nam) => {
+                Ok((nam, is_reply_chan, _client_sub_id)) => {
                     trace!("Authenticated {} at Addr {}", nam, addr);
+                    reply_chan = is_reply_chan;
+                    client_sub_id = _client_sub_id;
                     nam
                 }
                 Err(e) => {
@@ -285,11 +289,27 @@ where
                 }
             };
             sender = SenderType::Auth(name);
-        }
+        };
+        
 
+        Ok((sender, reply_chan, client_sub_id))
+    }
+
+    pub async fn handle_stream(
+        server: Arc<Self>,
+        stream: TlsStream<TcpStream>,
+        stream_out: Option<TlsStream<TcpStream>>,
+        addr: core::net::SocketAddr,
+        sender: SenderType
+    ) -> io::Result<()> {
         let (rx, mut _tx) = split(stream);
         let mut read_buf = vec![0u8; server.config.get().rpc_config.recv_buffer_size as usize];
-        let mut tx_buf = BufWriter::new(_tx);
+        let mut tx_buf = if stream_out.is_some() {
+            let (__stream_out_rx, stream_out_tx) = split(stream_out.unwrap());
+            BufWriter::new(stream_out_tx)
+        } else {
+            BufWriter::new(_tx)
+        };
         let mut rx_buf = FrameReader::new(rx);
         let (ack_tx, mut ack_rx) = mpsc::channel(5);
         let (resp_tx, mut resp_rx) = mpsc::channel(5);
@@ -416,16 +436,32 @@ where
 
         let listener = TcpListener::bind(server_addr).await?;
 
+        let mut parked_streams = HashMap::new();
+
         loop {
             let (socket, addr) = listener.accept().await?;
             socket.set_nodelay(true)?;
             let acceptor = tls_acceptor.clone();
             let server_ = server.clone();
+            let mut stream = acceptor.accept(socket).await?;
+            let (sender, is_reply_chan, client_sub_id) = Self::handle_auth(server.clone(), &mut stream, addr).await?;
+            
+            let map_name = sender.to_string() + "#" + &client_sub_id.to_string();
+            
+            if is_reply_chan {
+                parked_streams.insert(map_name, stream);
+                continue;
+            }
+
+            let stream_out = parked_streams.remove(&map_name);
             // It is cheap to open a lot of green threads in tokio
             // No need to have a list of sockets to select() from.
             tokio::spawn(async move {
-                let stream = acceptor.accept(socket).await?;
-                Self::handle_stream(server_, stream, addr).await?;
+                Self::handle_stream(server_, stream, stream_out, addr, sender.clone()).await?;
+                // if let Some(stream_out) = ret {
+                //     let stream = acceptor.accept(socket).await?;
+                //     Self::handle_stream(server_, stream, Some(stream_out), addr).await?;
+                // }
                 Ok(()) as io::Result<()>
             });
         }

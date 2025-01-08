@@ -146,7 +146,8 @@ pub struct WorkloadConfig {
 pub struct ClientConfig {
     pub net_config: ClientNetConfig,
     pub rpc_config: ClientRpcConfig,
-    pub workload_config: WorkloadConfig
+    pub workload_config: WorkloadConfig,
+    pub full_duplex: bool
 }
 
 impl Config {

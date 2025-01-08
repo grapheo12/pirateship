@@ -57,7 +57,7 @@ where
         let ctx = PinnedServerContext::new(config, &key_store);
         ConsensusNode{
             server: Arc::new(Server::new(config, ctx.clone(), &key_store)),
-            client: Client::new(config, &key_store).into(),
+            client: Client::new(config, &key_store, false, 0).into(),
             ctx: ctx.clone(),
             engine: Engine::new(ctx.clone()),
         }

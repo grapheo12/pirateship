@@ -140,6 +140,7 @@ fn test_clientconfig_serialize() {
                 write_byz_commit_ratio: 0.5,
             }),
         },
+        full_duplex: false
     };
     let s = config.serialize();
     println!("{}", s);

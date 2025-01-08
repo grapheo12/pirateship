@@ -19,6 +19,15 @@ pub enum SenderType {
     Auth(String),
 }
 
+impl SenderType {
+    fn to_string(&self) -> String {
+        match self {
+            SenderType::Anon => String::from("Anon"),
+            SenderType::Auth(s) => s.to_owned(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Message(Arc<Vec<u8>>, usize, SenderType);
 

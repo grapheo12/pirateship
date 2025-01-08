@@ -18,6 +18,7 @@ fn get_small_tx_msg() -> ProtoClientRequest {
         origin: String::from("client1"),
         // sig: vec![0u8; SIGNATURE_LENGTH],
         sig: vec![rand::random(); 1],
+        client_tag: 0
     }
 }
 
@@ -42,6 +43,7 @@ fn get_large_tx_msg() -> ProtoClientRequest {
         origin: String::from("client1"),
         // sig: vec![0u8; SIGNATURE_LENGTH],
         sig: vec![0u8; 1],
+        client_tag: 0,
     }
 }
 

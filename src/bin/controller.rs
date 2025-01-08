@@ -179,7 +179,7 @@ async fn main() -> io::Result<()> {
     let mut buf = Vec::new();
     rpc_msg_body.encode(&mut buf).expect("Protobuf error");
 
-    let client = Client::new(&client_cfg.fill_missing(), &keys);
+    let client = Client::new(&client_cfg.fill_missing(), &keys, true, 0);
     let client = client.into();
     let mut curr_leader = String::from("node1");
 

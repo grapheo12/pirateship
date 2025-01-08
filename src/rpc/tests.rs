@@ -115,7 +115,7 @@ async fn test_authenticated_client_server() {
         &config.rpc_config.signing_priv_key_path,
     );
     let server = Arc::new(Server::new(&config, ServerEmptyCtx{}, &keys));
-    let client = Client::new(&config, &keys).into();
+    let client = Client::new(&config, &keys, false, 0).into();
     run_body(&server, &client, &config).await.unwrap();
 
     let server = Arc::new(Server::new(&config, ServerEmptyCtx{}, &keys));
@@ -204,7 +204,7 @@ async fn test_3_node_bcast() {
         let _ = Server::run(server3).await;
     });
 
-    let client = Client::new(&config1, &keys1).into();
+    let client = Client::new(&config1, &keys1, false, 0).into();
     let names = vec![
         String::from("node1"),
         String::from("node2"),
@@ -246,7 +246,7 @@ pub fn test_auth_serde() {
         )),
     };
 
-    let resp_buf = h.serialize();
+    let resp_buf = h.serialize(false, 0);
 
     println!("{:?}", resp_buf);
 
@@ -257,7 +257,7 @@ pub fn test_auth_serde() {
 
     println!("{:?}", resp);
 
-    if !(resp.name == h.name && resp.signature == h.signature) {
+    if !(resp.0.name == h.name && resp.0.signature == h.signature) {
         panic!("Field mismatch: {:?} vs {:?}", h, resp);
     }
 }

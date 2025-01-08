@@ -111,7 +111,7 @@ impl ProfilerNode
         let ctx = PinnedProfilerContext::new(config, &key_store);
         ProfilerNode {
             server: Arc::new(Server::new(config, ctx.clone(), &key_store)),
-            client: Client::new(config, &key_store).into(),
+            client: Client::new(config, &key_store, false, 0).into(),
             ctx: ctx.clone(),
         }
     }
