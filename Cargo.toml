@@ -64,6 +64,10 @@ harness = false
 name = "storage"
 harness = false
 
+[[bench]]
+name = "crypto_service_bench"
+harness = false
+
 
 [features]
 # Protocol specifics
