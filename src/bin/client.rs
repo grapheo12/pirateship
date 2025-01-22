@@ -1,7 +1,7 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender}, Semaphore};
 use log::{debug, error, info, trace, warn};
 use pft::{
     config::{default_log4rs_config, ClientConfig}, consensus::utils::get_f_plus_one_send_list, crypto::{cmp_hash, KeyStore}, proto::{
@@ -15,7 +15,7 @@ use prost::Message;
 use rand::{distributions::WeightedIndex, prelude::*};
 use rand_chacha::ChaCha20Rng;
 use core::error;
-use std::{collections::HashMap, env, fs, io, path, pin::Pin, sync::{Arc, Mutex}, time::Duration};
+use std::{collections::HashMap, env, fs, io, ops::Deref, path, pin::Pin, sync::{Arc, Mutex}, time::Duration};
 use tokio::{sync::mpsc, task::JoinSet, time::sleep};
 use std::time::Instant;
 
@@ -65,7 +65,31 @@ macro_rules! reset_backoff {
     };
 }
 
-const MAX_OUTSTANDING_REQUESTS: usize = 256;
+const MAX_OUTSTANDING_REQUESTS: usize = 1024;
+
+struct ClientCtx {
+    pub sema: Semaphore,
+    pub outstanding_requests: Mutex<Vec<(u64, Vec<u8>, Instant)>>
+}
+
+struct PinnedClientCtx(pub Arc<Pin<Box<ClientCtx>>>);
+
+impl Deref for PinnedClientCtx {
+    type Target = ClientCtx;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl PinnedClientCtx {
+    pub fn new(max_outstanding: usize) -> PinnedClientCtx {
+        PinnedClientCtx(Arc::new(Box::pin(ClientCtx {
+            sema: Semaphore::new(max_outstanding),
+            outstanding_requests: Mutex::new(Vec::new()),
+        })))
+    }
+}
 
 async fn check_response(
     idx: usize, client: &PinnedClient, num_requests: usize, config: &mut ClientConfig,
@@ -259,7 +283,7 @@ async fn propose_new_request(
     outstanding_requests.push((client_tag, buf, start));
 }
 
-async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, config: ClientConfig, byz_resp: Arc<Pin<Box<Mutex<HashMap<(u64, u64), Instant>>>>>) -> io::Result<()> {    
+async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, config: ClientConfig, byz_resp: Arc<Pin<Box<Mutex<HashMap<(u64, u64), Instant>>>>>, sema: Arc<Pin<Box<Semaphore>>>) -> io::Result<()> {    
     let mut config = config.clone();
     let mut leader_rr = 0;
     let mut any_node_rr = 0;
@@ -322,7 +346,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
         // Force check on old requests
         if outstanding_requests.len() >= MAX_OUTSTANDING_REQUESTS {
             PinnedClient::force_flush(client, &curr_leader).await.expect("Should be able to flush");
-            while outstanding_requests.len() > 0 {
+            while outstanding_requests.len() > MAX_OUTSTANDING_REQUESTS / 2 {
                 if let Ok(msg) = PinnedClient::await_reply(client, &curr_leader).await {
                     let res = check_response(idx, client, num_requests, &mut config, &byz_resp, msg, &mut current_backoff_ms, &mut node_list, &mut outstanding_requests, &mut curr_leader, &mut workload_generator, &sample_item, &weight_dist, &mut rng).await;
                     // info!("Client Id: {}, Response for {:?} (force)", idx, res);
@@ -640,7 +664,8 @@ async fn main() -> io::Result<()> {
         let c = Client::new(&net_config, &keys, true, i as u64).into();
         // let _tx = tx.clone();
         let _resp_store = resp_store.clone();
-        client_handles.spawn(async move { client_runner(i, &c, config.workload_config.num_requests, client_config.clone(), _resp_store).await });
+        let sema = Arc::new(Box::pin(Semaphore::new(MAX_OUTSTANDING_REQUESTS)));
+        client_handles.spawn(async move { client_runner(i, &c, config.workload_config.num_requests, client_config.clone(), _resp_store, sema.clone()).await });
     }
 
 

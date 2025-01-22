@@ -76,7 +76,7 @@ impl ConsensusState {
 
 pub type ForwardedMessage = (rpc::proto_payload::Message, String, LatencyProfile);
 pub type ForwardedMessageWithAckChan = (
-    rpc::proto_payload::Message,
+    Box<rpc::proto_payload::Message>,
     String,
     MsgAckChan,
     LatencyProfile
@@ -182,7 +182,7 @@ impl PinnedServerContext {
     pub fn new(cfg: &Config, keys: &KeyStore) -> PinnedServerContext {
         let node_ch = mpsc::channel(1000 * cfg.consensus_config.max_backlog_batch_size);
         // let client_ch = mpsc::channel(10 * cfg.consensus_config.max_backlog_batch_size);
-        let client_ch = mpsc::channel(50 * cfg.consensus_config.max_backlog_batch_size);
+        let client_ch = mpsc::channel(1000 * cfg.consensus_config.max_backlog_batch_size);
         let black_hole_ch = mpsc::channel(1_000_000);
         let reconf_channel = mpsc::channel(100 * cfg.consensus_config.max_backlog_batch_size);
         let send_list = get_everyone_except_me(&cfg.net_config.name, &cfg.consensus_config.node_list);
@@ -302,37 +302,43 @@ pub async fn consensus_rpc_handler<'a>(
                 Ok(RespType::RespAndTrack)
             };
 
-            let msg = (body.message.unwrap(), sender, ack_tx, profile);
+            let msg = (Box::new(body.message.unwrap()), sender, ack_tx, profile);
 
-            let receipt = ProtoClientReply {
-                reply: Some(
-                    crate::proto::client::proto_client_reply::Reply::Receipt(
-                        ProtoTransactionReceipt {
-                            req_digest: vec![0u8; DIGEST_LENGTH],
-                            block_n: 0,
-                            tx_n: 0,
-                            results:None,
-                            await_byz_response: false,
-                            byz_responses: vec![],
-                        },
-                )),
-                client_tag
-            };
+            /* Test Code BEGIN */
+            // let receipt = ProtoClientReply {
+            //     reply: Some(
+            //         crate::proto::client::proto_client_reply::Reply::Receipt(
+            //             ProtoTransactionReceipt {
+            //                 req_digest: vec![0u8; DIGEST_LENGTH],
+            //                 block_n: 0,
+            //                 tx_n: 0,
+            //                 results:None,
+            //                 await_byz_response: false,
+            //                 byz_responses: vec![],
+            //             },
+            //     )),
+            //     client_tag
+            // };
 
-            let mut buf = Vec::new();
-            receipt.encode(&mut buf);
-            let sz = buf.len();
-            let reply = PinnedMessage::from(buf, sz, SenderType::Anon);
-            msg.2.send((reply, msg.3.clone())).await;
+            // let mut buf = Vec::new();
+            // receipt.encode(&mut buf);
+            // let sz = buf.len();
+            // let reply = PinnedMessage::from(buf, sz, SenderType::Anon);
+            // msg.2.send((reply, msg.3.clone())).await;
 
-            // if let Err(_) = ctx.client_queue.0.send(msg).await {
-            //     return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
-            // }
+            /* Test Code END */
 
+            /* Real Code BEGIN */
+
+            if let Err(_) = ctx.client_queue.0.send(msg).await {
+                return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
+            }
+
+            /* Real Code END */
             return ret;
         }
         rpc::proto_payload::Message::BackfillRequest(_) => {
-            let msg = (body.message.unwrap(), sender, ack_tx, profile);
+            let msg = (Box::new(body.message.unwrap()), sender, ack_tx, profile);
             if let Err(_) = ctx.client_queue.0.send(msg).await {
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }
@@ -340,7 +346,7 @@ pub async fn consensus_rpc_handler<'a>(
             return Ok(RespType::RespAndTrack);
         }
         _ => {
-            let msg = (body.message.unwrap(), sender, ack_tx, profile);
+            let msg = (Box::new(body.message.unwrap()), sender, ack_tx, profile);
             if let Err(_) = ctx.node_queue.0.send(msg).await {
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }
@@ -371,7 +377,7 @@ where Engine: crate::execution::Engine
 {
     let (msg, sender, ack_tx, profile) = ms;
     let _sender = sender.clone();
-    match &msg {
+    match msg.as_ref() {
         crate::proto::rpc::proto_payload::Message::AppendEntries(ae) => {
             profile.register("AE chan wait");
             let (last_n, updated_last_n, seq_nums, should_update_ci) =
@@ -441,7 +447,7 @@ pub async fn do_respond_to_backfill_requests(ctx: &PinnedServerContext, curr_cli
     let mut need_to_respond = Vec::new();
     
     curr_client_req.retain(|req| {
-        match &req.0 {
+        match req.0.as_ref() {
             crate::proto::rpc::proto_payload::Message::BackfillRequest(_) => {
                 need_to_respond.push(req.clone());
                 false
@@ -452,7 +458,7 @@ pub async fn do_respond_to_backfill_requests(ctx: &PinnedServerContext, curr_cli
     });
 
     for req in &mut need_to_respond {
-        match &req.0 {
+        match req.0.as_mut() {
             crate::proto::rpc::proto_payload::Message::BackfillRequest(bfr) => {
                 req.3.register("Backfill Request chan wait");
                 do_process_backfill_request(ctx.clone(), &mut req.2, bfr, &req.1).await;
@@ -513,7 +519,7 @@ where
         let cfg = ctx.config.get();
         tokio::select! {
             biased;
-            n_ = client_rx.recv_many(&mut curr_client_req, 16 * cfg.consensus_config.max_backlog_batch_size) => {
+            n_ = client_rx.recv_many(&mut curr_client_req, 1 * cfg.consensus_config.max_backlog_batch_size) => {
                 curr_client_req_num = n_;
             },
             // msg = client_rx.recv() => {
@@ -611,6 +617,35 @@ where
         #[cfg(feature = "no_pipeline")]
         ctx.should_progress.acquire().await.unwrap().forget();
 
+        /* Test Code BEGIN */
+        // for msg in &request_batch {
+        //     let client_tag = if let crate::proto::rpc::proto_payload::Message::ClientRequest(c) = msg.0.as_ref() {
+        //         c.client_tag
+        //     } else { 0 };
+
+        //     let receipt = ProtoClientReply {
+        //         reply: Some(
+        //             crate::proto::client::proto_client_reply::Reply::Receipt(
+        //                 ProtoTransactionReceipt {
+        //                     req_digest: vec![0u8; DIGEST_LENGTH],
+        //                     block_n: 0,
+        //                     tx_n: 0,
+        //                     results:None,
+        //                     await_byz_response: false,
+        //                     byz_responses: vec![],
+        //                 },
+        //         )),
+        //         client_tag
+        //     };
+
+        //     let mut buf = Vec::new();
+        //     receipt.encode(&mut buf);
+        //     let sz = buf.len();
+        //     let reply = PinnedMessage::from(buf, sz, SenderType::Anon);
+        //     msg.2.send((reply, msg.3.clone())).await;
+        // }
+        /* Test Code END */
+        /* Real Code BEGIN */
         trace!("AppendEntries with {} entries", request_batch.len());
         match do_append_entries(
             ctx.clone(), &engine.clone(), client.clone(),
@@ -624,6 +659,7 @@ where
                 should_sig = false;
             }
         };
+        /* Real Code END */
 
         if should_sig {
             pending_signatures = 0;
@@ -758,7 +794,7 @@ pub async fn handle_node_messages<Engine>(
 
             // If we are in the Dormant or Learner stage, only process AppendEntries or ViewChange. (No votes)
             if stage == LifecycleStage::Dormant as i8 || stage == LifecycleStage::Learner as i8 {
-                if let crate::proto::rpc::proto_payload::Message::AppendEntries(_) = req.0 {
+                if let crate::proto::rpc::proto_payload::Message::AppendEntries(_) = req.0.as_ref() {
                     // If I am Dormant, by this msg, I become a learner.
                     if stage == LifecycleStage::Dormant as i8 {
                         info!("Lifecycle stage: Dormant -> Learner");
@@ -768,7 +804,7 @@ pub async fn handle_node_messages<Engine>(
                         error!("Error processing append entries: {}", e);
                     }
                 }
-                if let crate::proto::rpc::proto_payload::Message::ViewChange(_) = req.0 {
+                if let crate::proto::rpc::proto_payload::Message::ViewChange(_) = req.0.as_ref() {
                     // If I am Dormant, by this msg, I become a learner.
                     if stage == LifecycleStage::Dormant as i8 {
                         info!("Lifecycle stage: Dormant -> Learner");
@@ -784,7 +820,7 @@ pub async fn handle_node_messages<Engine>(
 
             // AppendEntries should be processed by a single thread.
             // Only votes and backfill requests can be safely processed by multiple threads.
-            if let crate::proto::rpc::proto_payload::Message::Vote(_) = req.0 {
+            if let crate::proto::rpc::proto_payload::Message::Vote(_) = req.0.as_ref() {
                 let cfg = ctx.config.get();
                 let rr_cnt =
                     vote_worker_rr_cnt % cfg.consensus_config.vote_processing_workers;

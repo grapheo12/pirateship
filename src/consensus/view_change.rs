@@ -938,7 +938,7 @@ pub async fn force_noop(ctx: &PinnedServerContext) {
     let request = crate::proto::rpc::proto_payload::Message::ClientRequest(client_req);
     let profile = LatencyProfile::new();
 
-    let _ = client_tx.send((request, _cfg.net_config.name.clone(), ctx.__client_black_hole_channel.0.clone(), profile));
+    let _ = client_tx.send((Box::new(request), _cfg.net_config.name.clone(), ctx.__client_black_hole_channel.0.clone(), profile));
 
     
 }

@@ -311,8 +311,8 @@ where
             BufWriter::new(_tx)
         };
         let mut rx_buf = FrameReader::new(rx);
-        let (ack_tx, mut ack_rx) = mpsc::channel(5);
-        let (resp_tx, mut resp_rx) = mpsc::channel(5);
+        let (ack_tx, mut ack_rx) = mpsc::channel(1000);
+        let (resp_tx, mut resp_rx) = mpsc::channel(1000);
         
         let server2 = server.clone();
         let hndl = tokio::spawn(async move {

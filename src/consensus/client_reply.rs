@@ -20,7 +20,7 @@ use super::log::Log;
 
 pub async fn bulk_reply_to_client(reqs: &Vec<ForwardedMessageWithAckChan>, reply: Option<Reply>) {
     for (req, _, chan, profile) in reqs {
-        if let crate::proto::rpc::proto_payload::Message::ClientRequest(req) = req {
+        if let crate::proto::rpc::proto_payload::Message::ClientRequest(req) = req.as_ref() {
             let client_tag = req.client_tag;
             let reply_body = ProtoClientReply {
                 reply: reply.clone(),
@@ -97,7 +97,7 @@ pub async fn do_respond_to_read_requests<Engine>(
 {
     let mut outgoing = Vec::new();
     reqs.retain(|req| {
-        match &req.0 {
+        match req.0.as_ref() {
             crate::proto::rpc::proto_payload::Message::ClientRequest(proto_client_request) => {
                 if proto_client_request.tx.is_some() {
                     let on_recv = &proto_client_request.tx.as_ref().unwrap().on_receive;

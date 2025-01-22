@@ -14,13 +14,13 @@ use crate::{
     consensus::{
         backfill::maybe_backfill_fork_till_last_match, handler::{ForwardedMessageWithAckChan, PinnedServerContext}, log::{Log, LogEntry}, reconfiguration::decide_my_lifecycle_stage
     }, crypto::{cmp_hash, hash, DIGEST_LENGTH}, get_tx_list, proto::{
-        consensus::{
+        client::{ProtoClientReply, ProtoTransactionReceipt}, consensus::{
             proto_block::Sig, DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoTransactionList, ProtoVote
         }, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase}, rpc::{self, ProtoPayload}
     }, rpc::{
         client::PinnedClient,
         server::LatencyProfile,
-        PinnedMessage,
+        PinnedMessage, SenderType,
     }
 };
 
@@ -653,7 +653,7 @@ where Engine: crate::execution::Engine
         }
     };
 
-    let mut tx = Vec::new();
+    let mut tx = Vec::with_capacity(reqs.len());
     let block_n = fork.last() + 1;
     let mut profile = LatencyProfile::new();
 
@@ -662,11 +662,12 @@ where Engine: crate::execution::Engine
         for (ms, sender, chan, profile) in reqs {
             profile.register("Client channel recv");
 
-            if let crate::proto::rpc::proto_payload::Message::ClientRequest(req) = ms {
+            if let crate::proto::rpc::proto_payload::Message::ClientRequest(req) = ms.as_ref() {
                 if req.tx.is_some() {
                     
+                    // tx.push(ProtoTransaction::default());
                     tx.push(req.tx.clone().unwrap());
-                    lack_pend.insert((block_n, tx.len() - 1), (chan.clone(), profile.to_owned(), sender.clone(), req.client_tag));
+                    // lack_pend.insert((block_n, tx.len() - 1), (chan.clone(), profile.to_owned(), sender.clone(), req.client_tag));
                 }
                 
             }
@@ -684,6 +685,7 @@ where Engine: crate::execution::Engine
     let mut block = ProtoBlock {
         tx: Some(crate::proto::consensus::proto_block::Tx::TxList(ProtoTransactionList {
             tx_list: tx,
+            // tx_list: vec![],
         })),
         n: block_n,
         parent: fork.last_hash(),
@@ -771,10 +773,10 @@ pub async fn broadcast_append_entries(
     };
     
     
-    let mut buf = Vec::new();
     let rpc_msg_body = ProtoPayload {
         message: Some(crate::proto::rpc::proto_payload::Message::AppendEntries(ae)),
     };
+    let mut buf = Vec::with_capacity(rpc_msg_body.encoded_len());
 
     rpc_msg_body.encode(&mut buf)?;
     let sz = buf.len();
@@ -910,6 +912,36 @@ where Engine: crate::execution::Engine
     let _cfg = ctx.config.get();
     let (ae, profile) = create_and_push_block(ctx.clone(), client.clone(), engine, reqs, should_sign).await?;
 
+    /* Test Code BEGIN */
+    for msg in reqs {
+        let client_tag = if let crate::proto::rpc::proto_payload::Message::ClientRequest(c) = msg.0.as_ref() {
+            c.client_tag
+        } else { 0 };
+
+        let receipt = ProtoClientReply {
+            reply: Some(
+                crate::proto::client::proto_client_reply::Reply::Receipt(
+                    ProtoTransactionReceipt {
+                        req_digest: vec![0u8; DIGEST_LENGTH],
+                        block_n: 0,
+                        tx_n: 0,
+                        results:None,
+                        await_byz_response: false,
+                        byz_responses: vec![],
+                    },
+            )),
+            client_tag
+        };
+
+        let mut buf = Vec::new();
+        receipt.encode(&mut buf);
+        let sz = buf.len();
+        let reply = PinnedMessage::from(buf, sz, SenderType::Anon);
+        msg.2.send((reply, msg.3.clone())).await;
+    }
+    /* Test Code END */
+    
+    /* Real Code BEGIN */
     // Add this block to byz_qc_pending, if it is a signed block
     #[cfg(not(feature = "no_qc"))]
     {
@@ -936,5 +968,6 @@ where Engine: crate::execution::Engine
     // Lock on the fork is not kept when broadcasting.
     broadcast_append_entries(ctx, client, ae, send_list, profile).await?;
 
+    /* Real Code END */
     Ok(())
 }
