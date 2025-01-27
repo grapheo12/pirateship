@@ -255,6 +255,21 @@ where
         }
     }
 
+    pub fn new_atomic(
+        config: AtomicConfig,
+        ctx: S,
+        key_store: AtomicKeyStore,
+    ) -> Server<S> {
+        Server {
+            config: config.clone(),
+            tls_certs: Server::<S>::load_certs(&config.get().net_config.tls_cert_path),
+            tls_keys: Server::<S>::load_keys(&config.get().net_config.tls_key_path),
+            ctx,
+            do_auth: true,
+            key_store,
+        }
+    }
+
     pub fn new_unauthenticated(cfg: &Config, ctx: S) -> Server<S> {
         Server {
             config: AtomicConfig::new(cfg.clone()),

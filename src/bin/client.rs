@@ -65,7 +65,7 @@ macro_rules! reset_backoff {
     };
 }
 
-const MAX_OUTSTANDING_REQUESTS: usize = 1024;
+const MAX_OUTSTANDING_REQUESTS: usize = 16;
 
 struct ClientCtx {
     pub sema: Semaphore,
@@ -247,6 +247,7 @@ async fn propose_new_request(
 
     let mut buf = Vec::new();
     rpc_msg_body.encode(&mut buf).expect("Protobuf error");
+    info!("msg size: {}", buf.len());
 
     let start = Instant::now();
     loop {
@@ -292,7 +293,7 @@ async fn client_runner(idx: usize, client: &PinnedClient, num_requests: usize, c
     let mut i = 0;
 
     let mut rng: ChaCha20Rng = ChaCha20Rng::seed_from_u64(42 + idx as u64);
-    let sample_item: [(bool, i32); 2] = [(true, 1), (false, 499)];
+    let sample_item: [(bool, i32); 2] = [(true, 1), (false, 9999)];
 
 
     let weight_dist: WeightedIndex<i32> = WeightedIndex::new(sample_item.iter().map(|(_, weight)| weight)).unwrap();

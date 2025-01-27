@@ -85,6 +85,13 @@ pub struct ConsensusConfig {
     pub liveness_u: u64,
 }
 
+impl ConsensusConfig {
+    pub fn get_leader_for_view(&self, view: u64) -> String {
+        let n = self.node_list.len() as u64;
+        self.node_list[((view - 1) % n) as usize].clone()
+    }
+}
+
 #[cfg(feature = "platforms")]
 impl ConsensusConfig {
     pub fn validate_or_die(&self) {

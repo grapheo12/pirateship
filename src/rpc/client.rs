@@ -321,9 +321,6 @@ impl PinnedClient {
             auth::handshake_client(&client, &mut stream2, false, client.0.client_sub_id).await?;
             let _s = PinnedTlsStream::new(stream2.into());
             sock_map.insert(name.clone(), _s.clone());
-
-            info!("Sock map size: {}", sock_map.len());
-
             Some(_s)            
         } else {
             None

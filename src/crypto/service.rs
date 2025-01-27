@@ -1,13 +1,23 @@
 use ed25519_dalek::SIGNATURE_LENGTH;
+use prost::Message;
 use tokio::{sync::{mpsc::{channel, Receiver, Sender}, oneshot}, task::JoinSet};
 
-use super::{hash, AtomicKeyStore, KeyStore};
+use crate::proto::consensus::ProtoBlock;
+
+use super::{hash, AtomicKeyStore, HashType, KeyStore};
+
+pub struct CachedBlock {
+    pub block: ProtoBlock,
+    pub block_ser: Vec<u8>,
+    pub block_hash: HashType,
+}
 
 enum CryptoServiceCommand {
     Hash(Vec<u8>, oneshot::Sender<Vec<u8>>),
     Sign(Vec<u8>, oneshot::Sender<[u8; SIGNATURE_LENGTH]>),
     Verify(Vec<u8> /* data */, String /* Signer name */, [u8; SIGNATURE_LENGTH] /* Signature */, oneshot::Sender<bool>),
     ChangeKeyStore(KeyStore, oneshot::Sender<()>),
+    PrepareBlock(ProtoBlock, oneshot::Sender<CachedBlock>, oneshot::Sender<HashType>, bool /* must_sign */),
     Die
 }
 
@@ -50,6 +60,26 @@ impl CryptoService {
                 },
                 CryptoServiceCommand::Die => {
                     break;
+                },
+                CryptoServiceCommand::PrepareBlock(proto_block, block_tx, hash_tx, must_sign) => {
+                    let mut buf = proto_block.encode_to_vec();
+                    let mut hsh = hash(&buf);
+                    let mut block = proto_block;
+                    if must_sign {
+                        let keystore = keystore.get();
+                        let sig = keystore.sign(&hsh);
+                        block.sig = Some(crate::proto::consensus::proto_block::Sig::ProposerSig(sig.to_vec()));
+
+                        buf = block.encode_to_vec();
+                        hsh = hash(&buf);
+                    }
+
+                    hash_tx.send(hsh.clone());
+                    block_tx.send(CachedBlock {
+                        block,
+                        block_ser: buf,
+                        block_hash: hsh
+                    });
                 },
             }
         }
@@ -118,5 +148,13 @@ impl CryptoServiceConnector {
 
     pub async fn change_key_store(&mut self, key_store: KeyStore) {
         dispatch_cmd!(self, CryptoServiceCommand::ChangeKeyStore, key_store);
+    }
+
+    pub async fn prepare_block(&mut self, block: ProtoBlock, must_sign: bool) -> (oneshot::Receiver<CachedBlock>, oneshot::Receiver<HashType>) {
+        let (block_tx, block_rx) = oneshot::channel();
+        let (hash_tx, hash_rx) = oneshot::channel();
+        self.dispatch(CryptoServiceCommand::PrepareBlock(block, block_tx, hash_tx, must_sign)).await;
+
+        (block_rx, hash_rx)
     }
 }

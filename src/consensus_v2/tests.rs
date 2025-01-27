@@ -1,0 +1,162 @@
+use std::{sync::Arc, time::{Duration, Instant}};
+
+use tokio::{sync::Mutex, task::JoinSet};
+use crate::utils::channel::{Sender, make_channel};
+
+use crate::{config::{AtomicConfig, Config}, consensus_v2::{batch_proposal::BatchProposer, block_maker::BlockMaker}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}};
+
+use super::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag};
+
+const TEST_CRYPTO_NUM_TASKS: usize = 4;
+const MAX_TXS: usize = 500_000;
+const MAX_CLIENTS: usize = 10;
+const TEST_RATE: f64 = 500_000.0;
+
+async fn load(batch_proposer_tx: Sender<TxWithAckChanTag>, req_per_sec: f64) {
+    let sleep_time = Duration::from_secs_f64(1.0f64 / req_per_sec);
+    let mut last_fire_time = Instant::now();
+    let start = Instant::now();
+    let transaction = ProtoTransaction {
+        on_receive: None,
+        on_crash_commit: Some(ProtoTransactionPhase {
+            ops: vec![ProtoTransactionOp {
+                op_type: crate::proto::execution::ProtoTransactionOpType::Noop.into(),
+                operands: vec![vec![2u8; 512]],
+            }; 1],
+        }),
+        on_byzantine_commit: None,
+        is_reconfiguration: false,
+    };
+    for tag in 0..MAX_TXS {
+        while last_fire_time.elapsed() < sleep_time {
+            // Sleep is not that accurate. So busy wait
+        }
+
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+
+        let ack_chan_with_tag: MsgAckChanWithTag = (tx, tag as u64);
+
+        batch_proposer_tx.send((Some(transaction.clone()), ack_chan_with_tag)).await.unwrap();
+
+        last_fire_time = Instant::now();
+    }
+
+    let total_time = start.elapsed().as_secs_f64();
+    let input_rate = MAX_TXS as f64 / total_time;
+
+    println!("Input rate: {} req/s", input_rate);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn test_batch_proposal() {
+    // Generate configs first
+    let cfg_path = "configs/node1_config.json";
+    let cfg_contents = std::fs::read_to_string(cfg_path).expect("Invalid file path");
+
+    let config = Config::deserialize(&cfg_contents);
+    let _chan_depth = config.rpc_config.channel_depth as usize;
+    let key_store = KeyStore::new(&config.rpc_config.allowed_keylist_path, &config.rpc_config.signing_priv_key_path);
+
+    let config = AtomicConfig::new(config);
+    let keystore = AtomicKeyStore::new(key_store);
+    let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone());
+    crypto.run();
+
+    let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
+    let (block_maker_tx, block_maker_rx) = make_channel(_chan_depth);
+    let (control_command_tx, control_command_rx) = make_channel(_chan_depth);
+    let (qc_tx, qc_rx) = make_channel(_chan_depth);
+    let (block_broadcaster_tx, mut block_broadcaster_rx) = make_channel(_chan_depth);
+    let (client_reply_tx, mut client_reply_rx) = make_channel(_chan_depth);
+
+    let block_maker_crypto = crypto.get_connector();
+
+    let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx)));
+    let block_maker = Arc::new(Mutex::new(BlockMaker::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto)));
+
+    let mut handles = JoinSet::new();
+
+    handles.spawn(async move {
+        BatchProposer::run(batch_proposer).await;
+        println!("Batch proposer quits");
+    });
+
+    handles.spawn(async move {
+        while let Some(_) = client_reply_rx.recv().await {
+            // Sink
+        }
+    });
+
+
+    handles.spawn(async move {
+        BlockMaker::run(block_maker).await;
+        println!("Block maker quits");
+    });
+
+
+    for _ in 0..MAX_CLIENTS {
+        let __tx = batch_proposer_tx.clone();
+        handles.spawn(async move {
+            load(__tx, TEST_RATE).await;
+        });
+    }
+
+    let mut total_txs_output = 0;
+    let mut last_block = 0;
+    let mut underfull_batches = 0;
+    let mut signed_blocks = 0;
+
+    let start = Instant::now();
+    while let Some(block) = block_broadcaster_rx.recv().await {
+        let block = block.await.unwrap();
+
+        if block.block.n != last_block + 1 {
+            panic!("Monotonicity broken!");
+        }
+        last_block += 1;
+
+        let block_sz = match block.block.tx.unwrap() {
+            crate::proto::consensus::proto_block::Tx::TxList(proto_transaction_list) => {
+                proto_transaction_list.tx_list.len()
+            },
+            crate::proto::consensus::proto_block::Tx::TxListHash(vec) => {
+                vec.len()
+            },
+        };
+
+        if block_sz < config.get().consensus_config.max_backlog_batch_size {
+            underfull_batches += 1;
+        }
+
+        total_txs_output += block_sz;
+
+        if let Some(crate::proto::consensus::proto_block::Sig::ProposerSig(_)) = block.block.sig {
+            signed_blocks += 1;
+        }
+
+
+        if total_txs_output >= MAX_CLIENTS * MAX_TXS {
+            break;
+        }
+    }
+    let total_time = start.elapsed().as_secs_f64();
+    let throughput = total_txs_output as f64 / total_time;
+    println!("Throughput: {} req/s", throughput);
+    println!("Total blocks: {}", last_block);
+    println!("Underfull blocks: {}", underfull_batches);
+    println!("Signed blocks: {}", signed_blocks);
+
+    if underfull_batches > 10 {
+        panic!("Too many underfull batches");
+    }
+
+    let expected_signed_blocks = (last_block / config.get().consensus_config.signature_max_delay_blocks) as i32;
+
+    if signed_blocks < expected_signed_blocks - 5 || signed_blocks > expected_signed_blocks + 5 {
+        panic!("Too much or too few signed blocks");
+    }
+
+
+    handles.abort_all();
+}
