@@ -57,7 +57,7 @@ fn get_feature_set() -> (&'static str, &'static str) {
 
 async fn run_main(cfg: Config) -> io::Result<()> {
     #[cfg(feature = "app_logger")]
-    let node = consensus_v2::ConsensusNode::new(&cfg);
+    let mut node = consensus_v2::ConsensusNode::new(cfg);
     // #[cfg(feature = "app_logger")]
     // let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
     

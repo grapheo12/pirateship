@@ -7,7 +7,7 @@ use crate::{config::AtomicConfig, consensus::timer::ResettableTimer, crypto::{ha
 
 use super::batch_proposal::{MsgAckChanWithTag, RawBatch};
 
-pub enum BlockMakerControlCommand {
+pub enum BlockSequencerControlCommand {
     NewUnstableView(u64 /* view num */, u64 /* config num */),       // View changed to a new view, it is not stable, so don't propose new blocks.
     ViewStabilised(u64 /* view num */, u64 /* config num */),        // View is stable now, if I am the leader in this view, propose new blocks.
     NewViewMessage(u64 /* view num */, u64 /* config num */, Vec<ProtoForkValidation>, HashType /* new parent hash */, u64 /* new seq num */),  // Change view to unstable, use ProtoForkValidation to propose a new view message.
@@ -16,7 +16,7 @@ pub enum BlockMakerControlCommand {
 
 pub struct BlockSequencer {
     config: AtomicConfig,
-    control_command_rx: Receiver<BlockMakerControlCommand>,
+    control_command_rx: Receiver<BlockSequencerControlCommand>,
     
     batch_rx: Receiver<(RawBatch, Vec<MsgAckChanWithTag>)>,
     
@@ -41,7 +41,7 @@ pub struct BlockSequencer {
 impl BlockSequencer {
     pub fn new(
         config: AtomicConfig,
-        control_command_rx: Receiver<BlockMakerControlCommand>,
+        control_command_rx: Receiver<BlockSequencerControlCommand>,
         batch_rx: Receiver<(RawBatch, Vec<MsgAckChanWithTag>)>,
         qc_rx: Receiver<ProtoQuorumCertificate>,
         block_broadcaster_tx: Sender<oneshot::Receiver<CachedBlock>>,
@@ -183,7 +183,7 @@ impl BlockSequencer {
         self.current_qc_list.push(qc);
     }
 
-    async fn handle_control_command(&mut self, cmd: Option<BlockMakerControlCommand>) {
+    async fn handle_control_command(&mut self, cmd: Option<BlockSequencerControlCommand>) {
         if cmd.is_none() {
             return;
         }
@@ -191,19 +191,19 @@ impl BlockSequencer {
 
         match cmd {
             // Follow the changes, no questions asked!
-            BlockMakerControlCommand::NewUnstableView(v, c) => {
+            BlockSequencerControlCommand::NewUnstableView(v, c) => {
                 self.view = v;
                 self.config_num = c;
                 self.view_is_stable = false;
                 self.current_qc_list.retain(|e| e.view == self.view);
             },
-            BlockMakerControlCommand::ViewStabilised(v, c) => {
+            BlockSequencerControlCommand::ViewStabilised(v, c) => {
                 self.view = v;
                 self.config_num = c;
                 self.view_is_stable = true;
                 self.current_qc_list.retain(|e| e.view == self.view);
             },
-            BlockMakerControlCommand::NewViewMessage(v, c, fork_validation, new_parent_hash, new_seq_num) => {
+            BlockSequencerControlCommand::NewViewMessage(v, c, fork_validation, new_parent_hash, new_seq_num) => {
                 self.view = v;
                 self.config_num = c;
                 self.view_is_stable = false;

@@ -1,6 +1,7 @@
 mod batch_proposal;
 mod block_sequencer;
 mod block_broadcaster;
+mod staging;
 
 #[cfg(test)]
 mod tests;

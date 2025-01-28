@@ -86,7 +86,6 @@ impl BlockBroadcaster {
                     return Err(Error::new(ErrorKind::BrokenPipe, "channel closed"));
                 }
                 let block = block.unwrap().await;
-
                 self.process_other_block(block.unwrap()).await?;
             },
 
