@@ -238,6 +238,21 @@ impl Client {
             key_store: AtomicKeyStore::new(key_store.to_owned()),
         }
     }
+
+    pub fn new_atomic(config: AtomicConfig, key_store: AtomicKeyStore, full_duplex: bool, client_sub_id: u64) -> Client {
+        Client {
+            config: config.clone(),
+            full_duplex,
+            client_sub_id,
+            tls_ca_root_cert: Client::load_root_ca_cert(&config.get().net_config.tls_root_ca_cert_path),
+            sock_map: PinnedHashMap::new(),
+            do_auth: true,
+            chan_map: PinnedHashMap::new(),
+            worker_ready: PinnedHashSet::new(),
+            key_store,
+        }
+    }
+
     pub fn new_unauthenticated(cfg: &Config) -> Client {
         Client {
             config: AtomicConfig::new(cfg.clone()),

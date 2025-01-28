@@ -10,6 +10,9 @@ pub use storage::*;
 mod file_storage;
 pub use file_storage::*;
 
+mod storage_service;
+pub use storage_service::*;
+
 pub mod workload_generators;
 
 

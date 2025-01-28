@@ -1,5 +1,6 @@
 mod batch_proposal;
-mod block_maker;
+mod block_sequencer;
+mod block_broadcaster;
 
 #[cfg(test)]
 mod tests;
@@ -7,7 +8,7 @@ mod tests;
 use std::{io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::Arc};
 
 use batch_proposal::{BatchProposer, MsgAckChanWithTag, TxWithAckChanTag};
-use block_maker::BlockMaker;
+use block_sequencer::BlockSequencer;
 use log::{debug, warn};
 use prost::Message;
 use tokio::{sync::Mutex, task::JoinSet};
@@ -106,7 +107,7 @@ pub struct ConsensusNode {
     /// So the lock will be taken exactly ONCE and held forever.
     batch_proposer: Arc<Mutex<BatchProposer>>,
 
-    block_maker: Arc<Mutex<BlockMaker>>,
+    block_maker: Arc<Mutex<BlockSequencer>>,
 
     crypto: CryptoService,
 
@@ -138,7 +139,7 @@ impl ConsensusNode {
 
         let ctx = PinnedConsensusServerContext::new(config.clone(), keystore.clone(), batch_proposer_tx);
         let batch_proposer = BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx);
-        let block_maker = BlockMaker::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto);
+        let block_maker = BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto);
         
         Self {
             config: config.clone(),
@@ -167,7 +168,7 @@ impl ConsensusNode {
         });
 
         handles.spawn(async move {
-            BlockMaker::run(block_maker).await;
+            BlockSequencer::run(block_maker).await;
         });
 
         handles

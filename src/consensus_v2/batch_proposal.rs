@@ -2,7 +2,6 @@ use std::{io::Error, pin::Pin, sync::Arc, time::Duration};
 
 use std::io::ErrorKind;
 use log::warn;
-// use tokio::sync::mpsc::{self, Sender, Receiver};
 use crate::utils::channel::{Sender, Receiver};
 use tokio::sync::Mutex;
 

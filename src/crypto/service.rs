@@ -1,3 +1,5 @@
+use std::io::{BufReader, Error, ErrorKind};
+
 use ed25519_dalek::SIGNATURE_LENGTH;
 use prost::Message;
 use tokio::{sync::{mpsc::{channel, Receiver, Sender}, oneshot}, task::JoinSet};
@@ -18,6 +20,9 @@ enum CryptoServiceCommand {
     Verify(Vec<u8> /* data */, String /* Signer name */, [u8; SIGNATURE_LENGTH] /* Signature */, oneshot::Sender<bool>),
     ChangeKeyStore(KeyStore, oneshot::Sender<()>),
     PrepareBlock(ProtoBlock, oneshot::Sender<CachedBlock>, oneshot::Sender<HashType>, bool /* must_sign */),
+
+    // Takes the output of StorageService and converts it to CachedBlock.
+    CheckBlockSer(HashType, oneshot::Receiver<Result<Vec<u8>, Error>>, oneshot::Sender<Result<CachedBlock, Error>>),
     Die
 }
 
@@ -80,6 +85,34 @@ impl CryptoService {
                         block_ser: buf,
                         block_hash: hsh
                     });
+                },
+                CryptoServiceCommand::CheckBlockSer(hsh, ser_rx, block_tx) => {
+                    let res = ser_rx.await.unwrap();
+                    if let Err(e) = res {
+                        block_tx.send(Err(e));
+                        continue;
+                    }
+                    let block_ser = res.unwrap();
+
+                    let chk_hsh = hash(&block_ser);
+                    if !chk_hsh.eq(&hsh) {
+                        block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid hash")));
+                        continue;
+                    }
+
+                    let block = ProtoBlock::decode(block_ser.as_ref());
+                    match block {
+                        Ok(block) => {
+                            block_tx.send(Ok(CachedBlock {
+                                block,
+                                block_ser,
+                                block_hash: hsh,
+                            }));
+                        },
+                        Err(_) => {
+                            block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Decode error")));
+                        },
+                    };
                 },
             }
         }
@@ -157,4 +190,10 @@ impl CryptoServiceConnector {
 
         (block_rx, hash_rx)
     }
+
+    pub async fn check_block(&mut self, hsh: HashType, ser_rx: oneshot::Receiver<Result<Vec<u8>, Error>>) -> Result<CachedBlock, Error> {
+        dispatch_cmd!(self, CryptoServiceCommand::CheckBlockSer, hsh, ser_rx)
+    }
+
+
 }

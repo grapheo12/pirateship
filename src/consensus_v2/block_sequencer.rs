@@ -14,7 +14,7 @@ pub enum BlockMakerControlCommand {
 }
 
 
-pub struct BlockMaker {
+pub struct BlockSequencer {
     config: AtomicConfig,
     control_command_rx: Receiver<BlockMakerControlCommand>,
     
@@ -38,7 +38,7 @@ pub struct BlockMaker {
     last_signed_seq_num: u64,
 }
 
-impl BlockMaker {
+impl BlockSequencer {
     pub fn new(
         config: AtomicConfig,
         control_command_rx: Receiver<BlockMakerControlCommand>,
