@@ -8,6 +8,7 @@ use crate::proto::consensus::ProtoBlock;
 
 use super::{hash, AtomicKeyStore, HashType, KeyStore};
 
+#[derive(Clone)]
 pub struct CachedBlock {
     pub block: ProtoBlock,
     pub block_ser: Vec<u8>,

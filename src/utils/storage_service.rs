@@ -45,14 +45,15 @@ impl<S: StorageEngine> StorageService<S> {
             match cmd {
                 StorageServiceCommand::Put(key, val, ok_chan) => {
                     let res = self.db.put_block(&val, &key);
-                    ok_chan.send(res);
+                    ok_chan.send(res).unwrap();
                 },
                 StorageServiceCommand::Get(key, val_chan) => {
                     let res = self.db.get_block(&key);
-                    val_chan.send(res);
+                    val_chan.send(res).unwrap();
                 },
             }
         }
+        println!("I am so dead!!!");
         self.db.destroy();
     }
 }
@@ -60,7 +61,7 @@ impl<S: StorageEngine> StorageService<S> {
 impl StorageServiceConnector {
     pub async fn get_block(&mut self, block_hash: &HashType) -> Result<CachedBlock, Error> {
         let (tx, rx) = oneshot::channel();
-        self.cmd_tx.send(StorageServiceCommand::Get(block_hash.clone(), tx));
+        self.cmd_tx.send(StorageServiceCommand::Get(block_hash.clone(), tx)).await.unwrap();
 
         // Can't trust Disk to not have changed.
         self.crypto.check_block(block_hash.clone(), rx).await
@@ -68,7 +69,7 @@ impl StorageServiceConnector {
 
     pub async fn put_block(&self, block: &CachedBlock) -> Result<(), Error> {
         let (tx, rx) = oneshot::channel();
-        self.cmd_tx.send(StorageServiceCommand::Put(block.block_hash.clone(), block.block_ser.clone(), tx));
+        self.cmd_tx.send(StorageServiceCommand::Put(block.block_hash.clone(), block.block_ser.clone(), tx)).await.unwrap();
 
         rx.await.unwrap()
     }
