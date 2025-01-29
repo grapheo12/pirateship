@@ -2,13 +2,14 @@ use std::io::{BufReader, Error, ErrorKind};
 
 use ed25519_dalek::SIGNATURE_LENGTH;
 use prost::Message;
+use rand::{thread_rng, Rng};
 use tokio::{sync::{mpsc::{channel, Receiver, Sender}, oneshot}, task::JoinSet};
 
 use crate::proto::consensus::ProtoBlock;
 
 use super::{hash, AtomicKeyStore, HashType, KeyStore};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CachedBlock {
     pub block: ProtoBlock,
     pub block_ser: Vec<u8>,
@@ -80,24 +81,24 @@ impl CryptoService {
                         hsh = hash(&buf);
                     }
 
-                    hash_tx.send(hsh.clone());
+                    hash_tx.send(hsh.clone()).unwrap();
                     block_tx.send(CachedBlock {
                         block,
                         block_ser: buf,
                         block_hash: hsh
-                    });
+                    }).unwrap();
                 },
                 CryptoServiceCommand::CheckBlockSer(hsh, ser_rx, block_tx) => {
                     let res = ser_rx.await.unwrap();
                     if let Err(e) = res {
-                        block_tx.send(Err(e));
+                        block_tx.send(Err(e)).unwrap();
                         continue;
                     }
                     let block_ser = res.unwrap();
 
                     let chk_hsh = hash(&block_ser);
                     if !chk_hsh.eq(&hsh) {
-                        block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid hash")));
+                        block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid hash"))).unwrap();
                         continue;
                     }
 
@@ -108,10 +109,10 @@ impl CryptoService {
                                 block,
                                 block_ser,
                                 block_hash: hsh,
-                            }));
+                            })).unwrap();
                         },
                         Err(_) => {
-                            block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Decode error")));
+                            block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Decode error"))).unwrap();
                         },
                     };
                 },
@@ -133,7 +134,7 @@ impl CryptoService {
     pub fn get_connector(&self) -> CryptoServiceConnector {
         CryptoServiceConnector {
             cmd_txs: self.cmd_txs.iter().map(|e| e.clone()).collect(),
-            round_robin: 0,
+            round_robin: thread_rng().gen(),
             num_tasks: self.num_tasks
         }
     }
