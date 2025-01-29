@@ -26,6 +26,8 @@ pub mod channel {
         }
     }
 
+
+    /// Kanal doesn't seem to have ordered delivery sometimes.
     mod channel_kanal {
         pub struct AsyncReceiverWrapper<T>(kanal::AsyncReceiver<T>);
         impl<T> AsyncReceiverWrapper<T> {
@@ -45,6 +47,6 @@ pub mod channel {
         }
     }
 
-    pub use channel_kanal::*;
+    pub use channel_tokio::*;
 
 }

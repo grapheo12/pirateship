@@ -3,6 +3,7 @@ mod block_sequencer;
 mod block_broadcaster;
 mod staging;
 
+#[allow(unused_variables)]
 #[cfg(test)]
 mod tests;
 

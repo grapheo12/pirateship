@@ -1,5 +1,6 @@
 use std::{io::{Error, ErrorKind}, sync::Arc};
 
+use log::debug;
 use prost::Message;
 use tokio::sync::{oneshot, Mutex};
 
@@ -14,7 +15,7 @@ pub struct BlockBroadcaster {
     ci: u64,
     
     // Input ports
-    my_block_rx: Receiver<oneshot::Receiver<CachedBlock>>,
+    my_block_rx: Receiver<(u64, oneshot::Receiver<CachedBlock>)>,
     other_block_rx: Receiver<oneshot::Receiver<CachedBlock>>,
     control_command_rx: Receiver<BlockBroadcasterCommand>,
     
@@ -30,7 +31,7 @@ impl BlockBroadcaster {
     pub fn new(
         config: AtomicConfig,
         client: PinnedClient,
-        my_block_rx: Receiver<oneshot::Receiver<CachedBlock>>,
+        my_block_rx: Receiver<(u64, oneshot::Receiver<CachedBlock>)>,
         other_block_rx: Receiver<oneshot::Receiver<CachedBlock>>,
         control_command_rx: Receiver<BlockBroadcasterCommand>,
         storage: StorageServiceConnector,
@@ -76,7 +77,9 @@ impl BlockBroadcaster {
                 if block.is_none() {
                     return Err(Error::new(ErrorKind::BrokenPipe, "channel closed"));
                 }
-                let block = block.unwrap().await;
+                let block = block.unwrap();
+                debug!("Expecting {}", block.0);
+                let block = block.1.await;
                 self.process_my_block(block.unwrap()).await?;
 
             },
@@ -130,12 +133,15 @@ impl BlockBroadcaster {
         // Forward
         // Unfortunate cloning.
         self.logserver_tx.send(block.clone()).await.unwrap();
+
+        debug!("Sending {}", block.block.n);
         self.staging_tx.send(block.clone()).await.unwrap();
 
         Ok(())
     }
 
     async fn process_my_block(&mut self, block: CachedBlock) -> Result<(), Error> {
+        debug!("Processing {}", block.block.n);
         self.store_and_forward_internally(&block).await?;
 
 

@@ -1,5 +1,6 @@
 use std::{pin::Pin, sync::Arc, time::Duration};
 
+use log::trace;
 use tokio::sync::{oneshot, Mutex};
 use crate::utils::channel::{Sender, Receiver};
 
@@ -25,7 +26,7 @@ pub struct BlockSequencer {
     qc_rx: Receiver<ProtoQuorumCertificate>,
     current_qc_list: Vec<ProtoQuorumCertificate>,
 
-    block_broadcaster_tx: Sender<oneshot::Receiver<CachedBlock>>, // Last-ditch effort to parallelize hashing and signing of blocks, shouldn't matter.
+    block_broadcaster_tx: Sender<(u64, oneshot::Receiver<CachedBlock>)>, // Last-ditch effort to parallelize hashing and signing of blocks, shouldn't matter.
     client_reply_tx: Sender<(HashType, Vec<MsgAckChanWithTag>)>,
 
     crypto: CryptoServiceConnector,
@@ -44,7 +45,7 @@ impl BlockSequencer {
         control_command_rx: Receiver<BlockSequencerControlCommand>,
         batch_rx: Receiver<(RawBatch, Vec<MsgAckChanWithTag>)>,
         qc_rx: Receiver<ProtoQuorumCertificate>,
-        block_broadcaster_tx: Sender<oneshot::Receiver<CachedBlock>>,
+        block_broadcaster_tx: Sender<(u64, oneshot::Receiver<CachedBlock>)>,
         client_reply_tx: Sender<(HashType, Vec<MsgAckChanWithTag>)>,
         crypto: CryptoServiceConnector,
     ) -> Self {
@@ -166,8 +167,9 @@ impl BlockSequencer {
 
         self.client_reply_tx.send((self.parent_hash.clone(), replies)).await
             .expect("Should be able to send client_reply_tx");
-        self.block_broadcaster_tx.send(block_rx).await
+        self.block_broadcaster_tx.send((n, block_rx)).await
             .expect("Should be able to send block_broadcaster_tx");
+        trace!("Sequenced: {}", n);
     }
 
     async fn add_qc(&mut self, qc: Option<ProtoQuorumCertificate>) {

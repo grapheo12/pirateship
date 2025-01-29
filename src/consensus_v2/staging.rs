@@ -1,7 +1,7 @@
 use std::{collections::{HashMap, HashSet, VecDeque}, pin::Pin, sync::Arc, time::Duration};
 
 use async_recursion::async_recursion;
-use log::warn;
+use log::{debug, error, warn};
 use tokio::sync::Mutex;
 
 use crate::{config::AtomicConfig, consensus::timer::ResettableTimer, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{proto_block::Sig, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, rpc::client::PinnedClient, utils::channel::{Receiver, Sender}};
@@ -131,6 +131,7 @@ impl Staging {
                     return Err(())
                 }
                 let block = block.unwrap();
+                debug!("Got {}", block.block.n);
                 if i_am_leader {
                     self.process_block_as_leader(block).await?;
                 } else {
@@ -184,7 +185,16 @@ impl Staging {
 
     fn check_continuity(&self, block: &CachedBlock) -> bool {
         match self.pending_blocks.back() {
-            Some(b) => b.block.block.n + 1 == block.block.n && block.block.parent.eq(&b.block.block_hash),
+            Some(b) => {
+                let res = b.block.block.n + 1 == block.block.n && block.block.parent.eq(&b.block.block_hash);
+
+                if !res {
+                    let hash_match = block.block.parent.eq(&b.block.block_hash);
+                    error!("Current last block: {} Incoming block: {} Hash link match: {}", b.block.block.n, block.block.n, hash_match);
+                }
+
+                res
+            },
             None => block.block.n == self.bci + 1,
         }
     }
@@ -232,6 +242,7 @@ impl Staging {
         } else if block.block.view == self.view {
             // Within the same view, the log must be append-only.
             if !self.check_continuity(&block) {
+                println!("Continuity broken");
                 return Ok(());
             }
         } else {
@@ -275,6 +286,7 @@ impl Staging {
     }
 
     async fn process_block_as_follower(&mut self, block: CachedBlock) -> Result<(), ()> {
+        println!("process_block_as_follower");
         Ok(())
     }
 
@@ -292,10 +304,9 @@ impl Staging {
         let first_n = self.pending_blocks.front().unwrap().block.block.n;
         let last_n = self.pending_blocks.back().unwrap().block.block.n;
 
-        if first_n <= vote.n && vote.n <= last_n {
+        if !(first_n <= vote.n && vote.n <= last_n) {
             return Ok(());
         }
-
         // Vote for a block is a vote on all its ancestors.
         for block in self.pending_blocks.iter_mut() {
             if block.block.block.n <= vote.n {
@@ -360,8 +371,7 @@ impl Staging {
     /// If this happens then all QCs in self.pending_qcs such that block_n <= new_bci is removed.
     async fn maybe_byzantine_commit(&mut self, qc: ProtoQuorumCertificate) -> Result<(), ()> {
         // TODO::::
-        
-        let old_bci = self.
+        Ok(())
     }
 
     async fn process_view_change_message(&mut self, vc_msg: ProtoViewChange) -> Result<(), ()> {
