@@ -1,16 +1,17 @@
 use std::{sync::Arc, time::{Duration, Instant}};
 
-use tokio::{sync::Mutex, task::JoinSet, time::sleep};
+use tokio::{sync::Mutex, task::JoinSet};
 use crate::{consensus_v2::{block_broadcaster::BlockBroadcaster, staging::Staging}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
 
 use crate::{config::{AtomicConfig, Config}, consensus_v2::{batch_proposal::BatchProposer, block_sequencer::BlockSequencer}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}};
 
 use super::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag};
 
-const TEST_CRYPTO_NUM_TASKS: usize = 4;
+const TEST_CRYPTO_NUM_TASKS: usize = 8;
 const MAX_TXS: usize = 2_000_000;
 const MAX_CLIENTS: usize = 10;
 const TEST_RATE: f64 = 500_000.0;
+const PAYLOAD_SIZE: usize = 512;
 
 async fn load(batch_proposer_tx: Sender<TxWithAckChanTag>, req_per_sec: f64) {
     let sleep_time = Duration::from_secs_f64(1.0f64 / req_per_sec);
@@ -21,7 +22,7 @@ async fn load(batch_proposer_tx: Sender<TxWithAckChanTag>, req_per_sec: f64) {
         on_crash_commit: Some(ProtoTransactionPhase {
             ops: vec![ProtoTransactionOp {
                 op_type: crate::proto::execution::ProtoTransactionOpType::Noop.into(),
-                operands: vec![vec![2u8; 512]],
+                operands: vec![vec![2u8; PAYLOAD_SIZE]],
             }; 1],
         }),
         on_byzantine_commit: None,
