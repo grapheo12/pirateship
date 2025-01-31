@@ -5,6 +5,7 @@ import os.path
 from dataclasses import dataclass
 from copy import deepcopy
 from itertools import product
+from collections.abc import Callable
 
 """
 Each experiment goes through 7 phases:
@@ -54,6 +55,30 @@ class Experiment:
     build_command: str
 
 
+    def run(self):
+        pass # TODO
+
+
+def print_dummy(experiments, **kwargs):
+    pprint(experiments)
+    print(kwargs)
+
+@dataclass
+class Result:
+    plotter_func: Callable
+    experiments: list
+    kwargs: dict
+
+    def __init__(self, fn_name, experiments, kwargs):
+        self.plotter_func = print_dummy # TODO: Port plotting functions
+        self.experiments = experiments[:]
+        self.kwargs = deepcopy(kwargs)
+
+    def output(self):
+        self.plotter_func(self.experiments, **self.kwargs)
+
+
+
 
 def nested_override(source, diff):
     target = deepcopy(source)
@@ -94,7 +119,6 @@ def flatten_sweeping_params(e):
                 )
         prod = list(product(*list_items))
         for p in prod:
-            print(p)
             override = {}
             for (k, v) in p:
                 override[k] = v
@@ -209,8 +233,15 @@ def parse_config(path):
                 e.get("build_command", "make")
             ))
 
-    print(deployment)
-    pprint(experiments)
+    results = []
+    for r in toml_dict["results"]:
+        args = deepcopy(r)
+        del args["plotter"]
+        results.append(
+            Result(r["plotter"], experiments, args)
+        )
+
+    return (deployment, experiments, results)
 
 
 @click.command()
@@ -219,7 +250,17 @@ def parse_config(path):
     type=click.Path(exists=True, file_okay=True, resolve_path=True)
 )
 def main(config):
-    parse_config(config)
+    deployment, experiments, results = parse_config(config)
+
+    deployment.deploy()
+
+    for experiment in experiments:
+        experiment.run()
+
+    for result in results:
+        result.output()
+
+    deployment.teardown()
 
 
 if __name__ == "__main__":
