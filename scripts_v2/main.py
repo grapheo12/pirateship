@@ -1,11 +1,15 @@
 import tomli
 import click
+import invoke
 from pprint import pprint
 import os.path
 from dataclasses import dataclass
 from copy import deepcopy
 from itertools import product
 from collections.abc import Callable
+import datetime
+import json
+from crypto import gen_keys_and_certs, TLS_CERT_SUFFIX, TLS_PRIVKEY_SUFFIX, ROOT_CERT_SUFFIX, PUB_KEYLIST_NAME, SIGN_PRIVKEY_SUFFIX
 
 """
 Each experiment goes through 7 phases:
@@ -31,6 +35,16 @@ See config.toml for a sample TOML config format.
 ```
 """
 
+def run_local(cmds: list):
+    results = []
+    for cmd in cmds:
+        res = invoke.run(cmd, hide=True)
+        results.append(res.stdout.strip())
+
+    return results
+
+
+
 @dataclass
 class Node:
     name: str
@@ -40,45 +54,6 @@ class Node:
     region_id: int
     is_client: bool
     is_coordinator: bool
-
-
-@dataclass
-class Experiment:
-    name: str
-    repeats: int
-    duration: int
-    num_nodes: int
-    num_clients: int
-    base_node_config: dict
-    base_client_config: dict
-    node_distribution: str
-    build_command: str
-
-
-    def run(self):
-        pass # TODO
-
-
-def print_dummy(experiments, **kwargs):
-    pprint(experiments)
-    print(kwargs)
-
-@dataclass
-class Result:
-    plotter_func: Callable
-    experiments: list
-    kwargs: dict
-
-    def __init__(self, fn_name, experiments, kwargs):
-        self.plotter_func = print_dummy # TODO: Port plotting functions
-        self.experiments = experiments[:]
-        self.kwargs = deepcopy(kwargs)
-
-    def output(self):
-        self.plotter_func(self.experiments, **self.kwargs)
-
-
-
 
 def nested_override(source, diff):
     target = deepcopy(source)
@@ -186,6 +161,164 @@ class Deployment:
             s += f"{node}\n"
 
         return s
+    
+    def get_all_node_vms(self):
+        return [
+            vm for vm in self.nodelist if "node" in vm.name
+        ]
+    
+    def get_all_client_vms(self):
+        return [
+            vm for vm in self.nodelist if "client" in vm.name
+        ]
+    
+    def get_nodes_with_tee(self, tee):
+        return [
+            vm for vm in self.get_all_node_vms() if tee in vm.tee_type
+        ]
+
+
+DEFAULT_CA_NAME = "Pft"
+
+@dataclass
+class Experiment:
+    name: str
+    repeats: int
+    duration: int
+    num_nodes: int
+    num_clients: int
+    base_node_config: dict
+    base_client_config: dict
+    node_distribution: str
+    build_command: str
+
+    def create_directory(self, workdir):
+        build_dir = os.path.join(workdir, "build")
+        config_dir = os.path.join(workdir, "configs")
+        log_dirs = [
+            os.path.join(workdir, "logs", str(i))
+            for i in range(self.repeats)
+        ]
+
+        run_local([
+            f"mkdir -p {d}"
+            for d in [build_dir] + [config_dir] + log_dirs
+        ])
+
+        return build_dir, config_dir, log_dirs
+
+    def tag_source(self, workdir):
+        git_hash, patch = run_local([
+            "git rev-parse HEAD",
+            "git diff"
+        ])
+
+        with open(os.path.join(workdir, "git_hash.txt"), "w") as f:
+            f.write(git_hash)
+
+        with open(os.path.join(workdir, "diff.patch"), "w") as f:
+            f.write(patch)
+
+
+    def __gen_crypto(self, config_dir, nodelist, client_cnt):
+        participants = gen_keys_and_certs(nodelist, DEFAULT_CA_NAME, client_cnt, config_dir)
+        print(participants)
+        return {
+            k: (
+                os.path.join(config_dir, f"{k}{TLS_CERT_SUFFIX}"), # tls_cert_path
+                os.path.join(config_dir, f"{k}{TLS_PRIVKEY_SUFFIX}"), # tls_key_path
+                os.path.join(config_dir, f"{DEFAULT_CA_NAME}{ROOT_CERT_SUFFIX}"), # tls_root_ca_cert_path
+                os.path.join(config_dir, PUB_KEYLIST_NAME), # allowed_keylist_path
+                os.path.join(config_dir, f"{k}{SIGN_PRIVKEY_SUFFIX}"), # signing_priv_key_path
+            ) for k in participants
+        }
+        
+
+    def generate_configs(self, deployment: Deployment, config_dir):
+        # Number of nodes in deployment may be < number of nodes in deployment
+        # So we reuse nodes.
+        # As a default, each deployed node gets its unique port number
+        # So there will be no port clash.
+        rr_cnt = 0
+        nodelist = []
+        nodes = {}
+        node_configs = {}
+        vms = []
+        node_list_for_crypto = {}
+        if self.node_distribution == "uniform":
+            vms = deployment.get_all_node_vms()
+        else:
+            vms = deployment.get_nodes_with_tee(self.node_distribution)
+
+        for node_num in range(1, self.num_nodes+1):
+            port = deployment.node_port_base + node_num
+            listen_addr = f"0.0.0.0:{port}"
+            name = f"node{node_num}"
+            domain = f"{name}.pft.org"
+            
+            private_ip = vms[rr_cnt % len(vms)].private_ip
+            rr_cnt += 1
+            connect_addr = f"{private_ip}:{port}"
+
+            nodelist.append(name[:])
+            nodes[name] = {
+                "addr": connect_addr,
+                "domain": domain
+            }
+
+            node_list_for_crypto[name] = (connect_addr, domain)
+
+            config = deepcopy(self.base_node_config)
+            config["net_config"]["name"] = name
+            config["net_config"]["addr"] = listen_addr
+
+
+            node_configs[name] = config
+
+        client_vms = deployment.get_all_client_vms()
+        crypto_info = self.__gen_crypto(config_dir, node_list_for_crypto, len(client_vms))
+        
+
+        for k, v in node_configs.items():
+            tls_cert_path, tls_key_path, tls_root_ca_cert_path,\
+            allowed_keylist_path, signing_priv_key_path = crypto_info[k]
+
+            v["net_config"]["nodes"] = deepcopy(nodes)
+            v["consensus_config"]["node_list"] = nodelist[:]
+            v["consensus_config"]["learner_list"] = []
+            v["net_config"]["tls_cert_path"] = tls_cert_path
+            v["net_config"]["tls_key_path"] = tls_key_path
+            v["net_config"]["tls_root_ca_cert_path"] = tls_root_ca_cert_path
+            v["rpc_config"]["allowed_keylist_path"] = allowed_keylist_path
+            v["rpc_config"]["signing_priv_key_path"] = signing_priv_key_path
+
+        pprint(node_configs)
+
+
+    def run(self, deployment: Deployment):
+        # Create the necessary directories
+        workdir = os.path.join(deployment.workdir, self.name)
+        build_dir, config_dir, log_dirs = self.create_directory(workdir)
+        self.tag_source(workdir)
+        self.generate_configs(deployment, config_dir)
+
+def print_dummy(experiments, **kwargs):
+    pprint(experiments)
+    print(kwargs)
+
+@dataclass
+class Result:
+    plotter_func: Callable
+    experiments: list
+    kwargs: dict
+
+    def __init__(self, fn_name, experiments, kwargs):
+        self.plotter_func = print_dummy # TODO: Port plotting functions
+        self.experiments = experiments[:]
+        self.kwargs = deepcopy(kwargs)
+
+    def output(self):
+        self.plotter_func(self.experiments, **self.kwargs)
 
 
 
@@ -194,7 +327,9 @@ def parse_config(path):
         toml_dict = tomli.load(f)
 
     pprint(toml_dict)
-    workdir = toml_dict["workdir"]
+    curr_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    workdir = os.path.join(toml_dict["workdir"], curr_time)
     deployment = Deployment(toml_dict["deployment_config"], workdir)
 
     base_node_config = toml_dict["node_config"]
@@ -210,7 +345,7 @@ def parse_config(path):
             for i, params in enumerate(flats):
                 _e = nested_override(e, params)
                 experiments.append(Experiment(
-                    f"{_e['name']}/{i}",
+                    os.path.join(_e['name'], str(i)),
                     int(_e["repeats"]),
                     int(_e["duration"]),
                     int(_e["num_nodes"]),
@@ -255,7 +390,7 @@ def main(config):
     deployment.deploy()
 
     for experiment in experiments:
-        experiment.run()
+        experiment.run(deployment)
 
     for result in results:
         result.output()
