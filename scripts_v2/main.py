@@ -292,7 +292,13 @@ class Experiment:
             v["rpc_config"]["allowed_keylist_path"] = allowed_keylist_path
             v["rpc_config"]["signing_priv_key_path"] = signing_priv_key_path
 
-        pprint(node_configs)
+            with open(os.path.join(config_dir, f"{k}_config.json"), "w") as f:
+                json.dump(v, f, indent=4)
+
+
+    def tag_experiment(self, workdir):
+        with open(os.path.join(workdir, "experiment.txt"), "w") as f:
+            f.write(str(self))
 
 
     def run(self, deployment: Deployment):
@@ -300,7 +306,10 @@ class Experiment:
         workdir = os.path.join(deployment.workdir, self.name)
         build_dir, config_dir, log_dirs = self.create_directory(workdir)
         self.tag_source(workdir)
+        self.tag_experiment(workdir)
         self.generate_configs(deployment, config_dir)
+        
+
 
 def print_dummy(experiments, **kwargs):
     pprint(experiments)
