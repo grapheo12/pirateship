@@ -10,6 +10,8 @@ from collections.abc import Callable
 import datetime
 import json
 from crypto import gen_keys_and_certs, TLS_CERT_SUFFIX, TLS_PRIVKEY_SUFFIX, ROOT_CERT_SUFFIX, PUB_KEYLIST_NAME, SIGN_PRIVKEY_SUFFIX
+import pickle
+
 
 """
 Each experiment goes through 7 phases:
@@ -35,10 +37,10 @@ See config.toml for a sample TOML config format.
 ```
 """
 
-def run_local(cmds: list):
+def run_local(cmds: list, hide=True):
     results = []
     for cmd in cmds:
-        res = invoke.run(cmd, hide=True)
+        res = invoke.run(cmd, hide=hide)
         results.append(res.stdout.strip())
 
     return results
@@ -109,9 +111,92 @@ class Deployment:
         self.mode = config["mode"]
         self.nodelist = []
         self.workdir = workdir
+        self.raw_config = deepcopy(config)
         first_client = False
         if self.mode == "manual":
-            for name, info in config["node_list"].items():
+            self.populate_nodelist()
+
+        self.ssh_user = config["ssh_user"]
+
+        if os.path.isabs(config["ssh_key"]):
+            self.ssh_key = config["ssh_key"]
+        else:
+            self.ssh_key = os.path.join(workdir, config["ssh_key"])
+        self.node_port_base = int(config["node_port_base"])
+
+    def find_azure_tf_dir(self):
+        search_paths = [
+            os.path.join("deployment", "azure-tf"),
+            os.path.join("scripts_v2", "deployment", "azure-tf"),
+        ]
+
+        found_path = None
+        for path in search_paths:
+            if os.path.exists(path):
+                found_path = os.path.abspath(path)
+                break
+
+        if found_path is None:
+            raise FileNotFoundError("Azure Terraform directory not found")
+        else:
+            print(f"Found Azure Terraform directory at {found_path}")
+
+        return found_path
+
+    def deploy(self):
+        run_local([
+            f"mkdir -p {self.workdir}",
+            f"mkdir -p {self.workdir}/deployment",
+        ])
+        with open(os.path.join(self.workdir, "deployment", "deployment.txt"), "w") as f:
+            pprint(self, f)
+
+        if self.mode == "manual":
+            return
+        
+        # Terraform deploy
+
+        # Find the azure-tf directory relative to where the script is being called from
+        found_path = self.find_azure_tf_dir()
+
+        if found_path is None:
+            raise FileNotFoundError("Azure Terraform directory not found")
+        else:
+            print(f"Found Azure Terraform directory at {found_path}")
+
+        # There must exist a var-file in azure-tf/setups for the deployment mode
+        var_file = os.path.join(found_path, "setups", f"{self.mode}.tfvars")
+        if not os.path.exists(var_file):
+            raise FileNotFoundError(f"Var file for deployment mode {self.mode} not found")
+
+        tf_output_dir = os.path.abspath(os.path.join(self.workdir, "deployment"))
+        plan_path = os.path.join(tf_output_dir, "main.tfplan")
+        tfstate_path = os.path.join(tf_output_dir, "terraform.tfstate")
+
+        # Plan
+        run_local([
+            f"terraform -chdir={found_path} init",
+            f"terraform -chdir={found_path} plan -no-color -var-file=\"{var_file}\" -var=\"username={self.ssh_user}\" -out={plan_path} -state={tfstate_path} > {tf_output_dir}/plan.log 2>&1",
+        ])
+
+        # Apply
+        run_local([
+            f"terraform -chdir={found_path} apply -no-color -auto-approve -state={tfstate_path} {plan_path} > {tf_output_dir}/apply.log 2>&1",
+        ])
+
+        # Populate nodelist
+        self.populate_nodelist()
+
+        # Save myself
+        with open(os.path.join(self.workdir, "deployment", "deployment.pkl"), "wb") as f:
+            pickle.dump(self, f)
+
+
+
+    def populate_nodelist(self):
+        if self.mode == "manual":
+            first_client = False
+            for name, info in self.raw_config["node_list"].items():
                 public_ip = info["public_ip"]
                 private_ip = info["private_ip"]
                 is_client = name.startswith("client")
@@ -131,25 +216,39 @@ class Deployment:
                     region_id = 0
 
                 self.nodelist.append(Node(name, public_ip, private_ip, tee_type, region_id, is_client, is_coordinator))
-        
-        if not(first_client):
-            raise ValueError("No client VM")
+            
+            if not(first_client):
+                raise ValueError("No client VM")
+            
+        else:
+            # Use Terraform output to populate nodelist
+            pass # TODO
 
-        self.ssh_user = config["ssh_user"]
-        self.ssh_key = os.path.join(workdir, config["ssh_key"])
-        self.node_port_base = int(config["node_port_base"])
-
-    def deploy(self):
-        if self.mode == "manual":
-            return
-        
-        # TODO: Terraform deploy
         
     def teardown(self):
         if self.mode == "manual":
             return
         
-        # TODO: Terraform teardown
+        found_path = self.find_azure_tf_dir()
+        if found_path is None:
+            raise FileNotFoundError("Azure Terraform directory not found")
+        else:
+            print(f"Found Azure Terraform directory at {found_path}")
+
+        tf_output_dir = os.path.abspath(os.path.join(self.workdir, "deployment"))
+        plan_path = os.path.join(tf_output_dir, "main.tfplan")
+        tfstate_path = os.path.join(tf_output_dir, "terraform.tfstate")
+
+
+        while True:
+            try:
+                run_local([
+                    f"terraform -chdir={found_path} apply -destroy -no-color -auto-approve -state={tfstate_path}",
+                ], hide=False)
+                break
+            except Exception as e:
+                print("Error while destroying VMs. Retrying...")
+                print(e)
 
     def __repr__(self):
         s = f"Mode: {self.mode}\n"
@@ -271,6 +370,7 @@ class Experiment:
             config = deepcopy(self.base_node_config)
             config["net_config"]["name"] = name
             config["net_config"]["addr"] = listen_addr
+            config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"./{name}-db"
 
 
             node_configs[name] = config
@@ -298,7 +398,7 @@ class Experiment:
 
     def tag_experiment(self, workdir):
         with open(os.path.join(workdir, "experiment.txt"), "w") as f:
-            f.write(str(self))
+            pprint(self, f)
 
 
     def run(self, deployment: Deployment):
@@ -331,14 +431,16 @@ class Result:
 
 
 
-def parse_config(path):
+def parse_config(path, workdir=None):
     with open(path, "rb") as f:
         toml_dict = tomli.load(f)
 
     pprint(toml_dict)
-    curr_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-    workdir = os.path.join(toml_dict["workdir"], curr_time)
+    if workdir is None:
+        curr_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        workdir = os.path.join(toml_dict["workdir"], curr_time)
+
     deployment = Deployment(toml_dict["deployment_config"], workdir)
 
     base_node_config = toml_dict["node_config"]
@@ -388,12 +490,19 @@ def parse_config(path):
     return (deployment, experiments, results)
 
 
-@click.command()
+@click.group(invoke_without_command=True, help="Run experiment pipeline (runs all if no subcommand is provided)")
+@click.pass_context
+def main(ctx):
+    if ctx.invoked_subcommand is None:
+        # Run all()
+        all()
+
+@main.command()
 @click.option(
     "-c", "--config", required=True,
     type=click.Path(exists=True, file_okay=True, resolve_path=True)
 )
-def main(config):
+def all(config):
     deployment, experiments, results = parse_config(config)
 
     deployment.deploy()
@@ -406,6 +515,49 @@ def main(config):
 
     deployment.teardown()
 
+
+@main.command()
+@click.option(
+    "-c", "--config", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
+    "-d", "--workdir", required=True,
+    type=click.Path(file_okay=False, resolve_path=True)
+)
+def teardown(config, workdir):
+    # Search for the pickle file
+    pickle_path = os.path.join(workdir, "deployment", "deployment.pkl")
+    if os.path.exists(pickle_path):
+        with open(pickle_path, "rb") as f:
+            deployment = pickle.load(f)
+            assert isinstance(deployment, Deployment)
+    else:
+        # Get deployment from the config if the pickle file doesn't exist
+        deployment, _, _ = parse_config(config, workdir)
+    
+    pprint(deployment)
+    deployment.teardown()
+
+
+@main.command()
+@click.option(
+    "-c", "--config", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
+    "-d", "--workdir", required=False,
+    type=click.Path(file_okay=False, resolve_path=True),
+    default=None
+)
+def deploy(config, workdir):
+    deployment, _, _ = parse_config(config, workdir)
+    pprint(deployment)
+    deployment.deploy()
+
+
+
+    
 
 if __name__ == "__main__":
     main()
