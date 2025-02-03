@@ -3,6 +3,8 @@
 # Copyright (c) Shubham Mishra. All rights reserved.
 # Licensed under the MIT License.
 
+sudo apt-get update
+sudo apt-get install -y git
 
 curl https://sh.rustup.rs -sSf | sh -s -- -y
 

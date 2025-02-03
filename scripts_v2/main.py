@@ -1,6 +1,9 @@
 import tomli
 import click
+from click_default_group import DefaultGroup
 import invoke
+from fabric import Connection
+from fabric.runners import Result
 from pprint import pprint
 import os.path
 from dataclasses import dataclass
@@ -11,6 +14,7 @@ import datetime
 import json
 from crypto import gen_keys_and_certs, TLS_CERT_SUFFIX, TLS_PRIVKEY_SUFFIX, ROOT_CERT_SUFFIX, PUB_KEYLIST_NAME, SIGN_PRIVKEY_SUFFIX
 import pickle
+import re
 
 
 """
@@ -46,7 +50,6 @@ def run_local(cmds: list, hide=True):
     return results
 
 
-
 @dataclass
 class Node:
     name: str
@@ -56,6 +59,34 @@ class Node:
     region_id: int
     is_client: bool
     is_coordinator: bool
+
+
+def run_remote_public_ip(cmds: list, ssh_user, ssh_key, host: Node, hide=True):
+    results = []
+    conn = Connection(
+        host=host.public_ip,
+        user=ssh_user,
+        connect_kwargs={
+            "key_filename": ssh_key
+        }
+    )
+    for cmd in cmds:
+        res = conn.run(cmd, hide=hide, pty=True)
+        results.append(res.stdout.strip())
+
+    return results
+
+def copy_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
+    conn = Connection(
+        host=host.public_ip,
+        user=ssh_user,
+        connect_kwargs={
+            "key_filename": ssh_key
+        }
+    )
+
+    conn.put(src, remote=dest)
+
 
 def nested_override(source, diff):
     target = deepcopy(source)
@@ -121,7 +152,7 @@ class Deployment:
         if os.path.isabs(config["ssh_key"]):
             self.ssh_key = config["ssh_key"]
         else:
-            self.ssh_key = os.path.join(workdir, config["ssh_key"])
+            self.ssh_key = os.path.join(workdir, "deployment", config["ssh_key"])
         self.node_port_base = int(config["node_port_base"])
 
     def find_azure_tf_dir(self):
@@ -142,6 +173,50 @@ class Deployment:
             print(f"Found Azure Terraform directory at {found_path}")
 
         return found_path
+    
+    def prepare_dev_vm(self):
+        if self.dev_vm is None:
+            raise ValueError("No dev VM found")
+        
+        # Find __prepare_dev_env.sh and ideal_bashrc
+        search_paths = [
+            "deployment",
+            os.path.join("scripts_v2", "deployment"),
+            os.path.join("deployment", "azure-tf"),
+            os.path.join("scripts_v2", "deployment", "azure-tf"),
+        ]
+
+        for path in search_paths:
+            if os.path.exists(os.path.join(path, "__prepare-dev-env.sh")) and os.path.exists(os.path.join(path, "ideal_bashrc")):
+                found_path = os.path.abspath(path)
+                break
+        else:
+            raise FileNotFoundError("Dev VM setup scripts not found")
+        
+        # Copy the scripts to the dev VM
+        copy_remote_public_ip(os.path.join(found_path, "__prepare-dev-env.sh"), f"/home/{self.ssh_user}/__prepare-dev-env.sh", self.ssh_user, self.ssh_key, self.dev_vm)
+        copy_remote_public_ip(os.path.join(found_path, "ideal_bashrc"), f"/home/{self.ssh_user}/ideal_bashrc", self.ssh_user, self.ssh_key, self.dev_vm)
+
+        # Run the scripts
+        run_remote_public_ip([
+            "chmod +x __prepare-dev-env.sh",
+            "./__prepare-dev-env.sh"
+        ], self.ssh_user, self.ssh_key, self.dev_vm, hide=False)
+
+        
+    def get_ssh_key(self):
+        tf_output_dir = os.path.abspath(os.path.join(self.workdir, "deployment"))
+        tfstate_path = os.path.join(tf_output_dir, "terraform.tfstate")
+        private_key = run_local([
+            f"terraform output -state={tfstate_path} --raw cluster_private_key"
+        ])[0]
+        with open(self.ssh_key, "w") as f:
+            f.write(private_key)
+
+        run_local([
+            "chmod 600 " + self.ssh_key
+        ])
+
 
     def deploy(self):
         run_local([
@@ -187,42 +262,113 @@ class Deployment:
         # Populate nodelist
         self.populate_nodelist()
 
+        # Store the SSH key
+        self.get_ssh_key()
+
+        # Install dev dependencies on dev VM
+        self.prepare_dev_vm()
+
         # Save myself
         with open(os.path.join(self.workdir, "deployment", "deployment.pkl"), "wb") as f:
             pickle.dump(self, f)
 
+        # Rewrite deployment.txt
+        with open(os.path.join(self.workdir, "deployment", "deployment.txt"), "w") as f:
+            pprint(self, f)
+
+
+    def populate_raw_node_list_from_terraform(self):
+        found_path = self.find_azure_tf_dir()
+
+        if found_path is None:
+            raise FileNotFoundError("Azure Terraform directory not found")
+        
+        tf_output_dir = os.path.abspath(os.path.join(self.workdir, "deployment"))
+        tfstate_path = os.path.join(tf_output_dir, "terraform.tfstate")
+
+        rg_name = run_local([
+            f"terraform output -state={tfstate_path} --raw resource_group_name"
+        ])[0]
+
+        print("Resource group name:", rg_name)
+
+        # Use az cli to get the public and private IPs of all deployed vms in this resource group
+        private_ips, public_ips = run_local([
+            r'az vm list-ip-addresses --resource-group ' + rg_name
+            + r' --query "[].{Name:virtualMachine.name, IP:virtualMachine.network.privateIpAddresses[0]}" --output json',
+
+            r'az vm list-ip-addresses --resource-group ' + rg_name
+            + r' --query "[].{Name:virtualMachine.name, IP:virtualMachine.network.publicIpAddresses[0].ipAddress}" --output json'
+        ])
+
+        private_ips = json.loads(private_ips)
+        public_ips = json.loads(public_ips)
+
+        vm_names = {vm["Name"] for vm in private_ips}
+
+        node_list = {}
+        for name in vm_names:
+            private_ip = next(vm["IP"] for vm in private_ips if vm["Name"] == name)
+            public_ip = next(vm["IP"] for vm in public_ips if vm["Name"] == name)
+            
+            if "tdx" in name:
+                tee_type = "tdx"
+            elif "sev" in name:
+                tee_type = "sev"
+            else:
+                tee_type = "nontee"
+            
+            if "loc" in name:
+                # Find the _locX_ part
+                region_id = int(re.findall(r"loc(\d+)", name)[0])
+            else:
+                region_id = 0
+
+            node_list[name] = {
+                "private_ip": private_ip,
+                "public_ip": public_ip,
+                "tee_type": tee_type,
+                "region_id": region_id
+            }
+
+        self.raw_config["node_list"] = node_list
+
+        pprint(node_list)
 
 
     def populate_nodelist(self):
-        if self.mode == "manual":
-            first_client = False
-            for name, info in self.raw_config["node_list"].items():
-                public_ip = info["public_ip"]
-                private_ip = info["private_ip"]
-                is_client = name.startswith("client")
-                if is_client and not(first_client):
-                    is_coordinator = True
-                    first_client = True
-                else:
-                    is_coordinator = False
-                if not(is_client):
-                    tee_type = info["tee_type"]
-                else:
-                    tee_type = "nontee"
-                
-                if "region_id" in info:
-                    region_id = int(info["region_id"])
-                else:
-                    region_id = 0
+        if self.mode != "manual":
+            self.populate_raw_node_list_from_terraform()
+    
+        first_client = False
+        for name, info in self.raw_config["node_list"].items():
+            public_ip = info["public_ip"]
+            private_ip = info["private_ip"]
+            is_client = name.startswith("client")
+            dev_vm = False
+            if is_client and not(first_client):
+                is_coordinator = True
+                first_client = True
+                dev_vm = True
+            else:
+                is_coordinator = False
+            if not(is_client):
+                tee_type = info["tee_type"]
+            else:
+                tee_type = "nontee"
+            
+            if "region_id" in info:
+                region_id = int(info["region_id"])
+            else:
+                region_id = 0
 
-                self.nodelist.append(Node(name, public_ip, private_ip, tee_type, region_id, is_client, is_coordinator))
-            
-            if not(first_client):
-                raise ValueError("No client VM")
-            
-        else:
-            # Use Terraform output to populate nodelist
-            pass # TODO
+            self.nodelist.append(Node(name, public_ip, private_ip, tee_type, region_id, is_client, is_coordinator))
+
+            if dev_vm:
+                self.dev_vm = self.nodelist[-1]
+        
+        if not(first_client):
+            raise ValueError("No client VM")
 
         
     def teardown(self):
@@ -236,7 +382,6 @@ class Deployment:
             print(f"Found Azure Terraform directory at {found_path}")
 
         tf_output_dir = os.path.abspath(os.path.join(self.workdir, "deployment"))
-        plan_path = os.path.join(tf_output_dir, "main.tfplan")
         tfstate_path = os.path.join(tf_output_dir, "terraform.tfstate")
 
 
@@ -490,20 +635,25 @@ def parse_config(path, workdir=None):
     return (deployment, experiments, results)
 
 
-@click.group(invoke_without_command=True, help="Run experiment pipeline (runs all if no subcommand is provided)")
+@click.group(cls=DefaultGroup, default='all', default_if_no_args=True, help="Run experiment pipeline (runs all if no subcommand is provided)")
 @click.pass_context
 def main(ctx):
     if ctx.invoked_subcommand is None:
         # Run all()
-        all()
+        ctx.invoke(all)
 
 @main.command()
 @click.option(
     "-c", "--config", required=True,
     type=click.Path(exists=True, file_okay=True, resolve_path=True)
 )
-def all(config):
-    deployment, experiments, results = parse_config(config)
+@click.option(
+    "-d", "--workdir", required=False,
+    type=click.Path(file_okay=False, resolve_path=True),
+    default=None
+)
+def all(config, workdir):
+    deployment, experiments, results = parse_config(config, workdir=workdir)
 
     deployment.deploy()
 
@@ -546,6 +696,44 @@ def teardown(config, workdir):
     type=click.Path(exists=True, file_okay=True, resolve_path=True)
 )
 @click.option(
+    "-d", "--workdir", required=True,
+    type=click.Path(file_okay=False, resolve_path=True)
+)
+@click.option(
+    "-n", "--name", required=False,
+    type=str,
+    default=None
+)
+def ssh(config, workdir, name):
+    # Search for the pickle file
+    pickle_path = os.path.join(workdir, "deployment", "deployment.pkl")
+    if os.path.exists(pickle_path):
+        with open(pickle_path, "rb") as f:
+            deployment = pickle.load(f)
+            assert isinstance(deployment, Deployment)
+    else:
+        # Get deployment from the config if the pickle file doesn't exist
+        deployment, _, _ = parse_config(config, workdir)
+    
+    if name is None:
+        target_node = deployment.dev_vm
+    else:
+        for node in deployment.nodelist:
+            if node.name == name:
+                target_node = node
+                break
+        else:
+            raise ValueError(f"Node {name} not found")
+
+    invoke.run(f"ssh -i {deployment.ssh_key} {deployment.ssh_user}@{target_node.public_ip}", pty=True)
+
+
+@main.command()
+@click.option(
+    "-c", "--config", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
     "-d", "--workdir", required=False,
     type=click.Path(file_okay=False, resolve_path=True),
     default=None
@@ -555,9 +743,6 @@ def deploy(config, workdir):
     pprint(deployment)
     deployment.deploy()
 
-
-
-    
 
 if __name__ == "__main__":
     main()
