@@ -1,3 +1,4 @@
+import multiprocessing
 import tomli
 import click
 from click_default_group import DefaultGroup
@@ -87,6 +88,34 @@ def copy_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
 
     conn.put(src, remote=dest)
 
+    # # return True
+    # # Fabric copy is very slow. Use rsync instead
+    # run_local([
+    #     f"rsync -avz -e 'ssh -i {ssh_key}' {src} {ssh_user}@{host.public_ip}:{dest}"
+    # ])
+    # # run_local([
+    # #     f"scp -i {ssh_key} -r {src} {ssh_user}@{host.public_ip}:{dest}"
+    # # ])
+
+def copy_dir_from_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
+    conn = Connection(
+        host=host.public_ip,
+        user=ssh_user,
+        connect_kwargs={
+            "key_filename": ssh_key
+        }
+    )
+
+    fnames = [x.strip() for x in conn.run(f"find {src} -type f -maxdepth 1", hide=True)
+                                    .stdout.strip().split("\n")]
+
+    _dest = dest[:]
+    if _dest[-1] != os.path.sep:
+        _dest += os.path.sep
+    
+    for fname in fnames:
+        print(fname, _dest)
+        conn.get(fname, local=_dest, preserve_mode=False)
 
 def nested_override(source, diff):
     target = deepcopy(source)
@@ -277,6 +306,44 @@ class Deployment:
             pprint(self, f)
 
 
+    def copy_all_to_remote_public_ip(self):
+        # Make one file for all of workdir
+        # run_local([
+        #     f"zip -r {self.workdir}.zip {self.workdir}"
+        # ])
+
+        # basename = f"{os.path.basename(self.workdir)}.zip"
+
+
+        # print(f"Copying {basename} to all nodes and unzipping")
+        for node in self.nodelist:
+            print(f"Copying to {node.name}")
+            copy_remote_public_ip(f"{self.workdir}", f"/home/{self.ssh_user}/", self.ssh_user, self.ssh_key, node)
+            # print(f"Unzipping {basename} in {node.name}")
+            # run_remote_public_ip([f"unzip /home/{self.ssh_user}/{basename}"], self.ssh_user, self.ssh_key, node)
+        # # Transfer the zip file to all nodes
+        # pool = multiprocessing.Pool(processes=len(self.nodelist))
+        # pool.starmap(copy_remote_public_ip, [
+        #     (f"{self.workdir}.zip", f"/home/{self.ssh_user}/{basename}", self.ssh_user, self.ssh_key, node)
+        #     for node in self.nodelist
+        # ])
+        # pool.close()
+        # pool.join()
+
+        # print(f"Unzipping {basename} in all nodes")
+        # # Unzip the file in all nodes
+        # pool = multiprocessing.Pool(processes=len(self.nodelist))
+        # pool.starmap(run_remote_public_ip, [
+        #     ([f"unzip /home/{self.ssh_user}/{basename}"], self.ssh_user, self.ssh_key, node)
+        #     for node in self.nodelist
+        # ])
+        # pool.close()
+        # pool.join()
+
+
+
+
+
     def populate_raw_node_list_from_terraform(self):
         found_path = self.find_azure_tf_dir()
 
@@ -420,6 +487,9 @@ class Deployment:
         return [
             vm for vm in self.get_all_node_vms() if tee in vm.tee_type
         ]
+    
+    def get_wan_setup(self, setup):
+        raise NotImplementedError("WAN setup not implemented yet")
 
 
 DEFAULT_CA_NAME = "Pft"
@@ -435,6 +505,16 @@ class Experiment:
     base_client_config: dict
     node_distribution: str
     build_command: str
+    git_hash_override: str
+    project_home: str
+
+
+    def done(self):
+        try:
+            done = self.__done__
+            return done
+        except Exception:
+            return False
 
     def create_directory(self, workdir):
         build_dir = os.path.join(workdir, "build")
@@ -452,10 +532,16 @@ class Experiment:
         return build_dir, config_dir, log_dirs
 
     def tag_source(self, workdir):
-        git_hash, patch = run_local([
-            "git rev-parse HEAD",
-            "git diff"
-        ])
+        if self.git_hash_override is None:
+            git_hash, patch = run_local([
+                "git rev-parse HEAD",
+                "git diff"
+            ])
+        else:
+            git_hash = self.git_hash_override
+            patch = ""
+
+        patch += "\n\n"
 
         with open(os.path.join(workdir, "git_hash.txt"), "w") as f:
             f.write(git_hash)
@@ -479,10 +565,15 @@ class Experiment:
         
 
     def generate_configs(self, deployment: Deployment, config_dir):
+        # If config_dir is not empty, assume the configs have already been generated
+        if len(os.listdir(config_dir)) > 0:
+            print("Skipping config generation for experiment", self.name)
+            return
         # Number of nodes in deployment may be < number of nodes in deployment
         # So we reuse nodes.
         # As a default, each deployed node gets its unique port number
         # So there will be no port clash.
+
         rr_cnt = 0
         nodelist = []
         nodes = {}
@@ -491,8 +582,16 @@ class Experiment:
         node_list_for_crypto = {}
         if self.node_distribution == "uniform":
             vms = deployment.get_all_node_vms()
+        elif self.node_distribution == "sev_only":
+            vms = deployment.get_nodes_with_tee("sev")
+        elif self.node_distribution == "tdx_only":
+            vms = deployment.get_nodes_with_tee("tdx")
+        elif self.node_distribution == "nontee_only":
+            vms = deployment.get_nodes_with_tee("nontee")
+        elif "wan" in self.node_distribution:
+            vms = deployment.get_wan_setup(self.node_distribution)
         else:
-            vms = deployment.get_nodes_with_tee(self.node_distribution)
+            raise ValueError(f"Unknown node distribution: {self.node_distribution}")
 
         for node_num in range(1, self.num_nodes+1):
             port = deployment.node_port_base + node_num
@@ -545,14 +644,72 @@ class Experiment:
         with open(os.path.join(workdir, "experiment.txt"), "w") as f:
             pprint(self, f)
 
+        with open(os.path.join(workdir, "experiment.pkl"), "wb") as f:
+            pickle.dump(self, f)
 
-    def run(self, deployment: Deployment):
+
+    def remote_build(self):
+        # If the local build dir is not empty, we assume the build has already been done
+        if len(os.listdir(os.path.join(self.local_workdir, "build"))) > 0:
+            print("Skipping build for experiment", self.name)
+            return
+        
+        with open(os.path.join(self.local_workdir, "git_hash.txt"), "r") as f:
+            git_hash = f.read().strip()
+
+        remote_repo = f"/home/{self.dev_ssh_user}/repo"
+        cmds = [
+            f"git clone {self.project_home} {remote_repo}"
+        ]
+        try:
+            run_remote_public_ip(cmds, self.dev_ssh_user, self.dev_ssh_key, self.dev_vm)
+        except Exception as e:
+            print("Failed to clone repo. It may already exist. Continuing...")
+
+        # Copy the diff patch to the remote
+        copy_remote_public_ip(os.path.join(self.local_workdir, "diff.patch"), f"{remote_repo}/diff.patch", self.dev_ssh_user, self.dev_ssh_key, self.dev_vm)
+
+        # Checkout the git hash and apply the diff 
+        # Then build       
+        cmds = [
+            f"cd {remote_repo} && git reset --hard",
+            f"cd {remote_repo} && git checkout {git_hash}",
+            f"cd {remote_repo} && git apply --allow-empty --reject --whitespace=fix diff.patch",
+            f"cd {remote_repo} && {self.build_command}"
+        ]
+        run_remote_public_ip(cmds, self.dev_ssh_user, self.dev_ssh_key, self.dev_vm, hide=False)
+
+        # Copy the target/release to build directory
+        copy_dir_from_remote_public_ip(f"{remote_repo}/target/release", os.path.join(self.local_workdir, "build"), self.dev_ssh_user, self.dev_ssh_key, self.dev_vm)
+
+
+    def deploy(self, deployment: Deployment):
+        if self.done():
+            print("Experiment already done")
+            return
+
         # Create the necessary directories
-        workdir = os.path.join(deployment.workdir, self.name)
+        workdir = os.path.join(deployment.workdir, "experiments", self.name)
         build_dir, config_dir, log_dirs = self.create_directory(workdir)
         self.tag_source(workdir)
         self.tag_experiment(workdir)
         self.generate_configs(deployment, config_dir)
+        self.dev_vm = deployment.dev_vm
+        self.dev_ssh_user = deployment.ssh_user
+        self.dev_ssh_key = deployment.ssh_key
+        self.local_workdir = workdir
+
+        # Hard dependency on Linux style paths
+        self.remote_workdir = f"/home/{deployment.ssh_user}/experiments/{self.name}"
+
+        # Clone repo in remote and build
+        self.remote_build()
+
+
+    def run(self):
+        if self.done():
+            return # May arise if this experiment is brought back from the dead
+        self.__done__ = False
         
 
 
@@ -595,6 +752,8 @@ def parse_config(path, workdir=None):
     for e in toml_dict["experiments"]:
         node_config = nested_override(base_node_config, e.get("node_config", {}))
         client_config = nested_override(base_client_config, e.get("client_config", {}))
+        git_hash_override = e.get("git_hash", None)
+        project_home = toml_dict["project_home"]
 
         if "sweeping_parameters" in e:
             flats = flatten_sweeping_params(e["sweeping_parameters"])
@@ -609,7 +768,9 @@ def parse_config(path, workdir=None):
                     node_config,
                     client_config,
                     _e.get("node_distribution", "uniform"),
-                    _e.get("build_command", "make")
+                    _e.get("build_command", "make"),
+                    git_hash_override,
+                    project_home
                 ))
         else:
             experiments.append(Experiment(
@@ -621,7 +782,9 @@ def parse_config(path, workdir=None):
                 node_config,
                 client_config,
                 e.get("node_distribution", "uniform"),
-                e.get("build_command", "make")
+                e.get("build_command", "make"),
+                git_hash_override,
+                project_home
             ))
 
     results = []
@@ -658,7 +821,13 @@ def all(config, workdir):
     deployment.deploy()
 
     for experiment in experiments:
-        experiment.run(deployment)
+        experiment.deploy(deployment)
+
+    deployment.copy_all_to_remote_public_ip()
+    
+    for experiment in experiments:
+        experiment.run()
+
 
     for result in results:
         result.output()
@@ -734,6 +903,33 @@ def ssh(config, workdir, name):
     type=click.Path(exists=True, file_okay=True, resolve_path=True)
 )
 @click.option(
+    "-d", "--workdir", required=True,
+    type=click.Path(file_okay=False, resolve_path=True)
+)
+@click.option(
+    "-cmd", "--command", required=True,
+    type=str
+)
+def run_command(config, workdir, command):
+    pickle_path = os.path.join(workdir, "deployment", "deployment.pkl")
+    if os.path.exists(pickle_path):
+        with open(pickle_path, "rb") as f:
+            deployment = pickle.load(f)
+            assert isinstance(deployment, Deployment)
+    else:
+        # Get deployment from the config if the pickle file doesn't exist
+        deployment, _, _ = parse_config(config, workdir)
+
+    for node in deployment.nodelist:
+        run_remote_public_ip([command], deployment.ssh_user, deployment.ssh_key, node, hide=False)
+
+
+@main.command()
+@click.option(
+    "-c", "--config", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
     "-d", "--workdir", required=False,
     type=click.Path(file_okay=False, resolve_path=True),
     default=None
@@ -742,6 +938,62 @@ def deploy(config, workdir):
     deployment, _, _ = parse_config(config, workdir)
     pprint(deployment)
     deployment.deploy()
+
+@main.command()
+@click.option(
+    "-c", "--config", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
+    "-d", "--workdir", required=True,
+    type=click.Path(file_okay=False, resolve_path=True)
+)
+def deploy_experiments(config, workdir):
+    # Try to get deployment from the pickle file
+    pickle_path = os.path.join(workdir, "deployment", "deployment.pkl")
+    with open(pickle_path, "rb") as f:
+        deployment = pickle.load(f)
+        assert isinstance(deployment, Deployment)
+
+    _, experiments, _ = parse_config(config, workdir=workdir)
+
+    for experiment in experiments:
+        experiment.deploy(deployment)
+
+
+    # Copy over the entire directory to all nodes
+    deployment.copy_all_to_remote_public_ip()
+    
+
+@main.command()
+@click.option(
+    "-c", "--config", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
+    "-d", "--workdir", required=True,
+    type=click.Path(file_okay=False, resolve_path=True)
+)
+def run_experiments(config, workdir):
+    # Try to get deployment from the pickle file
+    pickle_path = os.path.join(workdir, "deployment", "deployment.pkl")
+    with open(pickle_path, "rb") as f:
+        deployment = pickle.load(f)
+        assert isinstance(deployment, Deployment)
+    
+    # Find all experiments pickle files recursively in workdir/experiments
+    experiments = []
+    for root, _, files in os.walk(os.path.join(workdir, "experiments")):
+        for f in files:
+            if f == "experiment.pkl":
+                with open(os.path.join(root, f), "rb") as f:
+                    experiment = pickle.load(f)
+                    assert isinstance(experiment, Experiment)
+                    experiments.append(experiment)
+
+
+    for experiment in experiments:
+        experiment.run()
 
 
 if __name__ == "__main__":

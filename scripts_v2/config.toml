@@ -1,4 +1,5 @@
 workdir = "deployment_artifacts"
+project_home = "https://github.com/grapheo12/pirateship"
 
 [deployment_config]
 mode = "lan" # "manual" # "dev", "wan", "lan-small", "lan-nontee" etc.
@@ -78,11 +79,11 @@ build_command = "make"
 duration = 120
 
 [experiments.sweeping_parameters.client_config.workload_config]
-payload_size = [8, 64, 128, 512]
+payload_size = [512]
 num_requests = [50, 100000]
 
 [experiments.sweeping_parameters]
-num_clients = [10, 50, 100]
+num_clients = [10, 50]
 
 
 # Overrides specific to this experiment.
@@ -98,10 +99,26 @@ build_command = "make chained_pbft_logger"
 duration = 120
 
 [experiments.sweeping_parameters]
-num_clients = [10, 20, 50, 100, 1000]
+num_clients = [10, 20, 50]
 
 [experiments.node_config.consensus_config]
 max_backlog_batch_size = 1000
+
+
+[[experiments]]
+name = "test"
+repeats = 1
+num_nodes = 5
+node_distribution = "uniform"  # "sev_only", "tdx_only", "nontee_only", "wan_1", "wan_2", "wan_3"
+build_command = "make"
+git_hash = "73cb5ae2bfa2e2eb03124f821834637c6de63eb8" # v0.2-beta tag
+duration = 120
+
+[experiments.sweeping_parameters]
+num_clients = [10]
+
+
+
 
 [[results]]
 plotter = "tput_latency_client_sweep"
