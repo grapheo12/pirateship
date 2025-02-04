@@ -12,7 +12,8 @@ pub fn hash(data: &Vec<u8>) -> Vec<u8> {
         .finalize()
         .as_slice()
         .to_vec()
-    // vec![0u8; DIGEST_LENGTH]
+
+    // [0u8; DIGEST_LENGTH].to_vec()
 }
 
 pub fn cmp_hash(one: &Vec<u8>, two: &Vec<u8>) -> bool {

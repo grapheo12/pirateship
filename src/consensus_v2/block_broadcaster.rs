@@ -158,6 +158,7 @@ impl BlockBroadcaster {
             view_is_stable,
             config_num,
         };
+        // let data = bincode::serialize(&append_entry).unwrap();
         let data = append_entry.encode_to_vec();
         let sz = data.len();
         let data = PinnedMessage::from(data, sz, SenderType::Anon);

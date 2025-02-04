@@ -69,6 +69,8 @@ impl CryptoService {
                     break;
                 },
                 CryptoServiceCommand::PrepareBlock(proto_block, block_tx, hash_tx, must_sign) => {
+                    // let mut buf = bincode::serialize(&proto_block).unwrap();
+                    
                     let mut buf = proto_block.encode_to_vec();
                     let mut hsh = hash(&buf);
                     let mut block = proto_block;

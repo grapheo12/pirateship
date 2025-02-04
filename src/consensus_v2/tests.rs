@@ -253,10 +253,10 @@ async fn test_block_broadcaster() {
     let client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
 
     let storage_config = &config.get().consensus_config.log_storage_config;
-    let mut storage = match storage_config {
-        rocksdb_config @ crate::config::StorageConfig::RocksDB(_) => {
+    let (mut storage, storage_path) = match storage_config {
+        rocksdb_config @ crate::config::StorageConfig::RocksDB(_inner) => {
             let _db = RocksDBStorageEngine::new(rocksdb_config.clone());
-            StorageService::new(_db, _chan_depth)
+            (StorageService::new(_db, _chan_depth), _inner.db_path.clone())
         },
         crate::config::StorageConfig::FileStorage(_) => {
             panic!("File storage not supported!");
@@ -380,6 +380,7 @@ async fn test_block_broadcaster() {
 
 
     handles.shutdown().await;
+    std::fs::remove_dir_all(&storage_path).unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
@@ -401,10 +402,10 @@ async fn test_staging() {
     let staging_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
 
     let storage_config = &config.get().consensus_config.log_storage_config;
-    let mut storage = match storage_config {
-        rocksdb_config @ crate::config::StorageConfig::RocksDB(_) => {
+    let (mut storage, storage_path) = match storage_config {
+        rocksdb_config @ crate::config::StorageConfig::RocksDB(_inner) => {
             let _db = RocksDBStorageEngine::new(rocksdb_config.clone());
-            StorageService::new(_db, _chan_depth)
+            (StorageService::new(_db, _chan_depth), _inner.db_path.clone())
         },
         crate::config::StorageConfig::FileStorage(_) => {
             panic!("File storage not supported!");
@@ -554,4 +555,6 @@ async fn test_staging() {
 
     println!("Errors appearing after this are inconsequential");
     handles.shutdown().await;
+
+    std::fs::remove_dir_all(&storage_path).unwrap();
 }
