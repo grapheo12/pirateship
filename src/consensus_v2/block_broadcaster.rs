@@ -159,7 +159,9 @@ impl BlockBroadcaster {
             config_num,
         };
         // let data = bincode::serialize(&append_entry).unwrap();
-        let data = append_entry.encode_to_vec();
+        let data = bitcode::encode(&append_entry);
+
+        // let data = append_entry.encode_to_vec();
         let sz = data.len();
         let data = PinnedMessage::from(data, sz, SenderType::Anon);
         let mut profile = LatencyProfile::new();

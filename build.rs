@@ -5,7 +5,7 @@
 use std::io::Result;
 fn main() -> Result<()> {
     prost_build::Config::new()
-        .type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]")
+        .type_attribute(".", "#[derive(bitcode::Encode, bitcode::Decode)]")
         .compile_protos(
         &[
             "src/proto/auth.proto",
