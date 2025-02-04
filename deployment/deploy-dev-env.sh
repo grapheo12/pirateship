@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # Copyright (c) Shubham Mishra. All rights reserved.
 # Licensed under the MIT License.
@@ -21,19 +21,25 @@ RUN_CMD=$2
 
 pushd $CWD/deployment
 
-DEV_VM=$(grep clientpool_vm0 nodelist_public.txt | cut -f 2)
+echo $CWD
+
+DEV_VM=$(grep clientpool_vm0 nodelist_public.txt | cut -f2)
+DEV_VM=127.0.0.1
+PORT=2222 # TODO: hard coded in deploy-docker.py right now 2222 when using docker localy, 22 otherwise
+echo $DEV_VM
+
 DEV_USER=pftadmin
-DEV_SSH_KEY=cluster_key.pem
+DEV_SSH_KEY=/home/ncrooks/.ssh/cluster_key.pem
 
 ssh -i $DEV_SSH_KEY $DEV_USER@$DEV_VM 'mkdir -p ~/pft-dev/logs'
-scp -r -q -p -i $DEV_SSH_KEY $CWD/benches $DEV_USER@$DEV_VM:~/pft-dev
-scp -r -q -p -i $DEV_SSH_KEY $CWD/src $DEV_USER@$DEV_VM:~/pft-dev
+scp -r -q -p $PORT -i $DEV_SSH_KEY $CWD/benches $DEV_USER@$DEV_VM:~/pft-dev
+scp -r -q -p $PORT -i $DEV_SSH_KEY $CWD/src $DEV_USER@$DEV_VM:~/pft-dev
 
 # Need to clear pycache and venv locally before sending over
 rm -r $CWD/scripts/venv
 rm -r $CWD/scripts/__pycache__
-scp -r -q -p -i $DEV_SSH_KEY $CWD/scripts $DEV_USER@$DEV_VM:~/pft-dev
-scp -r -q -p -i $DEV_SSH_KEY $CWD/experiments $DEV_USER@$DEV_VM:~/pft-dev
+scp -r -q -p $PORT -i $DEV_SSH_KEY $CWD/scripts $DEV_USER@$DEV_VM:~/pft-dev
+scp -r -q -p $PORT -i $DEV_SSH_KEY $CWD/experiments $DEV_USER@$DEV_VM:~/pft-dev
 
 # Need to redo virtualenv inside
 ssh -i $DEV_SSH_KEY $DEV_USER@$DEV_VM 'virtualenv ~/pft-dev/scripts/venv && ~/pft-dev/scripts/venv/bin/pip3 install -r ~/pft-dev/scripts/requirements.txt'
@@ -41,24 +47,24 @@ ssh -i $DEV_SSH_KEY $DEV_USER@$DEV_VM 'virtualenv ~/pft-dev/scripts/venv && ~/pf
 # Copy nodelist and cluster_key
 # Most experiments scripts expect them to be in ../nodelist.txt and ../cluster_key.pem respectively.
 # We will respect that.
-scp -q -p -i $DEV_SSH_KEY $DEV_SSH_KEY $DEV_USER@$DEV_VM:~/
-scp -q -p -i $DEV_SSH_KEY nodelist.txt $DEV_USER@$DEV_VM:~/
+scp -q -p $PORT -i $DEV_SSH_KEY $DEV_SSH_KEY $DEV_USER@$DEV_VM:~/
+scp -q -p $PORT -i $DEV_SSH_KEY nodelist.txt $DEV_USER@$DEV_VM:~/
 
 # Extra nodelist may or may not be present
 touch extra_nodelist.txt
-scp -q -p -i $DEV_SSH_KEY extra_nodelist.txt $DEV_USER@$DEV_VM:~/
+scp -q -p $PORT -i $DEV_SSH_KEY extra_nodelist.txt $DEV_USER@$DEV_VM:~/
 
 popd
 
 # Makefile and other rust things
-scp -q -p -i deployment/$DEV_SSH_KEY Makefile $DEV_USER@$DEV_VM:~/pft-dev
-scp -q -p -i deployment/$DEV_SSH_KEY build.rs $DEV_USER@$DEV_VM:~/pft-dev
-scp -q -p -i deployment/$DEV_SSH_KEY Cargo.toml $DEV_USER@$DEV_VM:~/pft-dev
-scp -q -p -i deployment/$DEV_SSH_KEY Cargo.lock $DEV_USER@$DEV_VM:~/pft-dev
+scp -q -p $PORT -i $DEV_SSH_KEY Makefile $DEV_USER@$DEV_VM:~/pft-dev
+scp -q -p $PORT -i $DEV_SSH_KEY build.rs $DEV_USER@$DEV_VM:~/pft-dev
+scp -q -p $PORT -i $DEV_SSH_KEY Cargo.toml $DEV_USER@$DEV_VM:~/pft-dev
+scp -q -p $PORT -i $DEV_SSH_KEY Cargo.lock $DEV_USER@$DEV_VM:~/pft-dev
 
 
 # Now build
-ssh -i deployment/$DEV_SSH_KEY $DEV_USER@$DEV_VM "cd ~/pft-dev && $BUILD_CMD"
+ssh -i $DEV_SSH_KEY -p $PORT $DEV_USER@$DEV_VM "cd ~/pft-dev && $BUILD_CMD"
 
 # Now run in screen
-ssh -i deployment/$DEV_SSH_KEY $DEV_USER@$DEV_VM "screen -dm bash -c 'cd ~/pft-dev && source scripts/venv/bin/activate && $RUN_CMD'"
+ssh -i $DEV_SSH_KEY -p $PORT $DEV_USER@$DEV_VM "screen -dm bash -c 'cd ~/pft-dev && source scripts/venv/bin/activate && $RUN_CMD'"

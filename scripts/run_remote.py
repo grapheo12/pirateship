@@ -237,7 +237,8 @@ def run_remote(node_template, client_template, ip_list, identity_file, repeat, s
         user="pftadmin", # This dependency comes from terraform
         connect_kwargs={
             "key_filename": identity_file
-        }
+        },
+        
     ) for client, ip in clients.items()}
 
     curr_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -330,8 +331,9 @@ def run_remote(node_template, client_template, ip_list, identity_file, repeat, s
     help="Seconds to run each experiment",
     type=click.INT
 )
-def main(node_template, client_template, ip_list, identity_file, repeat, seconds):
-    run_remote(node_template, client_template, ip_list, identity_file, repeat, seconds)
+@click.options("-d", "--docker_ssh", default=22, help="Port SSH Container", type=click.INT)
+def main(node_template, client_template, ip_list, identity_file, repeat, seconds, docker):
+    run_remote(node_template, client_template, ip_list, identity_file, repeat, seconds, docker)
 
     
     
