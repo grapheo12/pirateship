@@ -5,7 +5,7 @@ use tokio::sync::{oneshot, Mutex};
 use crate::crypto::FutureHash;
 use crate::utils::channel::{Sender, Receiver};
 
-use crate::{config::AtomicConfig, consensus::timer::ResettableTimer, crypto::{hash, CachedBlock, CryptoServiceConnector, HashType}, proto::consensus::{proto_block::Tx, DefferedSignature, ProtoBlock, ProtoForkValidation, ProtoQuorumCertificate, ProtoTransactionList}};
+use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{hash, CachedBlock, CryptoServiceConnector, HashType}, proto::consensus::{proto_block::Tx, DefferedSignature, ProtoBlock, ProtoForkValidation, ProtoQuorumCertificate, ProtoTransactionList}};
 
 use super::batch_proposal::{MsgAckChanWithTag, RawBatch};
 

@@ -5,7 +5,7 @@ use log::warn;
 use crate::utils::channel::{Sender, Receiver};
 use tokio::sync::Mutex;
 
-use crate::{config::AtomicConfig, consensus::timer::ResettableTimer, proto::execution::ProtoTransaction, rpc::server::MsgAckChan};
+use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, proto::execution::ProtoTransaction, rpc::server::MsgAckChan};
 
 pub type RawBatch = Vec<ProtoTransaction>;
 

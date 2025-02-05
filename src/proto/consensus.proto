@@ -66,7 +66,7 @@ message ProtoBlock {
 
 // This is different from the logical view of a fork with fields `last` and `last_qc`.
 message ProtoFork {
-    repeated ProtoBlock blocks = 1;
+    repeated bytes serialized_blocks = 1;
 }
 
 

@@ -151,7 +151,7 @@ impl BlockBroadcaster {
         let (view, view_is_stable, config_num) = (block.block.view, block.block.view_is_stable, block.block.config_num);
         let append_entry = ProtoAppendEntries {
             fork: Some(ProtoFork {
-                blocks: vec![block.block],
+                serialized_blocks: vec![block.block_ser.clone()],
             }),
             commit_index: self.ci,
             view,
@@ -159,9 +159,9 @@ impl BlockBroadcaster {
             config_num,
         };
         // let data = bincode::serialize(&append_entry).unwrap();
-        let data = bitcode::encode(&append_entry);
+        // let data = bitcode::encode(&append_entry);
 
-        // let data = append_entry.encode_to_vec();
+        let data = append_entry.encode_to_vec();
         let sz = data.len();
         let data = PinnedMessage::from(data, sz, SenderType::Anon);
         let mut profile = LatencyProfile::new();

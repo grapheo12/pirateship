@@ -3,7 +3,7 @@
 
 use std::{collections::HashMap, fs::File, future::Future, io::{self, Cursor, Error}, path, sync::{atomic::AtomicBool, Arc}, time::{Duration, Instant}};
 
-use crate::{config::{AtomicConfig, Config}, consensus::handler::ForwardedMessage, crypto::{AtomicKeyStore, KeyStore}, rpc::auth, utils::AtomicStruct};
+use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, rpc::auth, utils::AtomicStruct};
 use indexmap::IndexMap;
 use tokio::{io::{BufWriter, ReadHalf}, sync::{mpsc, oneshot}};
 use log::{debug, info, trace, warn};
