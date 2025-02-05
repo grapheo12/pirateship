@@ -4,7 +4,7 @@ use log::debug;
 use prost::Message;
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::consensus::{ProtoAppendEntries, ProtoFork}, rpc::{client::{Client, PinnedClient}, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageServiceConnector}};
+use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::consensus::{ProtoAppendEntries, ProtoFork}, rpc::{client::{Client, PinnedClient}, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck, StorageServiceConnector}};
 
 pub enum BlockBroadcasterCommand {
     UpdateCI(u64)
@@ -22,7 +22,7 @@ pub struct BlockBroadcaster {
     // Output ports
     storage: StorageServiceConnector,
     client: PinnedClient,
-    staging_tx: Sender<CachedBlock>,
+    staging_tx: Sender<(CachedBlock, oneshot::Receiver<StorageAck>)>,
     logserver_tx: Sender<CachedBlock>,
 
 }
@@ -35,7 +35,7 @@ impl BlockBroadcaster {
         other_block_rx: Receiver<oneshot::Receiver<CachedBlock>>,
         control_command_rx: Receiver<BlockBroadcasterCommand>,
         storage: StorageServiceConnector,
-        staging_tx: Sender<CachedBlock>,
+        staging_tx: Sender<(CachedBlock, oneshot::Receiver<StorageAck>)>,
         logserver_tx: Sender<CachedBlock>,
     ) -> Self {
         
@@ -127,7 +127,7 @@ impl BlockBroadcaster {
 
     async fn store_and_forward_internally(&mut self, block: &CachedBlock) -> Result<(), Error> {
         // Store
-        self.storage.put_block(block).await?;
+        let storage_ack = self.storage.put_block(block).await;
     
     
         // Forward
@@ -135,7 +135,7 @@ impl BlockBroadcaster {
         self.logserver_tx.send(block.clone()).await.unwrap();
 
         debug!("Sending {}", block.block.n);
-        self.staging_tx.send(block.clone()).await.unwrap();
+        self.staging_tx.send((block.clone(), storage_ack)).await.unwrap();
 
         Ok(())
     }

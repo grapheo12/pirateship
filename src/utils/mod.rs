@@ -15,6 +15,9 @@ pub use storage_service::*;
 
 pub mod workload_generators;
 
+mod serialize;
+pub use serialize::*;
+
 
 pub mod channel {
     mod channel_tokio {

@@ -2,9 +2,9 @@ use std::{collections::{HashMap, HashSet, VecDeque}, pin::Pin, sync::Arc, time::
 
 use async_recursion::async_recursion;
 use log::{debug, error, warn};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot};
 
-use crate::{config::AtomicConfig, consensus::timer::ResettableTimer, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{proto_block::Sig, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, rpc::client::PinnedClient, utils::channel::{Receiver, Sender}};
+use crate::{config::AtomicConfig, consensus::{commit::maybe_byzantine_commit, timer::ResettableTimer}, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{proto_block::Sig, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, rpc::client::PinnedClient, utils::{channel::{Receiver, Sender}, StorageAck}};
 
 use super::{block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand};
 
@@ -52,7 +52,7 @@ pub struct Staging {
 
     view_change_timer: Arc<Pin<Box<ResettableTimer>>>,
 
-    block_rx: Receiver<CachedBlock>,
+    block_rx: Receiver<(CachedBlock, oneshot::Receiver<StorageAck>)>,
     vote_rx: Receiver<VoteWithSender>,
     view_change_rx: Receiver<ProtoViewChange>,
 
@@ -67,7 +67,7 @@ pub struct Staging {
 impl Staging {
     pub fn new(
         config: AtomicConfig, client: PinnedClient, crypto: CryptoServiceConnector,
-        block_rx: Receiver<CachedBlock>, vote_rx: Receiver<VoteWithSender>, view_change_rx: Receiver<ProtoViewChange>,
+        block_rx: Receiver<(CachedBlock, oneshot::Receiver<StorageAck>)>, vote_rx: Receiver<VoteWithSender>, view_change_rx: Receiver<ProtoViewChange>,
         client_reply_tx: Sender<ClientReplyCommand>, app_tx: Sender<AppCommand>,
         block_broadcaster_command_tx: Sender<BlockBroadcasterCommand>,
         block_sequencer_command_tx: Sender<BlockSequencerControlCommand>,
@@ -130,10 +130,10 @@ impl Staging {
                 if block.is_none() {
                     return Err(())
                 }
-                let block = block.unwrap();
+                let (block, storage_ack) = block.unwrap();
                 debug!("Got {}", block.block.n);
                 if i_am_leader {
-                    self.process_block_as_leader(block).await?;
+                    self.process_block_as_leader(block, storage_ack).await?;
                 } else {
                     self.process_block_as_follower(block).await?;
                 }
@@ -204,13 +204,18 @@ impl Staging {
         Ok(())
     }
 
-    async fn vote_on_last_block_for_self(&mut self) -> Result<(), ()> {
+    async fn vote_on_last_block_for_self(&mut self, storage_ack: oneshot::Receiver<StorageAck>) -> Result<(), ()> {
         let name = self.config.get().net_config.name.clone();
 
         let last_block = match self.pending_blocks.back() {
             Some(b) => b,
             None => return Err(()),
         };
+
+
+        // Wait for it to be stored.
+        // Invariant: I vote => I stored
+        storage_ack.await.unwrap();
 
 
         let mut vote = ProtoVote { 
@@ -235,7 +240,7 @@ impl Staging {
     }
 
     #[async_recursion]
-    async fn process_block_as_leader(&mut self, block: CachedBlock) -> Result<(), ()> {
+    async fn process_block_as_leader(&mut self, block: CachedBlock, storage_ack: oneshot::Receiver<StorageAck>) -> Result<(), ()> {
         if block.block.view < self.view {
             // Do not accept anything from a lower view.
             return Ok(());
@@ -263,7 +268,7 @@ impl Staging {
             
             // Ready to accept the block normally.
             if self.i_am_leader() {
-                return self.process_block_as_leader(block).await;
+                return self.process_block_as_leader(block, storage_ack).await;
             } else {
                 return self.process_block_as_follower(block).await;
             }
@@ -279,7 +284,7 @@ impl Staging {
         self.pending_blocks.push_back(block_with_votes);
 
         // Now vote for self
-        self.vote_on_last_block_for_self().await?;
+        self.vote_on_last_block_for_self(storage_ack).await?;
 
 
         Ok(())
@@ -362,6 +367,7 @@ impl Staging {
 
     async fn maybe_create_qcs(&mut self) -> Result<(), ()> {
 
+        self.maybe_byzantine_commit(ProtoQuorumCertificate::default()).await?;
         Ok(())
     }
 
@@ -371,6 +377,9 @@ impl Staging {
     /// If this happens then all QCs in self.pending_qcs such that block_n <= new_bci is removed.
     async fn maybe_byzantine_commit(&mut self, qc: ProtoQuorumCertificate) -> Result<(), ()> {
         // TODO::::
+
+        self.bci = self.ci;
+        self.pending_blocks.retain(|e| e.block.block.n > self.bci);
         Ok(())
     }
 

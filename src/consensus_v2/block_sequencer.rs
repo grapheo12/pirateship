@@ -2,6 +2,7 @@ use std::{pin::Pin, sync::Arc, time::Duration};
 
 use log::trace;
 use tokio::sync::{oneshot, Mutex};
+use crate::crypto::FutureHash;
 use crate::utils::channel::{Sender, Receiver};
 
 use crate::{config::AtomicConfig, consensus::timer::ResettableTimer, crypto::{hash, CachedBlock, CryptoServiceConnector, HashType}, proto::consensus::{proto_block::Tx, DefferedSignature, ProtoBlock, ProtoForkValidation, ProtoQuorumCertificate, ProtoTransactionList}};
@@ -27,10 +28,10 @@ pub struct BlockSequencer {
     current_qc_list: Vec<ProtoQuorumCertificate>,
 
     block_broadcaster_tx: Sender<(u64, oneshot::Receiver<CachedBlock>)>, // Last-ditch effort to parallelize hashing and signing of blocks, shouldn't matter.
-    client_reply_tx: Sender<(HashType, Vec<MsgAckChanWithTag>)>,
+    client_reply_tx: Sender<(oneshot::Receiver<HashType>, Vec<MsgAckChanWithTag>)>,
 
     crypto: CryptoServiceConnector,
-    parent_hash: HashType,
+    parent_hash_rx: FutureHash,
     seq_num: u64,
     view: u64,
     config_num: u64,
@@ -46,16 +47,13 @@ impl BlockSequencer {
         batch_rx: Receiver<(RawBatch, Vec<MsgAckChanWithTag>)>,
         qc_rx: Receiver<ProtoQuorumCertificate>,
         block_broadcaster_tx: Sender<(u64, oneshot::Receiver<CachedBlock>)>,
-        client_reply_tx: Sender<(HashType, Vec<MsgAckChanWithTag>)>,
+        client_reply_tx: Sender<(oneshot::Receiver<HashType>, Vec<MsgAckChanWithTag>)>,
         crypto: CryptoServiceConnector,
     ) -> Self {
 
         let signature_timer = ResettableTimer::new(
             Duration::from_millis(config.get().consensus_config.signature_max_delay_ms)
         );
-
-        let parent = vec![];
-        let parent_hash = hash(&parent); // Can't use crypto here as it is async.
 
         Self {
             config,
@@ -67,7 +65,7 @@ impl BlockSequencer {
             block_broadcaster_tx,
             client_reply_tx,
             crypto,
-            parent_hash,
+            parent_hash_rx: FutureHash::None,
             seq_num: 1,
             view: 1,
             config_num: 1,
@@ -147,10 +145,9 @@ impl BlockSequencer {
 
         let qc_list = self.current_qc_list.drain(..).collect();
 
-        let parent = self.parent_hash.clone();
         let block = ProtoBlock {
             n,
-            parent,
+            parent: Vec::new(),
             view: self.view,
             qc: qc_list,
             fork_validation,
@@ -162,10 +159,12 @@ impl BlockSequencer {
             sig: Some(crate::proto::consensus::proto_block::Sig::NoSig(DefferedSignature{})),
         };
 
-        let (block_rx, hash_rx) = self.crypto.prepare_block(block, must_sign).await;
-        self.parent_hash = hash_rx.await.unwrap();
+        let parent_hash_rx = self.parent_hash_rx.take();
 
-        self.client_reply_tx.send((self.parent_hash.clone(), replies)).await
+        let (block_rx, hash_rx, hash_rx2) = self.crypto.prepare_block(block, must_sign, parent_hash_rx).await;
+        self.parent_hash_rx = FutureHash::Future(hash_rx);
+
+        self.client_reply_tx.send((hash_rx2, replies)).await
             .expect("Should be able to send client_reply_tx");
         self.block_broadcaster_tx.send((n, block_rx)).await
             .expect("Should be able to send block_broadcaster_tx");
@@ -217,7 +216,7 @@ impl BlockSequencer {
                 }
 
                 self.seq_num = new_seq_num;     // This may not be monotonic due to rollbacks.
-                self.parent_hash = new_parent_hash;
+                self.parent_hash_rx = FutureHash::Immediate(new_parent_hash);
 
                 // Now the NEXT block (ie new_seq_num + 1) is going to be for NewView.
                 self.handle_new_batch(RawBatch::new(), vec![], fork_validation).await;

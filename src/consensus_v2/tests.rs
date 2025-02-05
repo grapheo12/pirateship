@@ -1,5 +1,6 @@
-use std::{sync::Arc, time::{Duration, Instant}};
+use std::{sync::Arc, thread, time::{Duration, Instant}};
 
+use rand::{thread_rng, Rng as _};
 use tokio::{sync::Mutex, task::JoinSet};
 use crate::{consensus_v2::{block_broadcaster::BlockBroadcaster, staging::Staging}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
 
@@ -7,11 +8,14 @@ use crate::{config::{AtomicConfig, Config}, consensus_v2::{batch_proposal::Batch
 
 use super::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag};
 
-const TEST_CRYPTO_NUM_TASKS: usize = 8;
+const TEST_CRYPTO_NUM_TASKS: usize = 6;
 const MAX_TXS: usize = 2_000_000;
 const MAX_CLIENTS: usize = 10;
 const TEST_RATE: f64 = 500_000.0;
 const PAYLOAD_SIZE: usize = 512;
+
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc; 
 
 async fn load(batch_proposer_tx: Sender<TxWithAckChanTag>, req_per_sec: f64) {
     let sleep_time = Duration::from_secs_f64(1.0f64 / req_per_sec);
@@ -22,7 +26,7 @@ async fn load(batch_proposer_tx: Sender<TxWithAckChanTag>, req_per_sec: f64) {
         on_crash_commit: Some(ProtoTransactionPhase {
             ops: vec![ProtoTransactionOp {
                 op_type: crate::proto::execution::ProtoTransactionOpType::Noop.into(),
-                operands: vec![vec![2u8; PAYLOAD_SIZE]],
+                operands: vec![vec![rand::random(); PAYLOAD_SIZE]],
             }; 1],
         }),
         on_byzantine_commit: None,
@@ -50,7 +54,7 @@ async fn load(batch_proposer_tx: Sender<TxWithAckChanTag>, req_per_sec: f64) {
 }
 
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_batch_proposal() {
     // Generate configs first
     let cfg_path = "configs/node1_config.json";
@@ -62,6 +66,7 @@ async fn test_batch_proposal() {
 
     let config = AtomicConfig::new(config);
     let keystore = AtomicKeyStore::new(key_store);
+    println!("num tasks: {}", TEST_CRYPTO_NUM_TASKS);
     let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone());
     crypto.run();
 
@@ -121,7 +126,7 @@ async fn test_batch_proposal() {
 }
 
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_block_sequencer() {
     // Generate configs first
     let cfg_path = "configs/node1_config.json";
@@ -133,6 +138,8 @@ async fn test_block_sequencer() {
 
     let config = AtomicConfig::new(config);
     let keystore = AtomicKeyStore::new(key_store);
+    println!("num tasks: {}", TEST_CRYPTO_NUM_TASKS);
+
     let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone());
     crypto.run();
 
@@ -235,7 +242,7 @@ async fn test_block_sequencer() {
 }
 
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_block_broadcaster() {
     // Generate configs first
     let cfg_path = "configs/node1_config.json";
@@ -331,7 +338,7 @@ async fn test_block_broadcaster() {
     let mut signed_blocks = 0;
 
     let start = Instant::now();
-    while let Some(block) = staging_rx.recv().await {
+    while let Some((block, _storage_ack)) = staging_rx.recv().await {
         if block.block.n != last_block + 1 {
             panic!("Monotonicity broken!");
         }
@@ -383,7 +390,7 @@ async fn test_block_broadcaster() {
     std::fs::remove_dir_all(&storage_path).unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_staging() {
     // Generate configs first
     let cfg_path = "configs/node1_config.json";

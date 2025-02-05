@@ -1,11 +1,14 @@
 use std::io::{BufReader, Error, ErrorKind};
 
 use ed25519_dalek::SIGNATURE_LENGTH;
+use log::trace;
+use nix::libc::PARENB;
 use prost::Message;
 use rand::{thread_rng, Rng};
+use sha2::{Digest, Sha256};
 use tokio::{sync::{mpsc::{channel, Receiver, Sender}, oneshot}, task::JoinSet};
 
-use crate::proto::consensus::ProtoBlock;
+use crate::{crypto::DIGEST_LENGTH, proto::consensus::ProtoBlock, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser}};
 
 use super::{hash, AtomicKeyStore, HashType, KeyStore};
 
@@ -16,12 +19,32 @@ pub struct CachedBlock {
     pub block_hash: HashType,
 }
 
+pub enum FutureHash {
+    None,
+    Immediate(HashType),
+    Future(oneshot::Receiver<HashType>),
+}
+
+impl FutureHash {
+    pub fn take(&mut self) -> Self {
+        std::mem::replace(self, FutureHash::None)
+    }
+}
+
+fn hash_proto_block_ser(data: &[u8]) -> HashType {
+    let mut hasher = Sha256::new();
+    hasher.update(&data[DIGEST_LENGTH+SIGNATURE_LENGTH..]);
+    hasher.update(&data[SIGNATURE_LENGTH..SIGNATURE_LENGTH+DIGEST_LENGTH]);
+    hasher.update(&data[..SIGNATURE_LENGTH]);
+    hasher.finalize().to_vec()
+}
+
 enum CryptoServiceCommand {
     Hash(Vec<u8>, oneshot::Sender<Vec<u8>>),
     Sign(Vec<u8>, oneshot::Sender<[u8; SIGNATURE_LENGTH]>),
     Verify(Vec<u8> /* data */, String /* Signer name */, [u8; SIGNATURE_LENGTH] /* Signature */, oneshot::Sender<bool>),
     ChangeKeyStore(KeyStore, oneshot::Sender<()>),
-    PrepareBlock(ProtoBlock, oneshot::Sender<CachedBlock>, oneshot::Sender<HashType>, bool /* must_sign */),
+    PrepareBlock(ProtoBlock, oneshot::Sender<CachedBlock>, oneshot::Sender<HashType>, oneshot::Sender<HashType>, bool /* must_sign */, FutureHash),
 
     // Takes the output of StorageService and converts it to CachedBlock.
     CheckBlockSer(HashType, oneshot::Receiver<Result<Vec<u8>, Error>>, oneshot::Sender<Result<CachedBlock, Error>>),
@@ -49,8 +72,14 @@ impl CryptoService {
         Self { num_tasks, keystore, handles: JoinSet::new(), cmd_txs: Vec::with_capacity(num_tasks) }
     }
 
-    async fn worker(keystore: AtomicKeyStore, mut cmd_rx: Receiver<CryptoServiceCommand>) {
+    async fn worker(keystore: AtomicKeyStore, mut cmd_rx: Receiver<CryptoServiceCommand>, worker_id: usize) {
+        let mut total_work = 0;
         while let Some(cmd) = cmd_rx.recv().await {
+            total_work += 1usize;
+
+            if total_work % 1000 == 0 {
+                trace!("Crypto service worker {} total work: {}", worker_id, total_work);
+            }
             match cmd {
                 CryptoServiceCommand::Hash(data, res_tx) => {
                     let _ = res_tx.send(hash(&data));
@@ -68,28 +97,44 @@ impl CryptoService {
                 CryptoServiceCommand::Die => {
                     break;
                 },
-                CryptoServiceCommand::PrepareBlock(proto_block, block_tx, hash_tx, must_sign) => {
+                CryptoServiceCommand::PrepareBlock(proto_block, block_tx, hash_tx, hash_tx2, must_sign, parent_hash_rx) => {
                     // let mut buf = bincode::serialize(&proto_block).unwrap();
-                    let mut buf = bitcode::encode(&proto_block);
-                    
+                    // let mut buf = bitcode::encode(&proto_block);
                     // let mut buf = proto_block.encode_to_vec();
-                    let mut hsh = hash(&buf);
-                    let mut block = proto_block;
-                    if must_sign {
-                        let keystore = keystore.get();
-                        let sig = keystore.sign(&hsh);
-                        block.sig = Some(crate::proto::consensus::proto_block::Sig::ProposerSig(sig.to_vec()));
 
-                        buf = block.encode_to_vec();
-                        hsh = hash(&buf);
+                    let mut buf = serialize_proto_block_nascent(&proto_block).unwrap();
+                    let mut hasher = Sha256::new();
+                    hasher.update(&buf[DIGEST_LENGTH+SIGNATURE_LENGTH..]);
+
+                    let parent = match parent_hash_rx {
+                        FutureHash::None => vec![0u8; DIGEST_LENGTH],
+                        FutureHash::Immediate(val) => val,
+                        FutureHash::Future(receiver) => receiver.await.unwrap(),
+                    };
+                    update_parent_hash_in_proto_block_ser(&mut buf, &parent);
+                    let mut block = proto_block;
+                    block.parent = parent;
+                    hasher.update(&buf[SIGNATURE_LENGTH..SIGNATURE_LENGTH+DIGEST_LENGTH]);
+                    if must_sign {
+                        // Signature is on the (parent_hash || block) part of the serialized block.
+                        let partial_hsh = hash(&buf[SIGNATURE_LENGTH..]);
+                        let keystore = keystore.get();
+                        let sig = keystore.sign(&partial_hsh);
+                        block.sig = Some(crate::proto::consensus::proto_block::Sig::ProposerSig(sig.to_vec()));
+                        update_signature_in_proto_block_ser(&mut buf, &sig);
                     }
 
-                    hash_tx.send(hsh.clone()).unwrap();
-                    block_tx.send(CachedBlock {
+                    hasher.update(&buf[..SIGNATURE_LENGTH]);
+
+                    let hsh = hasher.finalize().to_vec();
+
+                    let _ = hash_tx.send(hsh.clone());
+                    let _ = hash_tx2.send(hsh.clone());
+                    let _ = block_tx.send(CachedBlock {
                         block,
                         block_ser: buf,
                         block_hash: hsh
-                    }).unwrap();
+                    });
                 },
                 CryptoServiceCommand::CheckBlockSer(hsh, ser_rx, block_tx) => {
                     let res = ser_rx.await.unwrap();
@@ -99,13 +144,13 @@ impl CryptoService {
                     }
                     let block_ser = res.unwrap();
 
-                    let chk_hsh = hash(&block_ser);
+                    let chk_hsh = hash_proto_block_ser(&block_ser);
                     if !chk_hsh.eq(&hsh) {
                         block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid hash"))).unwrap();
                         continue;
                     }
 
-                    let block = ProtoBlock::decode(block_ser.as_ref());
+                    let block = deserialize_proto_block(block_ser.as_ref());
                     match block {
                         Ok(block) => {
                             block_tx.send(Ok(CachedBlock {
@@ -121,15 +166,17 @@ impl CryptoService {
                 },
             }
         }
+
+        trace!("Crypto service worker {} done. Total work: {}", worker_id, total_work);
     }
 
     pub fn run(&mut self) {
-        for _ in 0..self.num_tasks {
+        for i in 0..self.num_tasks {
             let (tx, rx) = channel(2048);
             self.cmd_txs.push(tx);
             let key_store = self.keystore.clone();
             self.handles.spawn(async move {
-                Self::worker(key_store, rx).await;
+                Self::worker(key_store, rx, i).await;
             });
         }
     }
@@ -188,12 +235,13 @@ impl CryptoServiceConnector {
         dispatch_cmd!(self, CryptoServiceCommand::ChangeKeyStore, key_store);
     }
 
-    pub async fn prepare_block(&mut self, block: ProtoBlock, must_sign: bool) -> (oneshot::Receiver<CachedBlock>, oneshot::Receiver<HashType>) {
+    pub async fn prepare_block(&mut self, block: ProtoBlock, must_sign: bool, parent_hash_rx: FutureHash) -> (oneshot::Receiver<CachedBlock>, oneshot::Receiver<HashType>, oneshot::Receiver<HashType>) {
         let (block_tx, block_rx) = oneshot::channel();
         let (hash_tx, hash_rx) = oneshot::channel();
-        self.dispatch(CryptoServiceCommand::PrepareBlock(block, block_tx, hash_tx, must_sign)).await;
+        let (hash_tx2, hash_rx2) = oneshot::channel();
+        self.dispatch(CryptoServiceCommand::PrepareBlock(block, block_tx, hash_tx, hash_tx2, must_sign, parent_hash_rx)).await;
 
-        (block_rx, hash_rx)
+        (block_rx, hash_rx, hash_rx2)
     }
 
     pub async fn check_block(&mut self, hsh: HashType, ser_rx: oneshot::Receiver<Result<Vec<u8>, Error>>) -> Result<CachedBlock, Error> {

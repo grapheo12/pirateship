@@ -45,18 +45,20 @@ impl<S: StorageEngine> StorageService<S> {
             match cmd {
                 StorageServiceCommand::Put(key, val, ok_chan) => {
                     let res = self.db.put_block(&val, &key);
-                    ok_chan.send(res).unwrap();
+                    let _ = ok_chan.send(res);
+                    // let _ = ok_chan.send(Ok(()));
                 },
                 StorageServiceCommand::Get(key, val_chan) => {
                     let res = self.db.get_block(&key);
-                    val_chan.send(res).unwrap();
+                    let _ = val_chan.send(res);
                 },
             }
         }
-        println!("I am so dead!!!");
         self.db.destroy();
     }
 }
+
+pub type StorageAck = Result<(), Error>;
 
 impl StorageServiceConnector {
     pub async fn get_block(&mut self, block_hash: &HashType) -> Result<CachedBlock, Error> {
@@ -67,10 +69,10 @@ impl StorageServiceConnector {
         self.crypto.check_block(block_hash.clone(), rx).await
     }
 
-    pub async fn put_block(&self, block: &CachedBlock) -> Result<(), Error> {
+    pub async fn put_block(&self, block: &CachedBlock) -> oneshot::Receiver<StorageAck> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx.send(StorageServiceCommand::Put(block.block_hash.clone(), block.block_ser.clone(), tx)).await.unwrap();
 
-        rx.await.unwrap()
+        rx
     }
 }

@@ -4,9 +4,10 @@
 
 use sha2::{Digest, Sha256};
 
+
 pub const DIGEST_LENGTH: usize = 32;
 
-pub fn hash(data: &Vec<u8>) -> Vec<u8> {
+pub fn hash(data: &[u8]) -> Vec<u8> {
     Sha256::new()
         .chain_update(data)
         .finalize()
