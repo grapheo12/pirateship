@@ -54,6 +54,13 @@ pub fn update_parent_hash_in_proto_block_ser(block: &mut Vec<u8>, parent_hash: &
     block[SIGNATURE_LENGTH..SIGNATURE_LENGTH+DIGEST_LENGTH].copy_from_slice(parent_hash);
 }
 
+pub fn get_parent_hash_in_proto_block_ser(block: &Vec<u8>) -> Option<HashType> {
+    if block.len() < DIGEST_LENGTH + SIGNATURE_LENGTH {
+        return None;
+    }
+    Some(block[SIGNATURE_LENGTH..SIGNATURE_LENGTH+DIGEST_LENGTH].to_vec())
+}
+
 pub fn update_signature_in_proto_block_ser(block: &mut Vec<u8>, signature: &[u8; SIGNATURE_LENGTH]) {
     block[..SIGNATURE_LENGTH].copy_from_slice(signature);
 }

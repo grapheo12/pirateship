@@ -2,7 +2,7 @@ mod batch_proposal;
 mod block_sequencer;
 mod block_broadcaster;
 mod staging;
-mod fork_receiver;
+pub mod fork_receiver;
 mod timer;
 
 #[cfg(test)]
@@ -13,6 +13,7 @@ use std::{io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::Arc};
 use batch_proposal::{BatchProposer, MsgAckChanWithTag, TxWithAckChanTag};
 use block_broadcaster::BlockBroadcaster;
 use block_sequencer::BlockSequencer;
+use fork_receiver::ForkReceiver;
 use log::{debug, warn};
 use prost::Message;
 use staging::Staging;
@@ -179,19 +180,20 @@ impl ConsensusNode {
         let (vote_tx, vote_rx) = make_channel(_chan_depth);
         let (view_change_tx, view_change_rx) = make_channel(_chan_depth);
         let (app_tx, mut app_rx) = make_channel(_chan_depth);
-
+        let (fork_receiver_command_tx, fork_receiver_command_rx) = make_channel(_chan_depth);
 
         let block_maker_crypto = crypto.get_connector();
         let block_broadcaster_crypto = crypto.get_connector();
         let block_broadcaster_storage = storage.get_connector(block_broadcaster_crypto);
         let staging_crypto = crypto.get_connector();
-        
+        let fork_receiver_crypto = crypto.get_connector();
+
         let ctx = PinnedConsensusServerContext::new(config.clone(), keystore.clone(), batch_proposer_tx, block_acceptor_tx);
         let batch_proposer = BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx);
         let block_sequencer = BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto);
-        let block_broadcaster = BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx);
-        let staging = Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, view_change_rx, client_reply_command_tx, app_tx, broadcaster_control_command_tx, control_command_tx, qc_tx);
-
+        let block_broadcaster = BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx.clone());
+        let staging = Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, view_change_rx, client_reply_command_tx, app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx);
+        // let fork_receiver = ForkReceiver::new(config.clone(), fork_receiver_crypto, fork_rx, fork_receiver_command_rx, yo);
 
         let mut handles = JoinSet::new();
         handles.spawn(async move {

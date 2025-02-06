@@ -64,9 +64,17 @@ message ProtoBlock {
 
 }
 
+message HalfSerializedBlock {
+    uint64 n = 1;
+    uint64 view = 2;
+    bool view_is_stable = 3;
+    uint64 config_num = 4;
+    bytes serialized_body = 5;      // Format: signature || parent_hash || serialized body
+}
+
 // This is different from the logical view of a fork with fields `last` and `last_qc`.
 message ProtoFork {
-    repeated bytes serialized_blocks = 1;
+    repeated HalfSerializedBlock serialized_blocks = 1;
 }
 
 

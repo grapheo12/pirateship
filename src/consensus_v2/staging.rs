@@ -2,11 +2,12 @@ use std::{collections::{HashMap, HashSet, VecDeque}, pin::Pin, sync::Arc, time::
 
 use async_recursion::async_recursion;
 use log::{debug, error, warn};
+use lz4_flex::block;
 use tokio::sync::{Mutex, oneshot};
 
 use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{proto_block::Sig, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, rpc::client::PinnedClient, utils::{channel::{Receiver, Sender}, StorageAck}};
 
-use super::{block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand};
+use super::{block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, fork_receiver::{self, ForkReceiverCommand}};
 
 pub enum AppCommand {
     CrashCommit(u64 /* ci */, Vec<CachedBlock> /* all blocks from old_ci + 1 to new_ci */)
@@ -60,6 +61,7 @@ pub struct Staging {
     app_tx: Sender<AppCommand>,
     block_broadcaster_command_tx: Sender<BlockBroadcasterCommand>,
     block_sequencer_command_tx: Sender<BlockSequencerControlCommand>,
+    fork_receiver_command_tx: Sender<ForkReceiverCommand>,
     qc_tx: Sender<ProtoQuorumCertificate>,
 }
 
@@ -71,6 +73,7 @@ impl Staging {
         client_reply_tx: Sender<ClientReplyCommand>, app_tx: Sender<AppCommand>,
         block_broadcaster_command_tx: Sender<BlockBroadcasterCommand>,
         block_sequencer_command_tx: Sender<BlockSequencerControlCommand>,
+        fork_receiver_command_tx: Sender<ForkReceiverCommand>,
         qc_tx: Sender<ProtoQuorumCertificate>,
     ) -> Self {
         let _config = config.get();
@@ -97,6 +100,7 @@ impl Staging {
             app_tx,
             block_broadcaster_command_tx,
             block_sequencer_command_tx,
+            fork_receiver_command_tx,
             qc_tx
         }
     }
@@ -215,7 +219,7 @@ impl Staging {
 
         // Wait for it to be stored.
         // Invariant: I vote => I stored
-        storage_ack.await.unwrap();
+        let _ = storage_ack.await.unwrap();
 
 
         let mut vote = ProtoVote { 
@@ -245,7 +249,12 @@ impl Staging {
             // Do not accept anything from a lower view.
             return Ok(());
         } else if block.block.view == self.view {
-            // Within the same view, the log must be append-only.
+            if !self.view_is_stable && block.block.view_is_stable {
+                // Notify upstream stages of view stabilization
+                self.block_sequencer_command_tx.send(BlockSequencerControlCommand::ViewStabilised(self.view, self.config_num)).await.unwrap();
+            }
+            self.view_is_stable = block.block.view_is_stable;
+            // Invariant <ViewLock>: Within the same view, the log must be append-only.
             if !self.check_continuity(&block) {
                 println!("Continuity broken");
                 return Ok(());
@@ -258,8 +267,17 @@ impl Staging {
 
             // Jump to the new view
             self.view = block.block.view;
+
+            // First block of a new view must be unstable.
+            // TODO: This invariant must hold when View Change is enabled. Skipping for now.
+            // assert_eq!(block.block.view_is_stable, false);
+
             self.view_is_stable = block.block.view_is_stable;
             self.config_num = block.block.config_num;
+
+            // Notify upstream stages of view change
+            self.block_sequencer_command_tx.send(BlockSequencerControlCommand::NewUnstableView(self.view, self.config_num)).await.unwrap();
+            self.fork_receiver_command_tx.send(ForkReceiverCommand::UpdateView(self.view, self.config_num)).await.unwrap();
 
             // Flush the pending queue and cancel client requests.
             self.pending_blocks.clear();

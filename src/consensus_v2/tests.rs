@@ -2,7 +2,7 @@ use std::{sync::Arc, thread, time::{Duration, Instant}};
 
 use rand::{thread_rng, Rng as _};
 use tokio::{sync::Mutex, task::JoinSet};
-use crate::{consensus_v2::{block_broadcaster::BlockBroadcaster, staging::Staging}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
+use crate::{consensus_v2::{block_broadcaster::BlockBroadcaster, fork_receiver, staging::Staging}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
 
 use crate::{config::{AtomicConfig, Config}, consensus_v2::{batch_proposal::BatchProposer, block_sequencer::BlockSequencer}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}};
 
@@ -281,14 +281,15 @@ async fn test_block_broadcaster() {
     let (broadcaster_control_command_tx, broadcaster_control_command_rx) = make_channel(_chan_depth);
     let (staging_tx, mut staging_rx) = make_channel(_chan_depth);
     let (logserver_tx, mut logserver_rx) = make_channel(_chan_depth);
-    
+    let (fork_receiver_command_tx, mut fork_receiver_command_rx) = make_channel(_chan_depth);
+
     let block_maker_crypto = crypto.get_connector();
     let block_broadcaster_crypto = crypto.get_connector();
     let block_broadcaster_storage = storage.get_connector(block_broadcaster_crypto);
     
     let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx)));
     let block_maker = Arc::new(Mutex::new(BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto)));
-    let block_broadcaster = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx)));
+    let block_broadcaster = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx)));
     
     let mut handles = JoinSet::new();
     
@@ -309,6 +310,12 @@ async fn test_block_broadcaster() {
 
     handles.spawn(async move {
         while let Some(_) = logserver_rx.recv().await {
+            // Sink
+        }
+    });
+
+    handles.spawn(async move {
+        while let Some(_) = fork_receiver_command_rx.recv().await {
             // Sink
         }
     });
@@ -434,6 +441,7 @@ async fn test_staging() {
     let (vote_tx, vote_rx) = make_channel(_chan_depth);
     let (view_change_tx, view_change_rx) = make_channel(_chan_depth);
     let (app_tx, mut app_rx) = make_channel(_chan_depth);
+    let (fork_receiver_command_tx, mut fork_receiver_command_rx) = make_channel(_chan_depth);
 
     let block_maker_crypto = crypto.get_connector();
     let block_broadcaster_crypto = crypto.get_connector();
@@ -442,8 +450,8 @@ async fn test_staging() {
     
     let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx)));
     let block_maker = Arc::new(Mutex::new(BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto)));
-    let block_broadcaster = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx)));
-    let staging = Arc::new(Mutex::new(Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, view_change_rx, client_reply_command_tx, app_tx, broadcaster_control_command_tx, control_command_tx, qc_tx)));
+    let block_broadcaster = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx.clone())));
+    let staging = Arc::new(Mutex::new(Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, view_change_rx, client_reply_command_tx, app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx)));
     let mut handles = JoinSet::new();
     
     handles.spawn(async move {
@@ -472,6 +480,13 @@ async fn test_staging() {
             // Sink
         }
     });
+
+    handles.spawn(async move {
+        while let Some(_) = fork_receiver_command_rx.recv().await {
+            // Sink
+        }
+    });
+
 
 
     handles.spawn(async move {

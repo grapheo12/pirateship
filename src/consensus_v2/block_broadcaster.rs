@@ -4,7 +4,9 @@ use log::debug;
 use prost::Message;
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::consensus::{ProtoAppendEntries, ProtoFork}, rpc::{client::{Client, PinnedClient}, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck, StorageServiceConnector}};
+use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::{client::{Client, PinnedClient}, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck, StorageServiceConnector}};
+
+use super::fork_receiver::{ForkReceiverCommand, MultipartFork};
 
 pub enum BlockBroadcasterCommand {
     UpdateCI(u64)
@@ -16,7 +18,7 @@ pub struct BlockBroadcaster {
     
     // Input ports
     my_block_rx: Receiver<(u64, oneshot::Receiver<CachedBlock>)>,
-    other_block_rx: Receiver<oneshot::Receiver<CachedBlock>>,
+    other_block_rx: Receiver<MultipartFork>,
     control_command_rx: Receiver<BlockBroadcasterCommand>,
     
     // Output ports
@@ -25,6 +27,9 @@ pub struct BlockBroadcaster {
     staging_tx: Sender<(CachedBlock, oneshot::Receiver<StorageAck>)>,
     logserver_tx: Sender<CachedBlock>,
 
+    // Command ports
+    fork_receiver_command_tx: Sender<ForkReceiverCommand>,
+
 }
 
 impl BlockBroadcaster {
@@ -32,11 +37,12 @@ impl BlockBroadcaster {
         config: AtomicConfig,
         client: PinnedClient,
         my_block_rx: Receiver<(u64, oneshot::Receiver<CachedBlock>)>,
-        other_block_rx: Receiver<oneshot::Receiver<CachedBlock>>,
+        other_block_rx: Receiver<MultipartFork>,
         control_command_rx: Receiver<BlockBroadcasterCommand>,
         storage: StorageServiceConnector,
         staging_tx: Sender<(CachedBlock, oneshot::Receiver<StorageAck>)>,
         logserver_tx: Sender<CachedBlock>,
+        fork_receiver_command_tx: Sender<ForkReceiverCommand>,
     ) -> Self {
         
         Self {
@@ -49,6 +55,7 @@ impl BlockBroadcaster {
             client,
             staging_tx,
             logserver_tx,
+            fork_receiver_command_tx,
         }
     }
 
@@ -84,12 +91,12 @@ impl BlockBroadcaster {
 
             },
 
-            block = self.other_block_rx.recv() => {
-                if block.is_none() {
+            block_vec = self.other_block_rx.recv() => {
+                if block_vec.is_none() {
                     return Err(Error::new(ErrorKind::BrokenPipe, "channel closed"));
                 }
-                let block = block.unwrap().await;
-                self.process_other_block(block.unwrap()).await?;
+                let blocks = block_vec.unwrap();
+                self.process_other_block(blocks).await?;
             },
 
             cmd = self.control_command_rx.recv() => {
@@ -151,7 +158,13 @@ impl BlockBroadcaster {
         let (view, view_is_stable, config_num) = (block.block.view, block.block.view_is_stable, block.block.config_num);
         let append_entry = ProtoAppendEntries {
             fork: Some(ProtoFork {
-                serialized_blocks: vec![block.block_ser.clone()],
+                serialized_blocks: vec![HalfSerializedBlock { 
+                    n: block.block.n,
+                    view: block.block.view,
+                    view_is_stable: block.block.view_is_stable,
+                    config_num: block.block.config_num,
+                    serialized_body: block.block_ser 
+                }],
             }),
             commit_index: self.ci,
             view,
@@ -171,8 +184,26 @@ impl BlockBroadcaster {
 
     }
 
-    async fn process_other_block(&mut self, block: CachedBlock) -> Result<(), Error> {
-        self.store_and_forward_internally(&block).await
+    async fn process_other_block(&mut self, mut blocks: MultipartFork) -> Result<(), Error> {
+        let _blocks = blocks.await_all().await;
+        let num_parts = blocks.remaining_parts;
+
+        for block in &_blocks {
+            if let Err(_) = block {
+                // This multipart fork is corrupted, I have no use for the remaining parts.
+                let _ = self.fork_receiver_command_tx.send(ForkReceiverCommand::MultipartNack(num_parts)).await;
+
+                return Ok(());
+            }
+        }
+
+        for block in _blocks {
+            let block = block.unwrap();
+            debug!("Processing {}", block.block.n);
+            self.store_and_forward_internally(&block).await?;
+        }
+
+        Ok(())
     }
 
 

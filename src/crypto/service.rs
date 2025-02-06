@@ -8,7 +8,7 @@ use rand::{thread_rng, Rng};
 use sha2::{Digest, Sha256};
 use tokio::{sync::{mpsc::{channel, Receiver, Sender}, oneshot}, task::JoinSet};
 
-use crate::{crypto::DIGEST_LENGTH, proto::consensus::ProtoBlock, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser}};
+use crate::{consensus_v2::fork_receiver::MultipartFork, crypto::DIGEST_LENGTH, proto::consensus::{HalfSerializedBlock, ProtoBlock}, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser}};
 
 use super::{hash, AtomicKeyStore, HashType, KeyStore};
 
@@ -48,6 +48,10 @@ enum CryptoServiceCommand {
 
     // Takes the output of StorageService and converts it to CachedBlock.
     CheckBlockSer(HashType, oneshot::Receiver<Result<Vec<u8>, Error>>, oneshot::Sender<Result<CachedBlock, Error>>),
+    
+    // Deserializes and verifies block serialization
+    VerifyBlockSer(Vec<u8>, oneshot::Sender<Result<CachedBlock, Error>>),
+    
     Die
 }
 
@@ -164,6 +168,26 @@ impl CryptoService {
                         },
                     };
                 },
+                CryptoServiceCommand::VerifyBlockSer(block_ser, block_tx) => {
+                    let block = deserialize_proto_block(block_ser.as_ref());
+                    let hsh = hash_proto_block_ser(&block_ser);
+
+                    // TODO: Verify signature
+                    // TODO: Verify each QuorumCertificate attached.
+                    // TODO: If view_is_stable = False, verify ProtoForkValidation
+                    match block {
+                        Ok(block) => {
+                            block_tx.send(Ok(CachedBlock {
+                                block,
+                                block_ser,
+                                block_hash: hsh,
+                            })).unwrap();
+                        },
+                        Err(_) => {
+                            block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Decode error"))).unwrap();
+                        },
+                    };
+                }
             }
         }
 
@@ -246,6 +270,18 @@ impl CryptoServiceConnector {
 
     pub async fn check_block(&mut self, hsh: HashType, ser_rx: oneshot::Receiver<Result<Vec<u8>, Error>>) -> Result<CachedBlock, Error> {
         dispatch_cmd!(self, CryptoServiceCommand::CheckBlockSer, hsh, ser_rx)
+    }
+
+    pub async fn prepare_fork(&mut self, mut part: Vec<HalfSerializedBlock>, remaining_parts: usize) -> MultipartFork {
+        
+        MultipartFork {
+            fork_future: part.drain(..).map(|e| {
+                let (tx, rx) = oneshot::channel();
+                self.dispatch(CryptoServiceCommand::VerifyBlockSer(e.serialized_body, tx));
+                Some(rx)
+            }).collect(),
+            remaining_parts
+        }
     }
 
 
