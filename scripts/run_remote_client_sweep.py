@@ -40,31 +40,33 @@ def run_with_given_client(node_template, client_template, ip_list, identity_file
     # Note: in local mode, this has to happen in the same order as the order in which
     # containers were launched. ssh_docker_ports are remapped to be 2222 (+i) where i is the container number
     p = 0
+    print("Identify File ", identity_file)
     client_conns = {}
     for client, ip in clients.items():
       port = 22 if docker_ssh_port == 22 else docker_ssh_port + p
-      client_conns.add(Connection(
+      client_conns[client] = Connection(
         host=ip,
         user="pftadmin", # This dependency comes from terraform
         connect_kwargs={
             "key_filename": identity_file
         },
         port = port
-      ))
+      )
       p+= 1
+    print("Client connections", client_conns)   
     node_conns= {}
     for node, ip in nodes.items():
       port = 22 if docker_ssh_port == 22 else docker_ssh_port + p
-      node_conns.add(Connection(
+      node_conns[node] = Connection(
         host=ip,
         user="pftadmin", # This dependency comes from terraform
         connect_kwargs={
             "key_filename": identity_file
         },
         port = port
-      ))
+      )
       p+= 1
-
+    print("Node connections", node_conns)
 
     
     curr_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -110,49 +112,30 @@ def run_with_given_client(node_template, client_template, ip_list, identity_file
         client_conns = {}
         for client, ip in clients.items():
           port = 22 if docker_ssh_port == 22 else docker_ssh_port + p
-          client_conns.add(Connection(
+          client_conns[client] = Connection(
             host=ip,
             user="pftadmin", # This dependency comes from terraform
             connect_kwargs={
                 "key_filename": identity_file
             },
             port = port
-          ))
+          )
           p+= 1
         node_conns= {}
         for node, ip in nodes.items():
           port = 22 if docker_ssh_port == 22 else docker_ssh_port + p
-          node_conns.add(Connection(
+          node_conns[client] = Connection(
             host=ip,
             user="pftadmin", # This dependency comes from terraform
             connect_kwargs={
                 "key_filename": identity_file
             },
             port = port
-          ))
+          )
           p+= 1
-    
-    
-        client_conns = {client: Connection(
-            host=ip,
-            user="pftadmin", # This dependency comes from terraform
-            connect_kwargs={
-                "key_filename": identity_file
-            },
-            port = 22 if docker_ssh_port == 22 else docker_ssh_port + i
-        ) for client, ip in clients.items()}
 
-        node_conns = {node: Connection(
-            host=ip,
-            user="pftadmin", # This dependency comes from terraform
-            connect_kwargs={
-                "key_filename": identity_file
-            },
-            port = 22 if docker_ssh_port == 22 else docker_ssh_port + i
 
-        ) for node, ip in nodes.items()}
-
-        
+  
                 
         print("Copying logs")
         copy_logs(node_conns, client_conns, i, curr_time)
@@ -222,8 +205,11 @@ def run_with_given_client(node_template, client_template, ip_list, identity_file
     help="Maximum number of nodes to use",
     type=click.INT
 )
-@click.options("-d", "--docker_ssh", default=22, help="Port SSH Container", type=click.INT)
-def main(node_template, client_template, ip_list, identity_file, repeat, seconds, clients, ramp_up, ramp_down, max_nodes, docker):
+@click.option("-d", "--docker_ssh", 
+              default=22, 
+              help="Port SSH Container", 
+              type=click.INT)
+def main(node_template, client_template, ip_list, identity_file, repeat, seconds, clients, ramp_up, ramp_down, max_nodes, docker_ssh):
     # build_project()
     git_hash = get_current_git_hash()
     _, client_tags = tag_all_machines(ip_list)
@@ -235,7 +221,7 @@ def main(node_template, client_template, ip_list, identity_file, repeat, seconds
             run_with_given_client(
                 node_template, client_template, ip_list,
                 identity_file, repeat, seconds, git_hash,
-                client, max_nodes,docker)
+                client, max_nodes,docker_ssh)
         )
     dirs = [f"logs/{d}" for d in dirs]
 

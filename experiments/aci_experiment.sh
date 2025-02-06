@@ -23,13 +23,15 @@ ALL_CLIENTS="-c 1"
 # ALL_CLIENTS="-c 200 -c 1000"
 
 start_time=$(date -Ins)
-RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt /tmp/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i ../cluster_key.pem -r 1 -s 60 -up 10 -down 10 $ALL_CLIENTS"
+RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt /tmp/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i /home/ncrooks/.ssh/cluster_key.pem -r 1 -s 60 -up 10 -down 10 $ALL_CLIENTS --docker_ssh=2222"
+RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt /tmp/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i /home/ncrooks/.ssh/cluster_key.pem -r 1 -s 60 -up 10 -down 10 $ALL_CLIENTS"
+
 
 
 jq '.consensus_config.max_backlog_batch_size = 1000 | .consensus_config.quorum_diversity_k = 3 | .consensus_config.signature_max_delay_blocks = 50 | .consensus_config.liveness_u = 2 | .consensus_config.view_timeout_ms = 4000' scripts/local_template.json > /tmp/local_template.json
 
 # # Run pirateship
-make
+#make
 $RUN_CMD
 
 # Run chained_pbft

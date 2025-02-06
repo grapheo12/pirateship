@@ -140,7 +140,8 @@ def create_dirs_and_copy_files(node_conns, client_conns, wd, repeat, git_hash, c
 
 def run_nodes(node_conns: Dict[str, Connection], repeat_num: int, wd: str) -> List:
     promises = []
-    
+
+    #TODO(fix): pft/{wd} is hardcoded. This should be a parameter. 
     for node, conn in node_conns.items():
         prom = conn.run(f"cd pft/{wd} && ./target/release/server_{node} configs/{node}{CONFIG_SUFFIX} > logs/{repeat_num}/{node}.log 2> logs/{repeat_num}/{node}.err",
                  pty=True, asynchronous=True, hide=True)
@@ -331,7 +332,7 @@ def run_remote(node_template, client_template, ip_list, identity_file, repeat, s
     help="Seconds to run each experiment",
     type=click.INT
 )
-@click.options("-d", "--docker_ssh", default=22, help="Port SSH Container", type=click.INT)
+@click.option("-d", "--docker_ssh", default=22, help="Port SSH Container", type=click.INT)
 def main(node_template, client_template, ip_list, identity_file, repeat, seconds, docker):
     run_remote(node_template, client_template, ip_list, identity_file, repeat, seconds, docker)
 
