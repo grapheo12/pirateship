@@ -5,7 +5,7 @@
 
 set -o xtrace
 
-ALL_CLIENTS="-c 1"
+ALL_CLIENTS="-c 1 -c 2 -c 5"
 # ALL_CLIENTS="-c 100 -c 200 -c 300 -c 500 -c 700 -c 900 -c 1000 -c 1200 -c 1500 -c 1800 -c 2000 -c 2500"
 #ALL_CLIENTS="-c 500 -c 700"
 # ALL_CLIENTS="-c 10 -c 20 -c 30 -c 40"
@@ -23,8 +23,8 @@ ALL_CLIENTS="-c 1"
 # ALL_CLIENTS="-c 200 -c 1000"
 
 start_time=$(date -Ins)
-RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt /tmp/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i /home/ncrooks/.ssh/cluster_key.pem -r 1 -s 60 -up 10 -down 10 $ALL_CLIENTS --docker_ssh=2222"
-RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt /tmp/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i /home/ncrooks/.ssh/cluster_key.pem -r 1 -s 60 -up 10 -down 10 $ALL_CLIENTS"
+#RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt /tmp/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i ../cluster_key.pem -r 1 -s 60 -up 10 -down 10 $ALL_CLIENTS --docker_ssh=2222"
+RUN_CMD="python3 scripts/run_remote_client_sweep.py -nt /tmp/local_template.json -ct scripts/local_client_template.json -ips ../nodelist.txt -i ../cluster_key.pem -r 1 -s 60 -up 10 -down 10 $ALL_CLIENTS"
 
 
 

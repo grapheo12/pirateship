@@ -9,8 +9,10 @@ CWD=$(pwd)
 pushd $CWD/deployment
 
 DEV_VM=$(grep clientpool_vm0 nodelist_public.txt | cut -f 2)
+DEV_VM = 127.0.0.1
 DEV_USER=pftadmin
 DEV_SSH_KEY=cluster_key.pem
+PORT=2222 # TODO: hard coded in deploy-docker.py right now 2222 when using docker localy, 22 otherwise
 
 popd
 
@@ -19,9 +21,9 @@ popd
 now_time=$(date +%s)
 log_dir=logs/$now_time
 mkdir -p $log_dir
-scp -r -i deployment/$DEV_SSH_KEY $DEV_USER@$DEV_VM:~/pft-dev/plot.png logs/$now_time
-scp -r -i deployment/$DEV_SSH_KEY $DEV_USER@$DEV_VM:~/pft-dev/plot.png.pkl logs/$now_time
-scp -r -i deployment/$DEV_SSH_KEY $DEV_USER@$DEV_VM:~/pft-dev/logs logs/$now_time
+scp -o StrictHostKeyChecking=no -r -i -P $PORT deployment/$DEV_SSH_KEY $DEV_USER@$DEV_VM:~/pft-dev/plot.png logs/$now_time
+scp -o StrictHostKeyChecking=no -r -i -P $PORT deployment/$DEV_SSH_KEY $DEV_USER@$DEV_VM:~/pft-dev/plot.png.pkl logs/$now_time
+scp -o StrictHostKeyChecking=no -r -i -P $PORT deployment/$DEV_SSH_KEY $DEV_USER@$DEV_VM:~/pft-dev/logs logs/$now_time
 
 
 # Cleanup

@@ -12,11 +12,13 @@ import collections
 import datetime
 import json
 import time
+import subprocess
 
 # Run a sequence of commands
 # Crash if any one command fails.
 # Return true if all commands succeeded
 def run_all(cmds: List[str], conn: Connection) -> Tuple[bool, List[str]]:
+    print("Running all commands")
     outputs = []
     for cmd in cmds:
         try:
@@ -79,20 +81,49 @@ def tag_controller(ip_list) -> str:
 
     raise Exception("Controller not found in ip list")
 
+# (Helper) Execute a bash command in Python. Throws exception if error
+# TODO(natacha) Move to a util directory
+def executeCommand(command):
+    print("Calling " + command)
+    subprocess.check_call(command, shell=True)
+
+# (Helper) Sends file to remote host
+# TODO(natacha): move to a util library
+def sendRemoteFile(local_file, user, h, remote_dir, key=None, port=None):
+    port_string = "-P " + str(port)  + " " if port else " "
+    if not key:
+        cmd = "scp -O -o StrictHostKeyChecking=no  " + \
+            local_file + " " + user + "@" + h + ":" + remote_dir
+    else:
+        cmd = "scp -O -o StrictHostKeyChecking=no -i " + key + \
+            " " + port_string + local_file + " " + user + "@" + h + ":" + remote_dir
+    executeCommand(cmd)
 
 def create_dirs_and_copy_files(node_conns, client_conns, wd, repeat, git_hash, controller_conn=None):
+    print("Create Dirs and Copy Files")
     for node, conn in node_conns.items():
-        run_all([
+
+        node_host = conn.host
+        node_key = conn.connect_kwargs["key_filename"][0]
+        node_user = conn.user
+
+        ret = run_all([
             f"mkdir -p pft/{wd}",
             f"echo '{git_hash}' > pft/{wd}/git_hash.txt",
             f"mkdir -p pft/{wd}/target/release",
             f"mkdir -p pft/{wd}/configs"
         ] + [f"mkdir -p pft/{wd}/logs/{i}" for i in range(repeat)], conn)
 
-
         with open(f"configs/{node}{CONFIG_SUFFIX}") as f:
             cfg = json.load(f)
-        
+
+        ret = run_all([
+            f"mkdir -p pft/{wd}",
+            f"echo '{git_hash}' > pft/{wd}/git_hash.txt",
+            f"mkdir -p pft/{wd}/target/release",
+            f"mkdir -p pft/{wd}/configs"
+        ] + [f"mkdir -p pft/{wd}/logs/{i}" for i in range(repeat)], conn)
+ 
 
         conn.put(f"{cfg['net_config']['tls_cert_path']}", remote=f"pft/{wd}/configs/")
         conn.put(f"{cfg['net_config']['tls_key_path']}", remote=f"pft/{wd}/configs/")
@@ -102,6 +133,16 @@ def create_dirs_and_copy_files(node_conns, client_conns, wd, repeat, git_hash, c
         conn.put(f"configs/{node}{CONFIG_SUFFIX}", remote=f"pft/{wd}/configs/")
         conn.put("target/release/server", remote=f"pft/{wd}/target/release/server_{node}")
         conn.put("target/release/net-perf", remote=f"pft/{wd}/target/release/net-perf")
+
+#        sendRemoteFile(f"{cfg['net_config']['tls_cert_path']}", 
+#        node_user, node_host, f"pft/{wd}/configs/",  node_key)
+#        sendRemoteFile(f"{cfg['net_config']['tls_key_path']}", node_user,node_host, f"pft/{wd}/configs/", node_key)
+#        sendRemoteFile(f"{cfg['net_config']['tls_root_ca_cert_path']}", node_user, node_host, f"pft/{wd}/configs/", node_key)
+#        sendRemoteFile(f"{cfg['rpc_config']['allowed_keylist_path']}", node_user, node_host,  f"pft/{wd}/configs/", node_key)
+#        sendRemoteFile(f"{cfg['rpc_config']['signing_priv_key_path']}", node_user, node_host, f"pft/{wd}/configs/", node_key)
+#        sendRemoteFile(f"configs/{node}{CONFIG_SUFFIX}", node_user, node_host, f"pft/{wd}/configs/", node_key)
+#        sendRemoteFile("target/release/server", node_user, node_host, f"pft/{wd}/target/release/server_{node}", node_key)
+#        sendRemoteFile("target/release/net-perf", node_user, node_host, f"pft/{wd}/target/release/net-perf", node_key)
 
     for client, conn in client_conns.items():
         run_all([
@@ -114,13 +155,19 @@ def create_dirs_and_copy_files(node_conns, client_conns, wd, repeat, git_hash, c
         
         with open(f"configs/{client}{CONFIG_SUFFIX}") as f:
             cfg = json.load(f)
-        
+
         conn.put(f"{cfg['net_config']['tls_root_ca_cert_path']}", remote=f"pft/{wd}/configs/")
         conn.put(f"{cfg['rpc_config']['signing_priv_key_path']}", remote=f"pft/{wd}/configs/")
 
         conn.put(f"configs/{client}{CONFIG_SUFFIX}", remote=f"pft/{wd}/configs/")
         conn.put("target/release/client", remote=f"pft/{wd}/target/release")
-
+        
+#        sendRemoteFile(f"{cfg['net_config']['tls_root_ca_cert_path']}", node_user, node_host, f"pft/{wd}/configs/", node_key)
+#        sendRemoteFile(f"{cfg['rpc_config']['signing_priv_key_path']}", node_user, node_host, f"pft/{wd}/configs/", node_key)
+#
+#        sendRemoteFile(f"configs/{client}{CONFIG_SUFFIX}", node_user, node_host, f"pft/{wd}/configs/", node_key)
+#        sendRemoteFile("target/release/client", node_user, node_host, f"pft/{wd}/target/release", node_key)
+#
     if not (controller_conn is None):
         run_all([
             f"mkdir -p pft/{wd}",
@@ -195,14 +242,20 @@ def kill_nodes_with_net_perf(node_conns: Dict[str, Connection]):
         ], conn)
 
 def copy_log(name: str, conn: Connection, repeat_num: int, wd: str):
+
+    print(conn)
+    print("Getting From " + f"pft/{wd}/logs/{repeat_num}/{name}.log" )
+    print("Copying to " + f"logs/{wd}/{repeat_num}/")
+
     conn.get(f"pft/{wd}/logs/{repeat_num}/{name}.log", local=f"logs/{wd}/{repeat_num}/")
     conn.get(f"pft/{wd}/logs/{repeat_num}/{name}.err", local=f"logs/{wd}/{repeat_num}/")
 
 def copy_logs(node_conns, client_conns, repeat_num, wd, controller_conn=None, controller_total_logs=0):
     invoke.run(f"mkdir -p logs/{wd}/{repeat_num}", hide=True)
+    print(node_conns)
     for node, conn in node_conns.items():
         copy_log(node, conn, repeat_num, wd)
-
+    print(client_conns)
     for client, conn in client_conns.items():
         copy_log(client, conn, repeat_num, wd)
 
@@ -223,6 +276,9 @@ def run_remote(node_template, client_template, ip_list, identity_file, repeat, s
     gen_config("configs", "cluster", node_template, client_template, ip_list, -1)
     nodes, clients = tag_all_machines(ip_list)
 
+    print(nodes)
+    print(clients)
+    
     print("Creating SSH connections")
     node_conns = {node: Connection(
         host=ip,
@@ -253,11 +309,13 @@ def run_remote(node_template, client_template, ip_list, identity_file, repeat, s
 
         print("Running Nodes")
         promises = []
+        print(node_conns)
         promises.extend(run_nodes(node_conns, i, curr_time))
 
         time.sleep(1)
 
         print("Running clients")
+        print(client_conns)
         promises.extend(run_clients(client_conns, i, curr_time))
 
         print("Running experiments for", seconds, "seconds")

@@ -1,0 +1,10 @@
+platforms: 
+ - location: "eastus"
+   cacipool_count: 1
+   acipool_count: 0
+   clientpool_count: 1
+ - location: "westus"
+   cacipool_count: 1
+   acipool_count: 0
+   clientpool_count: 1
+ 

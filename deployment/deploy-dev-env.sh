@@ -25,15 +25,15 @@ echo $CWD
 
 DEV_VM=$(grep clientpool_vm0 nodelist_public.txt | cut -f2)
 DEV_VM=127.0.0.1
-PORT=22 # TODO: hard coded in deploy-docker.py right now 2222 when using docker localy, 22 otherwise
+PORT=2222 # TODO: hard coded in deploy-docker.py right now 2222 when using docker localy, 22 otherwise
 echo $DEV_VM
 
 DEV_USER=pftadmin
-DEV_SSH_KEY=/home/ncrooks/.ssh/cluster_key.pem
+DEV_SSH_KEY=../cluster_key.pem
 
 ssh -o StrictHostKeyChecking=no -p $PORT -i $DEV_SSH_KEY $DEV_USER@$DEV_VM 'mkdir -p ~/pft-dev/logs'
 scp -o StrictHostKeyChecking=no -r -q -P $PORT -i $DEV_SSH_KEY $CWD/benches $DEV_USER@$DEV_VM:~/pft-dev
-scp -r -q -P $PORT -i $DEV_SSH_KEY $CWD/src $DEV_USER@$DEV_VM:~/pft-dev
+scp -o StrictHostKeyChecking=no -r -q -P $PORT -i $DEV_SSH_KEY $CWD/src $DEV_USER@$DEV_VM:~/pft-dev
 
 # Need to clear pycache and venv locally before sending over
 rm -r $CWD/scripts/venv

@@ -14,10 +14,13 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     linux-tools-generic \
     linux-tools-common \
+    clang \ 
     curl \
     cmake \
     jq \
+    llvm \ 
     screen \
+    pkg-config \
     python3 \
     python3-pip\
     python3-virtualenv \
@@ -33,6 +36,9 @@ RUN apt-get update && apt-get install -y \
  RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
 # Place Rust in PATH
  ENV PATH="/root/.cargo/bin:${PATH}"
+# Install Azure CLI
+RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+
 
 # Create a new user
 RUN useradd -ms /bin/bash ${USER}
@@ -52,8 +58,13 @@ RUN chown -R ${USER}:$GID /home/${USER}/.ssh && \
     chmod 600 /home/${USER}/.ssh/authorized_keys
 ## authorize SSH connection with public key 
 RUN echo "PubkeyAuthentication yes" > /etc/ssh/sshd_config
-## Export Port 22
+## Enable SFTP (necessary for Fabric to work)
+RUN echo "Subsystem sftp /usr/lib/openssh/sftp-server" >> /etc/ssh/sshd_config
+## Export Port 22 for SSH Connections
 EXPOSE 22
+## Export Ports For Nodes. TODO(natacha): this is a hack. Currently, opening 50 ports and
+## assuming that is enough. 3000 is also currently hardcoded. Will need to fix this. 
+EXPOSE 3000-3050
 
 ## Start SSH service
 # RUN service ssh start

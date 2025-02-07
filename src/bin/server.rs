@@ -30,7 +30,7 @@ fn process_args() -> Config {
         panic!(usage_str!(), args[0]);
     }
 
-    let cfg_contents = fs::read_to_string(cfg_path).expect("Invalid file path");
+    let cfg_contents = fs::read_to_string(cfg_path).expect("Invalid file path.");
 
     Config::deserialize(&cfg_contents)
 }

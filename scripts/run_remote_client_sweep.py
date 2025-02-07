@@ -2,13 +2,13 @@
 # Licensed under the MIT License.
 
 from pprint import pprint
-import click
 import json
 from run_remote import build_project, get_current_git_hash, gen_config, tag_all_machines, CONFIG_SUFFIX, create_dirs_and_copy_files
 from run_remote import run_nodes, run_clients, kill_clients, kill_nodes, copy_logs
 import time
 from fabric import Connection
 import datetime
+import click
 
 from plot_utils import parse_log_dir_with_total_clients, plot_tput_vs_latency
 
@@ -39,34 +39,35 @@ def run_with_given_client(node_template, client_template, ip_list, identity_file
     print("Creating SSH connections")
     # Note: in local mode, this has to happen in the same order as the order in which
     # containers were launched. ssh_docker_ports are remapped to be 2222 (+i) where i is the container number
-    p = 0
-    print("Identify File ", identity_file)
-    client_conns = {}
-    for client, ip in clients.items():
-      port = 22 if docker_ssh_port == 22 else docker_ssh_port + p
-      client_conns[client] = Connection(
-        host=ip,
-        user="pftadmin", # This dependency comes from terraform
-        connect_kwargs={
-            "key_filename": identity_file
-        },
-        port = port
-      )
-      p+= 1
-    print("Client connections", client_conns)   
+    #p = 0
     node_conns= {}
     for node, ip in nodes.items():
-      port = 22 if docker_ssh_port == 22 else docker_ssh_port + p
+    #  port = 22 if docker_ssh_port == 22 else docker_ssh_port + p
       node_conns[node] = Connection(
         host=ip,
         user="pftadmin", # This dependency comes from terraform
         connect_kwargs={
             "key_filename": identity_file
         },
-        port = port
+    #    port = port
       )
-      p+= 1
+    #  p+= 1
     print("Node connections", node_conns)
+
+    client_conns = {}
+    for client, ip in clients.items():
+    #  port = 22 if docker_ssh_port == 22 else docker_ssh_port + p
+      client_conns[client] = Connection(
+        host=ip,
+        user="pftadmin", # This dependency comes from terraform
+        connect_kwargs={
+            "key_filename": identity_file
+        },
+    #    port = port
+      )
+    #  p+= 1
+    print("Client connections", client_conns)
+
 
     
     curr_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -108,35 +109,31 @@ def run_with_given_client(node_template, client_template, ip_list, identity_file
         # As before, must be in the same order as the order in which containers were launched
         # Note: in local mode, this has to happen in the same order as the order in which
         # containers were launched. ssh_docker_ports are remapped to be 2222 (+i) where i is the container number
-        p = 0
+        # p = 0
+        node_conns= {}
+        for node, ip in nodes.items():
+          # port = 22 if docker_ssh_port == 22 else docker_ssh_port + p
+          node_conns[node] = Connection(
+            host=ip,
+            user="pftadmin", # This dependency comes from terraform
+            connect_kwargs={
+                "key_filename": identity_file
+            },
+          #  port = port
+          )
+        #  p+= 1
         client_conns = {}
         for client, ip in clients.items():
-          port = 22 if docker_ssh_port == 22 else docker_ssh_port + p
+          # port = 22 if docker_ssh_port == 22 else docker_ssh_port + p
           client_conns[client] = Connection(
             host=ip,
             user="pftadmin", # This dependency comes from terraform
             connect_kwargs={
                 "key_filename": identity_file
             },
-            port = port
+          #  port = port
           )
-          p+= 1
-        node_conns= {}
-        for node, ip in nodes.items():
-          port = 22 if docker_ssh_port == 22 else docker_ssh_port + p
-          node_conns[client] = Connection(
-            host=ip,
-            user="pftadmin", # This dependency comes from terraform
-            connect_kwargs={
-                "key_filename": identity_file
-            },
-            port = port
-          )
-          p+= 1
-
-
-  
-                
+         # p+= 1
         print("Copying logs")
         copy_logs(node_conns, client_conns, i, curr_time)
 
@@ -211,6 +208,7 @@ def run_with_given_client(node_template, client_template, ip_list, identity_file
               type=click.INT)
 def main(node_template, client_template, ip_list, identity_file, repeat, seconds, clients, ramp_up, ramp_down, max_nodes, docker_ssh):
     # build_project()
+    print("Docker SSH Port", docker_ssh)
     git_hash = get_current_git_hash()
     _, client_tags = tag_all_machines(ip_list)
     client_machines = len(client_tags)

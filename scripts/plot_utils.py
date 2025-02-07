@@ -206,9 +206,9 @@ def parse_log_dir(dir, repeats, num_clients, leader, ramp_up, ramp_down, byz=Fal
 
     return Stats(
         mean_tput=mean(tputs),
-        stdev_tput=stdev(tputs),
+        stdev_tput= stdev(tputs) if len(tputs) > 1 else 0,
         mean_tput_unbatched=mean(tputs_unbatched),
-        stdev_tput_unbatched=stdev(tputs_unbatched),
+        stdev_tput_unbatched=stdev(tputs_unbatched) if len(tputs_unbatched) > 1 else 0,
         latency_prob_dist=(latency_prob_dist, p),
         mean_latency=mean(latencies),
         median_latency=median(latencies),
