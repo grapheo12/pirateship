@@ -8,7 +8,7 @@ use rand::{thread_rng, Rng};
 use sha2::{Digest, Sha256};
 use tokio::{sync::{mpsc::{channel, Receiver, Sender}, oneshot}, task::JoinSet};
 
-use crate::{consensus_v2::fork_receiver::MultipartFork, crypto::DIGEST_LENGTH, proto::consensus::{HalfSerializedBlock, ProtoBlock}, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser}};
+use crate::{consensus_v2::fork_receiver::{AppendEntriesStats, MultipartFork}, crypto::DIGEST_LENGTH, proto::consensus::{HalfSerializedBlock, ProtoBlock}, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser}};
 
 use super::{hash, AtomicKeyStore, HashType, KeyStore};
 
@@ -137,7 +137,7 @@ impl CryptoService {
                     let _ = block_tx.send(CachedBlock {
                         block,
                         block_ser: buf,
-                        block_hash: hsh
+                        block_hash: hsh,
                     });
                 },
                 CryptoServiceCommand::CheckBlockSer(hsh, ser_rx, block_tx) => {
@@ -272,7 +272,7 @@ impl CryptoServiceConnector {
         dispatch_cmd!(self, CryptoServiceCommand::CheckBlockSer, hsh, ser_rx)
     }
 
-    pub async fn prepare_fork(&mut self, mut part: Vec<HalfSerializedBlock>, remaining_parts: usize) -> MultipartFork {
+    pub async fn prepare_fork(&mut self, mut part: Vec<HalfSerializedBlock>, remaining_parts: usize, ae_stats: AppendEntriesStats) -> MultipartFork {
         
         MultipartFork {
             fork_future: part.drain(..).map(|e| {
@@ -280,7 +280,8 @@ impl CryptoServiceConnector {
                 self.dispatch(CryptoServiceCommand::VerifyBlockSer(e.serialized_body, tx));
                 Some(rx)
             }).collect(),
-            remaining_parts
+            remaining_parts,
+            ae_stats,
         }
     }
 

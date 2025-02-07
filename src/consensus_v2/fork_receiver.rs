@@ -3,6 +3,7 @@ use std::{collections::VecDeque, io::Error, sync::Arc};
 use ed25519_dalek::SIGNATURE_LENGTH;
 use log::warn;
 use nix::libc::SIGNATURE;
+use rand_chacha::rand_core::le;
 use tokio::sync::{Mutex, oneshot};
 
 use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock, CryptoServiceConnector, DIGEST_LENGTH}, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::client::PinnedClient, utils::{channel::{Receiver, Sender}, get_parent_hash_in_proto_block_ser}};
@@ -13,6 +14,15 @@ pub enum ForkReceiverCommand {
     MultipartNack(usize /* delete these many parts from the multipart buffer */)
 }
 
+/// Shortcut stats for AppendEntries
+#[derive(Debug, Clone)]
+pub struct AppendEntriesStats {
+    pub view: u64,
+    pub config_num: u64,
+    pub sender: String,
+    pub ci: u64,
+}
+
 pub struct MultipartFork {
     pub fork_future: Vec<   // vector of ...
         Option <
@@ -21,8 +31,9 @@ pub struct MultipartFork {
             >
         > // The option is just to make it easier to remove the future from the vector
     >,
-
     pub remaining_parts: usize, // How many other such MultipartForks are there?
+    pub ae_stats: AppendEntriesStats,
+    
 }
 
 impl MultipartFork {
@@ -49,11 +60,11 @@ pub struct ForkReceiver {
     view: u64,
     config_num: u64,
 
-    fork_rx: Receiver<ProtoAppendEntries>,
+    fork_rx: Receiver<(ProtoAppendEntries, String /* Sender */)>,
     command_rx: Receiver<ForkReceiverCommand>,
     broadcaster_tx: Sender<MultipartFork>,
 
-    multipart_buffer: VecDeque<Vec<HalfSerializedBlock>>,
+    multipart_buffer: VecDeque<(Vec<HalfSerializedBlock>, AppendEntriesStats)>,
 
     // Invariant <blocked_on_multipart>: multipart_buffer contains only parts from one AppendEntries.
     // If multipart_buffer is empty, blocked_on_multipart must be false.
@@ -67,7 +78,7 @@ impl ForkReceiver {
     pub fn new(
         config: AtomicConfig,
         crypto: CryptoServiceConnector,
-        fork_rx: Receiver<ProtoAppendEntries>,
+        fork_rx: Receiver<(ProtoAppendEntries, String)>,
         command_rx: Receiver<ForkReceiverCommand>,
         broadcaster_tx: Sender<MultipartFork>,
     ) -> Self {
@@ -101,9 +112,9 @@ impl ForkReceiver {
             self.handle_command(cmd).await;
         } else {
             tokio::select! {
-                ae = self.fork_rx.recv() => {
-                    if let Some(ae) = ae {
-                        self.process_fork(ae).await;
+                ae_sender = self.fork_rx.recv() => {
+                    if let Some((ae, sender)) = ae_sender {
+                        self.process_fork(ae, sender).await;
                     }
                 },
                 cmd = self.command_rx.recv() => {
@@ -117,7 +128,11 @@ impl ForkReceiver {
         Ok(())
     }
 
-    async fn process_fork(&mut self, mut ae: ProtoAppendEntries) {
+    fn get_leader_for_view(&self, view: u64) -> String {
+        self.config.get().consensus_config.get_leader_for_view(view)
+    }
+
+    async fn process_fork(&mut self, mut ae: ProtoAppendEntries, sender: String) {
         let fork = match &mut ae.fork {
             Some(f) => f,
             None => return,
@@ -126,6 +141,40 @@ impl ForkReceiver {
         if ae.view < self.view || ae.config_num < self.config_num {
             return;
         }
+
+        if ae.config_num == self.config_num {
+            // If in the same config, I can check if the sender is supposed to send this AE.
+            let leader = self.get_leader_for_view(ae.view);
+            if leader != sender {
+                return;
+            }
+        }
+
+
+        // Not going to check for ViewLock here.
+        // Staging takes care of that.
+
+
+        if ae.view > self.view {
+            // The first block of each view from self.view+1..=ae.view must have view_is_stable = false
+            let mut test_view = self.view;
+            for block in &fork.serialized_blocks {
+                if block.view > test_view {
+                    if block.view_is_stable {
+                        // TODO: NACK the AppendEntries; ask to backfill.
+                        // The first block of the new view must have view_is_stable = false
+                    }
+
+                    test_view = block.view;
+                }
+            }
+
+            if test_view < ae.view {
+                warn!("Malformed AppendEntries: Missing blocks for view {} in AppendEntries", ae.view);
+                // TODO: NAck the AppendEntries; ask to backfill.
+            }
+        }
+
 
 
         // The fork will have the following general structure
@@ -149,6 +198,9 @@ impl ForkReceiver {
                 // First block of the new config must have view_is_stable = false
                 if block.view_is_stable {
                     warn!("Invalid block in AppendEntries: First block for config {} has view_is_stable = true", curr_config);
+                    
+                    // TODO: NACK the AppendEntries; ask to backfill.
+                    
                     return;
                 }
                 curr_part.as_mut().unwrap().push(block);
@@ -172,12 +224,22 @@ impl ForkReceiver {
         }
 
         let first_part = parts.remove(0);
-        let multipart_fut = self.crypto.prepare_fork(first_part, parts.len()).await;
+        let multipart_fut = self.crypto.prepare_fork(first_part, parts.len(), AppendEntriesStats {
+            view: ae.view,
+            config_num: ae.config_num,
+            sender: sender.clone(),
+            ci: ae.commit_index,
+        }).await;
         self.broadcaster_tx.send(multipart_fut).await.unwrap();
 
         if parts.len() > 0 {
             assert_eq!(self.multipart_buffer.len(), 0); // Due to the Invariant <blocked_on_multipart>
-            self.multipart_buffer.extend(parts);
+            self.multipart_buffer.extend(parts.iter().map(|part| (part.clone(), AppendEntriesStats {
+                view: ae.view,
+                config_num: ae.config_num,
+                sender: sender.clone(),
+                ci: ae.commit_index,
+            })));
             self.blocked_on_multipart = true;
         }
 
@@ -193,9 +255,25 @@ impl ForkReceiver {
 
                 if config_is_updating && self.multipart_buffer.len() > 0 {
                     // Forward the next multipart buffer
-                    let part = self.multipart_buffer.pop_front().unwrap();
-                    let multipart_fut = self.crypto.prepare_fork(part, self.multipart_buffer.len()).await;
-                    self.broadcaster_tx.send(multipart_fut).await.unwrap();
+                    let (part, ae_stats) = self.multipart_buffer.pop_front().unwrap();
+                    
+                    // If this is the last part, then the sender must be the leader for this view in this config.
+                    let maybe_legit =
+                    if self.multipart_buffer.len() == 0 {
+                        let leader = self.get_leader_for_view(self.view);
+                        if leader == ae_stats.sender {
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        true
+                    };
+
+                    if maybe_legit {
+                        let multipart_fut = self.crypto.prepare_fork(part, self.multipart_buffer.len(), ae_stats).await;
+                        self.broadcaster_tx.send(multipart_fut).await.unwrap();
+                    }
 
                 }
 

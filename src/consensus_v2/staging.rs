@@ -3,11 +3,13 @@ use std::{collections::{HashMap, HashSet, VecDeque}, pin::Pin, sync::Arc, time::
 use async_recursion::async_recursion;
 use log::{debug, error, warn};
 use lz4_flex::block;
+use nix::libc::qos_class_t;
+use prost::Message;
 use tokio::sync::{Mutex, oneshot};
 
-use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{proto_block::Sig, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, rpc::client::PinnedClient, utils::{channel::{Receiver, Sender}, StorageAck}};
+use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{CachedBlock, CryptoServiceConnector}, proto::{consensus::{proto_block::Sig, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, rpc::ProtoPayload}, rpc::{client::PinnedClient, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck}};
 
-use super::{block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, fork_receiver::{self, ForkReceiverCommand}};
+use super::{block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, fork_receiver::{self, AppendEntriesStats, ForkReceiverCommand}};
 
 pub enum AppCommand {
     CrashCommit(u64 /* ci */, Vec<CachedBlock> /* all blocks from old_ci + 1 to new_ci */)
@@ -53,7 +55,7 @@ pub struct Staging {
 
     view_change_timer: Arc<Pin<Box<ResettableTimer>>>,
 
-    block_rx: Receiver<(CachedBlock, oneshot::Receiver<StorageAck>)>,
+    block_rx: Receiver<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats)>,
     vote_rx: Receiver<VoteWithSender>,
     view_change_rx: Receiver<ProtoViewChange>,
 
@@ -69,7 +71,8 @@ pub struct Staging {
 impl Staging {
     pub fn new(
         config: AtomicConfig, client: PinnedClient, crypto: CryptoServiceConnector,
-        block_rx: Receiver<(CachedBlock, oneshot::Receiver<StorageAck>)>, vote_rx: Receiver<VoteWithSender>, view_change_rx: Receiver<ProtoViewChange>,
+        block_rx: Receiver<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats)>,
+        vote_rx: Receiver<VoteWithSender>, view_change_rx: Receiver<ProtoViewChange>,
         client_reply_tx: Sender<ClientReplyCommand>, app_tx: Sender<AppCommand>,
         block_broadcaster_command_tx: Sender<BlockBroadcasterCommand>,
         block_sequencer_command_tx: Sender<BlockSequencerControlCommand>,
@@ -134,12 +137,12 @@ impl Staging {
                 if block.is_none() {
                     return Err(())
                 }
-                let (block, storage_ack) = block.unwrap();
+                let (block, storage_ack, ae_stats) = block.unwrap();
                 debug!("Got {}", block.block.n);
                 if i_am_leader {
-                    self.process_block_as_leader(block, storage_ack).await?;
+                    self.process_block_as_leader(block, storage_ack, ae_stats).await?;
                 } else {
-                    self.process_block_as_follower(block).await?;
+                    self.process_block_as_follower(block, storage_ack, ae_stats).await?;
                 }
             },
             vote = self.vote_rx.recv() => {
@@ -243,8 +246,71 @@ impl Staging {
         self.process_vote(name, vote).await
     }
 
+    async fn send_vote_on_last_block_to_leader(&mut self, storage_ack: oneshot::Receiver<StorageAck>) -> Result<(), ()> {
+        let last_block = match self.pending_blocks.back() {
+            Some(b) => b,
+            None => return Err(()),
+        };
+
+        // Wait for it to be stored.
+        // Invariant: I vote => I stored
+        let _ = storage_ack.await.unwrap();
+
+
+        // I will resend all the signatures in pending_blocks that I have not received a QC for.
+        let last_block_with_qc = match self.pending_qcs.front().as_ref() {
+            Some((_, qc)) => qc.n,
+            None => 0,
+        };
+        let my_name = self.config.get().net_config.name.clone();
+
+        // But only if the last block was signed.
+        let sig_array = if let Some(Sig::ProposerSig(_)) = last_block.block.block.sig {
+            self.pending_blocks.iter().filter(|e| e.block.block.n > last_block_with_qc)
+                .map(|e| {
+                    e.vote_sigs.get(&my_name).unwrap().clone()
+                }).collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        
+
+        let mut vote = ProtoVote {
+            sig_array,
+            fork_digest: last_block.block.block_hash.clone(),
+            n: last_block.block.block.n,
+            view: self.view,
+            config_num: self.config_num
+        };
+
+        // If this block is signed, need a signature for the vote.
+        if let Some(Sig::ProposerSig(_)) = last_block.block.block.sig {
+            let vote_sig = self.crypto.sign(&last_block.block.block_hash).await;
+
+            vote.sig_array.push(ProtoSignatureArrayEntry {
+                n: last_block.block.block.n,
+                sig: vote_sig.to_vec(),
+            });
+        }
+
+        let leader = self.config.get().consensus_config.get_leader_for_view(self.view);
+
+        let rpc = ProtoPayload {
+            message: Some(crate::proto::rpc::proto_payload::Message::Vote(vote))
+        };
+        let data = rpc.encode_to_vec();
+        let sz = data.len();
+        let data = PinnedMessage::from(data, sz, SenderType::Anon);
+
+        PinnedClient::send(&self.client, &leader, data.as_ref())
+            .await.unwrap();
+
+
+        Ok(())
+    }
+
     #[async_recursion]
-    async fn process_block_as_leader(&mut self, block: CachedBlock, storage_ack: oneshot::Receiver<StorageAck>) -> Result<(), ()> {
+    async fn process_block_as_leader(&mut self, block: CachedBlock, storage_ack: oneshot::Receiver<StorageAck>, ae_stats: AppendEntriesStats) -> Result<(), ()> {
         if block.block.view < self.view {
             // Do not accept anything from a lower view.
             return Ok(());
@@ -268,10 +334,6 @@ impl Staging {
             // Jump to the new view
             self.view = block.block.view;
 
-            // First block of a new view must be unstable.
-            // TODO: This invariant must hold when View Change is enabled. Skipping for now.
-            // assert_eq!(block.block.view_is_stable, false);
-
             self.view_is_stable = block.block.view_is_stable;
             self.config_num = block.block.config_num;
 
@@ -286,9 +348,9 @@ impl Staging {
             
             // Ready to accept the block normally.
             if self.i_am_leader() {
-                return self.process_block_as_leader(block, storage_ack).await;
+                return self.process_block_as_leader(block, storage_ack, ae_stats).await;
             } else {
-                return self.process_block_as_follower(block).await;
+                return self.process_block_as_follower(block, storage_ack, ae_stats).await;
             }
         }
 
@@ -308,8 +370,76 @@ impl Staging {
         Ok(())
     }
 
-    async fn process_block_as_follower(&mut self, block: CachedBlock) -> Result<(), ()> {
-        println!("process_block_as_follower");
+    /// This has a lot of similarities with process_block_as_leader.
+    #[async_recursion]
+    async fn process_block_as_follower(&mut self, block: CachedBlock, storage_ack: oneshot::Receiver<StorageAck>, ae_stats: AppendEntriesStats) -> Result<(), ()> {
+        if block.block.view < self.view {
+            // Do not accept anything from a lower view.
+            return Ok(());
+        } else if block.block.view == self.view {
+            if !self.view_is_stable && block.block.view_is_stable {
+                // Notify upstream stages of view stabilization
+                self.block_sequencer_command_tx.send(BlockSequencerControlCommand::ViewStabilised(self.view, self.config_num)).await.unwrap();
+            }
+            self.view_is_stable = block.block.view_is_stable;
+            // Invariant <ViewLock>: Within the same view, the log must be append-only.
+            if !self.check_continuity(&block) {
+                println!("Continuity broken");
+                return Ok(());
+            }
+        } else {
+            // If from a higher view, this may mean I am now the leader in the cluster.
+            // Precondition: The blocks I am receiving have been verified earlier,
+            // So the sequence of new view messages have been verified before reaching here.
+            
+
+            // Jump to the new view
+            self.view = block.block.view;
+
+            self.view_is_stable = block.block.view_is_stable;
+            self.config_num = block.block.config_num;
+
+            // Notify upstream stages of view change
+            self.block_sequencer_command_tx.send(BlockSequencerControlCommand::NewUnstableView(self.view, self.config_num)).await.unwrap();
+            self.fork_receiver_command_tx.send(ForkReceiverCommand::UpdateView(self.view, self.config_num)).await.unwrap();
+
+            // Flush the pending queue and cancel client requests.
+            self.pending_blocks.clear();
+            self.pending_qcs.clear();
+            self.client_reply_tx.send(ClientReplyCommand::CancelAllRequests).await.unwrap();
+            
+            // Ready to accept the block normally.
+            if self.i_am_leader() {
+                return self.process_block_as_leader(block, storage_ack, ae_stats).await;
+            } else {
+                return self.process_block_as_follower(block, storage_ack, ae_stats).await;
+            }
+        }
+
+        // Postcondition here: block.view == self.view && check_continuity() == true && !i_am_leader
+
+        let block_with_votes = CachedBlockWithVotes {
+            block,
+            vote_sigs: HashMap::new(),
+            replication_set: HashSet::new()
+        };
+        self.pending_blocks.push_back(block_with_votes);
+
+        // Now crash commit blindly
+        self.do_crash_commit(self.ci, ae_stats.ci).await;
+
+        let mut qc_list = self.pending_blocks.iter().last().unwrap()
+            .block.block.qc.iter().map(|e| e.clone())
+            .collect::<Vec<_>>();
+
+        for qc in qc_list.drain(..) {
+            self.maybe_byzantine_commit(qc).await?;
+        }
+
+
+        // Reply vote to the leader.
+        self.send_vote_on_last_block_to_leader(storage_ack).await?;
+
         Ok(())
     }
 
@@ -356,6 +486,22 @@ impl Staging {
         Ok(())
     }
 
+    /// Crash commit blindly; checking is left on the caller.
+    async fn do_crash_commit(&mut self, old_ci: u64, new_ci: u64) {
+        if new_ci > old_ci {
+            self.ci = new_ci;
+            // Notify
+            self.block_broadcaster_command_tx.send(BlockBroadcasterCommand::UpdateCI(new_ci)).await.unwrap();
+
+            let blocks = self.pending_blocks.iter()
+                .filter(|e| e.block.block.n > old_ci && e.block.block.n <= new_ci)
+                .map(|e| e.block.clone())
+                .collect();
+            self.app_tx.send(AppCommand::CrashCommit(new_ci, blocks)).await.unwrap();
+        }
+    }
+
+
     async fn maybe_crash_commit(&mut self) -> Result<(), ()> {
         let old_ci = self.ci;
         for block in self.pending_blocks.iter() {
@@ -369,16 +515,7 @@ impl Staging {
         }
         let new_ci = self.ci;
 
-        if new_ci > old_ci {
-            // Notify
-            self.block_broadcaster_command_tx.send(BlockBroadcasterCommand::UpdateCI(new_ci)).await.unwrap();
-
-            let blocks = self.pending_blocks.iter()
-                .filter(|e| e.block.block.n > old_ci && e.block.block.n <= new_ci)
-                .map(|e| e.block.clone())
-                .collect();
-            self.app_tx.send(AppCommand::CrashCommit(new_ci, blocks)).await.unwrap();
-        }
+        self.do_crash_commit(old_ci, new_ci).await;
 
         Ok(())
     }

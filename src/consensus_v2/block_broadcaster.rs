@@ -4,9 +4,9 @@ use log::debug;
 use prost::Message;
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::{client::{Client, PinnedClient}, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck, StorageServiceConnector}};
+use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::{consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck, StorageServiceConnector}};
 
-use super::fork_receiver::{ForkReceiverCommand, MultipartFork};
+use super::fork_receiver::{AppendEntriesStats, ForkReceiverCommand, MultipartFork};
 
 pub enum BlockBroadcasterCommand {
     UpdateCI(u64)
@@ -24,7 +24,7 @@ pub struct BlockBroadcaster {
     // Output ports
     storage: StorageServiceConnector,
     client: PinnedClient,
-    staging_tx: Sender<(CachedBlock, oneshot::Receiver<StorageAck>)>,
+    staging_tx: Sender<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats)>,
     logserver_tx: Sender<CachedBlock>,
 
     // Command ports
@@ -40,7 +40,7 @@ impl BlockBroadcaster {
         other_block_rx: Receiver<MultipartFork>,
         control_command_rx: Receiver<BlockBroadcasterCommand>,
         storage: StorageServiceConnector,
-        staging_tx: Sender<(CachedBlock, oneshot::Receiver<StorageAck>)>,
+        staging_tx: Sender<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats)>,
         logserver_tx: Sender<CachedBlock>,
         fork_receiver_command_tx: Sender<ForkReceiverCommand>,
     ) -> Self {
@@ -132,7 +132,7 @@ impl BlockBroadcaster {
         Ok(())
     }
 
-    async fn store_and_forward_internally(&mut self, block: &CachedBlock) -> Result<(), Error> {
+    async fn store_and_forward_internally(&mut self, block: &CachedBlock, ae_stats: AppendEntriesStats) -> Result<(), Error> {
         // Store
         let storage_ack = self.storage.put_block(block).await;
     
@@ -142,20 +142,25 @@ impl BlockBroadcaster {
         self.logserver_tx.send(block.clone()).await.unwrap();
 
         debug!("Sending {}", block.block.n);
-        self.staging_tx.send((block.clone(), storage_ack)).await.unwrap();
+        self.staging_tx.send((block.clone(), storage_ack, ae_stats)).await.unwrap();
 
         Ok(())
     }
 
     async fn process_my_block(&mut self, block: CachedBlock) -> Result<(), Error> {
         debug!("Processing {}", block.block.n);
-        self.store_and_forward_internally(&block).await?;
+        let (view, view_is_stable, config_num) = (block.block.view, block.block.view_is_stable, block.block.config_num);
+        self.store_and_forward_internally(&block, AppendEntriesStats {
+            view,
+            config_num,
+            sender: self.config.get().net_config.name.clone(),
+            ci: self.ci,
+        }).await?;
 
 
         // Forward to other nodes. Involves copies and serialization so done last.
 
         let names = self.get_everyone_except_me();
-        let (view, view_is_stable, config_num) = (block.block.view, block.block.view_is_stable, block.block.config_num);
         let append_entry = ProtoAppendEntries {
             fork: Some(ProtoFork {
                 serialized_blocks: vec![HalfSerializedBlock { 
@@ -173,8 +178,10 @@ impl BlockBroadcaster {
         };
         // let data = bincode::serialize(&append_entry).unwrap();
         // let data = bitcode::encode(&append_entry);
-
-        let data = append_entry.encode_to_vec();
+        let rpc = ProtoPayload {
+            message: Some(crate::proto::rpc::proto_payload::Message::AppendEntries(append_entry)),
+        };
+        let data = rpc.encode_to_vec();
         let sz = data.len();
         let data = PinnedMessage::from(data, sz, SenderType::Anon);
         let mut profile = LatencyProfile::new();
@@ -200,7 +207,7 @@ impl BlockBroadcaster {
         for block in _blocks {
             let block = block.unwrap();
             debug!("Processing {}", block.block.n);
-            self.store_and_forward_internally(&block).await?;
+            self.store_and_forward_internally(&block, blocks.ae_stats.clone()).await?;
         }
 
         Ok(())

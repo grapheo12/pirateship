@@ -345,7 +345,7 @@ async fn test_block_broadcaster() {
     let mut signed_blocks = 0;
 
     let start = Instant::now();
-    while let Some((block, _storage_ack)) = staging_rx.recv().await {
+    while let Some((block, _storage_ack, _)) = staging_rx.recv().await {
         if block.block.n != last_block + 1 {
             panic!("Monotonicity broken!");
         }
