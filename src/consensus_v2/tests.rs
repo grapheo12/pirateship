@@ -556,6 +556,10 @@ async fn test_staging() {
                     }
                 }
             },
+
+            _ => {
+                // TODO: Log byz commit
+            }
         }
     }
     let total_time = start.elapsed().as_secs_f64();

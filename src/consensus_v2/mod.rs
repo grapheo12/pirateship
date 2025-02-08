@@ -16,9 +16,9 @@ use block_sequencer::BlockSequencer;
 use fork_receiver::ForkReceiver;
 use log::{debug, warn};
 use prost::Message;
-use staging::Staging;
+use staging::{Staging, VoteWithSender};
 use tokio::{sync::Mutex, task::JoinSet};
-use crate::{proto::consensus::{ProtoAppendEntries, ProtoBlock}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
+use crate::{proto::consensus::{ProtoAppendEntries, ProtoBlock, ProtoViewChange, ProtoVote}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
 
 use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{execution::ProtoTransaction, rpc::ProtoPayload}, rpc::{server::{LatencyProfile, MsgAckChan, RespType, Server, ServerContextType}, MessageRef, PinnedMessage}};
 
@@ -26,7 +26,9 @@ pub struct ConsensusServerContext {
     config: AtomicConfig,
     keystore: AtomicKeyStore,
     batch_proposal_tx: Sender<TxWithAckChanTag>,
-    block_acceptor_tx: Sender<ProtoAppendEntries>,
+    fork_receiver_tx: Sender<(ProtoAppendEntries, String)>,
+    vote_receiver_tx: Sender<VoteWithSender>,
+    view_change_receiver_tx: Sender<(ProtoViewChange, String)>,
 }
 
 
@@ -37,11 +39,14 @@ impl PinnedConsensusServerContext {
     pub fn new(
         config: AtomicConfig, keystore: AtomicKeyStore,
         batch_proposal_tx: Sender<TxWithAckChanTag>,
-        block_acceptor_tx: Sender<ProtoAppendEntries>,
+        fork_receiver_tx: Sender<(ProtoAppendEntries, String)>,
+        vote_receiver_tx: Sender<VoteWithSender>,
+        view_change_receiver_tx: Sender<(ProtoViewChange, String)>,
 
     ) -> Self {
         Self(Arc::new(Box::pin(ConsensusServerContext {
-            config, keystore, batch_proposal_tx, block_acceptor_tx
+            config, keystore, batch_proposal_tx,
+            fork_receiver_tx, vote_receiver_tx, view_change_receiver_tx,
         })))
     }
 }
@@ -89,13 +94,21 @@ impl ServerContextType for PinnedConsensusServerContext {
         };
 
         match msg {
-            crate::proto::rpc::proto_payload::Message::ViewChange(proto_view_change) => {},
-            crate::proto::rpc::proto_payload::Message::AppendEntries(proto_append_entries) => {
-                self.block_acceptor_tx.send(proto_append_entries).await
+            crate::proto::rpc::proto_payload::Message::ViewChange(proto_view_change) => {
+                self.view_change_receiver_tx.send((proto_view_change, sender)).await
                     .expect("Channel send error");
                 return Ok(RespType::NoResp);
             },
-            crate::proto::rpc::proto_payload::Message::Vote(proto_vote) => {},
+            crate::proto::rpc::proto_payload::Message::AppendEntries(proto_append_entries) => {
+                self.fork_receiver_tx.send((proto_append_entries, sender)).await
+                    .expect("Channel send error");
+                return Ok(RespType::NoResp);
+            },
+            crate::proto::rpc::proto_payload::Message::Vote(proto_vote) => {
+                self.vote_receiver_tx.send((sender, proto_vote)).await
+                    .expect("Channel send error");
+                return Ok(RespType::NoResp);
+            },
             crate::proto::rpc::proto_payload::Message::ClientRequest(proto_client_request) => {
                 let client_tag = proto_client_request.client_tag;
                 self.batch_proposal_tx.send((proto_client_request.tx, (ack_chan, client_tag))).await
@@ -128,6 +141,7 @@ pub struct ConsensusNode {
     block_sequencer: Arc<Mutex<BlockSequencer>>,
     block_broadcaster: Arc<Mutex<BlockBroadcaster>>,
     staging: Arc<Mutex<Staging>>,
+    fork_receiver: Arc<Mutex<ForkReceiver>>,
 
 
     /// TODO: When all wiring is done, this will be empty.
@@ -165,8 +179,7 @@ impl ConsensusNode {
         let staging_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
 
         let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
-        let (block_acceptor_tx, mut block_acceptor_rx) = make_channel(_chan_depth);
-        
+
         let (block_maker_tx, block_maker_rx) = make_channel(_chan_depth);
         let (control_command_tx, control_command_rx) = make_channel(_chan_depth);
         let (qc_tx, qc_rx) = make_channel(_chan_depth);
@@ -181,6 +194,7 @@ impl ConsensusNode {
         let (view_change_tx, view_change_rx) = make_channel(_chan_depth);
         let (app_tx, mut app_rx) = make_channel(_chan_depth);
         let (fork_receiver_command_tx, fork_receiver_command_rx) = make_channel(_chan_depth);
+        let (fork_tx, fork_rx) = make_channel(_chan_depth);
 
         let block_maker_crypto = crypto.get_connector();
         let block_broadcaster_crypto = crypto.get_connector();
@@ -188,23 +202,18 @@ impl ConsensusNode {
         let staging_crypto = crypto.get_connector();
         let fork_receiver_crypto = crypto.get_connector();
 
-        let ctx = PinnedConsensusServerContext::new(config.clone(), keystore.clone(), batch_proposer_tx, block_acceptor_tx);
+        let ctx = PinnedConsensusServerContext::new(config.clone(), keystore.clone(), batch_proposer_tx, fork_tx, vote_tx, view_change_tx);
         let batch_proposer = BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx);
         let block_sequencer = BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto);
         let block_broadcaster = BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx.clone());
         let staging = Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, view_change_rx, client_reply_command_tx, app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx);
-        // let fork_receiver = ForkReceiver::new(config.clone(), fork_receiver_crypto, fork_rx, fork_receiver_command_rx, yo);
-
+        let fork_receiver = ForkReceiver::new(config.clone(), fork_receiver_crypto, fork_rx, fork_receiver_command_rx, other_block_tx);
         let mut handles = JoinSet::new();
+        
         handles.spawn(async move {
             while let Some(_) = client_reply_rx.recv().await {
                 // Sink
             }
-
-            // Don't drop the channels before eternity ends.
-            drop(other_block_tx);
-            drop(vote_tx);
-            drop(view_change_tx);
         });
     
         handles.spawn(async move {
@@ -225,11 +234,11 @@ impl ConsensusNode {
             }
         });
 
-        handles.spawn(async move {
-            while let Some(_) = block_acceptor_rx.recv().await {
-                // Sink
-            }
-        });
+        // handles.spawn(async move {
+        //     while let Some(_) = block_acceptor_rx.recv().await {
+        //         // Sink
+        //     }
+        // });
 
 
 
@@ -243,6 +252,7 @@ impl ConsensusNode {
             block_sequencer: Arc::new(Mutex::new(block_sequencer)),
             block_broadcaster: Arc::new(Mutex::new(block_broadcaster)),
             staging: Arc::new(Mutex::new(staging)),
+            fork_receiver: Arc::new(Mutex::new(fork_receiver)),
 
             crypto,
             storage: Arc::new(Mutex::new(storage)),

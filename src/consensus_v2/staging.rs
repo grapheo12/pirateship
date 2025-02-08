@@ -1,18 +1,18 @@
 use std::{collections::{HashMap, HashSet, VecDeque}, pin::Pin, sync::Arc, time::Duration};
 
 use async_recursion::async_recursion;
+use futures::future::try_join_all;
 use log::{debug, error, warn};
-use lz4_flex::block;
-use nix::libc::qos_class_t;
 use prost::Message;
 use tokio::sync::{Mutex, oneshot};
 
-use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{CachedBlock, CryptoServiceConnector}, proto::{consensus::{proto_block::Sig, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, rpc::ProtoPayload}, rpc::{client::PinnedClient, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck}};
+use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{CachedBlock, CryptoServiceConnector}, proto::{consensus::{proto_block::Sig, ProtoNameWithSignature, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, rpc::ProtoPayload}, rpc::{client::PinnedClient, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck}};
 
 use super::{block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, fork_receiver::{self, AppendEntriesStats, ForkReceiverCommand}};
 
 pub enum AppCommand {
-    CrashCommit(u64 /* ci */, Vec<CachedBlock> /* all blocks from old_ci + 1 to new_ci */)
+    CrashCommit(u64 /* ci */, Vec<CachedBlock> /* all blocks from old_ci + 1 to new_ci */),
+    ByzCommit(u64 /* bci */, Vec<CachedBlock> /* all blocks from old_bci + 1 to new_bci */)
 }
 
 pub enum ClientReplyCommand {
@@ -57,7 +57,7 @@ pub struct Staging {
 
     block_rx: Receiver<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats)>,
     vote_rx: Receiver<VoteWithSender>,
-    view_change_rx: Receiver<ProtoViewChange>,
+    view_change_rx: Receiver<(ProtoViewChange, String /* Sender */)>,
 
     client_reply_tx: Sender<ClientReplyCommand>,
     app_tx: Sender<AppCommand>,
@@ -72,7 +72,7 @@ impl Staging {
     pub fn new(
         config: AtomicConfig, client: PinnedClient, crypto: CryptoServiceConnector,
         block_rx: Receiver<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats)>,
-        vote_rx: Receiver<VoteWithSender>, view_change_rx: Receiver<ProtoViewChange>,
+        vote_rx: Receiver<VoteWithSender>, view_change_rx: Receiver<(ProtoViewChange, String)>,
         client_reply_tx: Sender<ClientReplyCommand>, app_tx: Sender<AppCommand>,
         block_broadcaster_command_tx: Sender<BlockBroadcasterCommand>,
         block_sequencer_command_tx: Sender<BlockSequencerControlCommand>,
@@ -151,7 +151,7 @@ impl Staging {
                 }
                 let vote = vote.unwrap();
                 if i_am_leader {
-                    self.process_vote(vote.0, vote.1).await?;
+                    self.verify_and_process_vote(vote.0, vote.1).await?;
                 } else {
                     warn!("Received vote while being a follower");
                 }
@@ -160,8 +160,8 @@ impl Staging {
                 if vc_msg.is_none() {
                     return Err(())
                 }
-                let vc_msg = vc_msg.unwrap();
-                self.process_view_change_message(vc_msg).await?;
+                let (vc_msg, sender) = vc_msg.unwrap();
+                self.process_view_change_message(vc_msg, sender).await?;
             }
         }
 
@@ -364,6 +364,7 @@ impl Staging {
         self.pending_blocks.push_back(block_with_votes);
 
         // Now vote for self
+        
         self.vote_on_last_block_for_self(storage_ack).await?;
 
 
@@ -417,7 +418,7 @@ impl Staging {
         }
 
         // Postcondition here: block.view == self.view && check_continuity() == true && !i_am_leader
-
+        let block_n = block.block.n;
         let block_with_votes = CachedBlockWithVotes {
             block,
             vote_sigs: HashMap::new(),
@@ -429,7 +430,7 @@ impl Staging {
         self.do_crash_commit(self.ci, ae_stats.ci).await;
 
         let mut qc_list = self.pending_blocks.iter().last().unwrap()
-            .block.block.qc.iter().map(|e| e.clone())
+            .block.block.qc.iter().map(|e| (block_n, e.clone()))
             .collect::<Vec<_>>();
 
         for qc in qc_list.drain(..) {
@@ -443,6 +444,45 @@ impl Staging {
         Ok(())
     }
 
+    async fn verify_and_process_vote(&mut self, sender: String, vote: ProtoVote) -> Result<(), ()> {
+        let mut verify_futs = Vec::new();
+        for sig in &vote.sig_array {
+            let found_block = self.pending_blocks.binary_search_by(|b| {
+                b.block.block.n.cmp(&sig.n)
+            });
+
+            match found_block {
+                Ok(idx) => {
+                    let block = &self.pending_blocks[idx];
+                    let _sig = sig.sig.clone().try_into();
+                    match _sig {
+                        Ok(_sig) => {
+                            verify_futs.push(self.crypto.verify_nonblocking(
+                                block.block.block_hash.clone(),
+                                sender.clone(), _sig
+                            ).await);
+                                
+                        },
+                        Err(_) => {
+                            warn!("Malformed signature in vote");
+                            return Ok(());
+                        }
+                    }
+                },
+                Err(_) => {
+                    // This is a vote for a block I have byz committed.
+                    continue;
+                }
+            }
+        }
+
+        let results = try_join_all(verify_futs).await.unwrap();
+        if !results.iter().all(|e| *e) {
+            return Ok(());
+        }
+        
+        self.process_vote(sender, vote).await
+    }
 
     /// Precondition: The vote has been cryptographically verified to be from sender.
     async fn process_vote(&mut self, sender: String, mut vote: ProtoVote) -> Result<(), ()> {
@@ -488,17 +528,18 @@ impl Staging {
 
     /// Crash commit blindly; checking is left on the caller.
     async fn do_crash_commit(&mut self, old_ci: u64, new_ci: u64) {
-        if new_ci > old_ci {
-            self.ci = new_ci;
-            // Notify
-            self.block_broadcaster_command_tx.send(BlockBroadcasterCommand::UpdateCI(new_ci)).await.unwrap();
-
-            let blocks = self.pending_blocks.iter()
-                .filter(|e| e.block.block.n > old_ci && e.block.block.n <= new_ci)
-                .map(|e| e.block.clone())
-                .collect();
-            self.app_tx.send(AppCommand::CrashCommit(new_ci, blocks)).await.unwrap();
+        if new_ci <= old_ci {
+            return;
         }
+        self.ci = new_ci;
+        // Notify
+        self.block_broadcaster_command_tx.send(BlockBroadcasterCommand::UpdateCI(new_ci)).await.unwrap();
+
+        let blocks = self.pending_blocks.iter()
+            .filter(|e| e.block.block.n > old_ci && e.block.block.n <= new_ci)
+            .map(|e| e.block.clone())
+            .collect();
+        self.app_tx.send(AppCommand::CrashCommit(new_ci, blocks)).await.unwrap();
     }
 
 
@@ -521,24 +562,85 @@ impl Staging {
     }
 
     async fn maybe_create_qcs(&mut self) -> Result<(), ()> {
+        let mut qc_ns = Vec::new();
+        for block in &self.pending_blocks {
+            if block.vote_sigs.len() >= self.byzantine_commit_threshold() {
+                let qc = ProtoQuorumCertificate {
+                    n: block.block.block.n,
+                    view: self.view,
+                    sig: block.vote_sigs.iter().map(|(k, v)| {
+                        ProtoNameWithSignature {
+                            name: k.clone(),
+                            sig: v.sig.clone()
+                        }
+                    }).collect(),
+                    digest: block.block.block_hash.clone()
+                };
 
-        self.maybe_byzantine_commit(ProtoQuorumCertificate::default()).await?;
+                let qc_n: QCWithBlockN = (block.block.block.n, qc);
+                qc_ns.push(qc_n);
+            }
+        }
+
+        for qc_n in qc_ns.drain(..) {
+            self.maybe_byzantine_commit(qc_n).await?;
+        }
+
         Ok(())
     }
 
+    /// Will push to pending_qcs and notify block_broadcaster to attach this qc.
+    /// Then will try to byzantine commit.
     /// Precondition: All qcs in self.pending_qcs has same view as qc.view.
     /// If \E (block_n, qc2) in self.pending_qcs: qc.n >= block_n then qc2.n is byz committed.
     /// This is PBFT/Jolteon-style 2-hop rule.
     /// If this happens then all QCs in self.pending_qcs such that block_n <= new_bci is removed.
-    async fn maybe_byzantine_commit(&mut self, qc: ProtoQuorumCertificate) -> Result<(), ()> {
-        // TODO::::
+    async fn maybe_byzantine_commit(&mut self, qc_n: QCWithBlockN) -> Result<(), ()> {
+        let old_bci = self.bci;
 
-        self.bci = self.ci;
-        self.pending_blocks.retain(|e| e.block.block.n > self.bci);
+        let new_bci = self.pending_qcs.iter().rev() // Iterate backwards
+            .filter(|(block_n, _)| *block_n <= qc_n.1.n) // Only see blocks that this QC certifies.
+            .map(|(_, qc)| {
+                if qc.view != qc_n.1.view {
+                    0       // Take QCs with same view as the new QC.
+                } else {
+                    qc.n    // qc.n refers to a block that this qc certifies. This qc is certified by qc_n.
+                            // They have the same view. So it satisfies the 2-hop rule.
+                }
+            })
+            .max() // Find the highest such qc.n that satisfies the 2-hop rule.
+            .unwrap_or(old_bci);    // In case pending_qcs is empty. Or nothing could be byz committed.
+
+        let _ = self.qc_tx.send(qc_n.1.clone()).await;
+        self.pending_qcs.push_back(qc_n);
+
+        self.do_byzantine_commit(old_bci, new_bci).await;
         Ok(())
     }
 
-    async fn process_view_change_message(&mut self, vc_msg: ProtoViewChange) -> Result<(), ()> {
+    async fn do_byzantine_commit(&mut self, old_bci: u64, new_bci: u64) {
+        if new_bci <= old_bci {
+            return;
+        }
+
+        self.bci = new_bci;
+        self.pending_qcs.retain(|(block_n, _)| *block_n > self.bci);
+
+        // Invariant: All blocks in pending_blocks is in order.
+        let mut byz_blocks = Vec::new();
+
+        while let Some(block) = self.pending_blocks.front() {
+            if block.block.block.n > new_bci {
+                break;
+            }
+            byz_blocks.push(self.pending_blocks.pop_front().unwrap().block);
+        }
+
+        let _ = self.app_tx.send(AppCommand::ByzCommit(new_bci, byz_blocks)).await;
+
+    }
+
+    async fn process_view_change_message(&mut self, vc_msg: ProtoViewChange, sender: String) -> Result<(), ()> {
         Ok(())
     }
 }

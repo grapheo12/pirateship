@@ -51,7 +51,6 @@ enum CryptoServiceCommand {
     
     // Deserializes and verifies block serialization
     VerifyBlockSer(Vec<u8>, oneshot::Sender<Result<CachedBlock, Error>>),
-    
     Die
 }
 
@@ -228,6 +227,17 @@ macro_rules! dispatch_cmd {
     };
 }
 
+macro_rules! dispatch_cmd_nonblocking {
+    ($self: expr, $cmd: expr, $($args: expr),+) => {
+        {
+            let (tx, rx) = oneshot::channel();
+            $self.dispatch($cmd($($args),+, tx)).await;
+
+            rx
+        }
+    };
+}
+
 impl CryptoServiceConnector {
     async fn dispatch(&mut self, cmd: CryptoServiceCommand) {
         if let Err(e) = self.cmd_txs[self.round_robin % self.num_tasks].send(cmd).await {
@@ -253,6 +263,10 @@ impl CryptoServiceConnector {
 
     pub async fn verify(&mut self, data: &Vec<u8>, signer: &String, signature: &[u8; SIGNATURE_LENGTH]) -> bool {
         dispatch_cmd!(self, CryptoServiceCommand::Verify, data.clone(), signer.clone(), signature.clone())
+    }
+
+    pub async fn verify_nonblocking(&mut self, data: Vec<u8>, signer: String, signature: [u8; SIGNATURE_LENGTH]) -> oneshot::Receiver<bool> {
+        dispatch_cmd_nonblocking!(self, CryptoServiceCommand::Verify, data, signer, signature)
     }
 
     pub async fn change_key_store(&mut self, key_store: KeyStore) {
