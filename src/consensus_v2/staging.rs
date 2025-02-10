@@ -6,9 +6,9 @@ use log::{debug, error, warn};
 use prost::Message;
 use tokio::sync::{Mutex, oneshot};
 
-use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{CachedBlock, CryptoServiceConnector}, proto::{consensus::{proto_block::Sig, ProtoNameWithSignature, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, rpc::ProtoPayload}, rpc::{client::PinnedClient, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck}};
+use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{CachedBlock, CryptoServiceConnector}, proto::{consensus::{proto_block::Sig, ProtoNameWithSignature, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, rpc::ProtoPayload}, rpc::{client::PinnedClient, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck}};
 
-use super::{block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, fork_receiver::{self, AppendEntriesStats, ForkReceiverCommand}};
+use super::{block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}};
 
 pub enum AppCommand {
     CrashCommit(u64 /* ci */, Vec<CachedBlock> /* all blocks from old_ci + 1 to new_ci */),
@@ -28,7 +28,7 @@ struct CachedBlockWithVotes {
 }
 
 pub type VoteWithSender = (String /* Sender */, ProtoVote);
-pub type QCWithBlockN = (u64 /* Block the QC was attached to */, ProtoQuorumCertificate);
+pub type SignatureWithBlockN = (u64 /* Block the QC was attached to */, ProtoSignatureArrayEntry);
 
 /// This is where all the consensus decisions are made.
 /// Feeds in blocks from block_broadcaster
@@ -50,8 +50,8 @@ pub struct Staging {
     /// Invariant: pending_blocks.len() == 0 || bci == pending_blocks.front().n - 1
     pending_blocks: VecDeque<CachedBlockWithVotes>,
 
-    /// Stores "1-hop" QCs, if adding a new QC creates QC on QC, it is removed and bci is incremented.
-    pending_qcs: VecDeque<QCWithBlockN>,
+    /// Signed votes for blocks in pending_blocks
+    pending_signatures: VecDeque<SignatureWithBlockN>,
 
     view_change_timer: Arc<Pin<Box<ResettableTimer>>>,
 
@@ -94,7 +94,7 @@ impl Staging {
             view_is_stable: true, // TODO: For now
             config_num: 1,
             pending_blocks: VecDeque::with_capacity(_chan_depth),
-            pending_qcs: VecDeque::with_capacity(_chan_depth),
+            pending_signatures: VecDeque::with_capacity(_chan_depth),
             view_change_timer,
             block_rx,
             vote_rx,
@@ -256,20 +256,12 @@ impl Staging {
         // Invariant: I vote => I stored
         let _ = storage_ack.await.unwrap();
 
-
-        // I will resend all the signatures in pending_blocks that I have not received a QC for.
-        let last_block_with_qc = match self.pending_qcs.front().as_ref() {
-            Some((_, qc)) => qc.n,
-            None => 0,
-        };
         let my_name = self.config.get().net_config.name.clone();
 
+        // I will resend all the signatures in pending_blocks that I have not received a QC for.
         // But only if the last block was signed.
         let sig_array = if let Some(Sig::ProposerSig(_)) = last_block.block.block.sig {
-            self.pending_blocks.iter().filter(|e| e.block.block.n > last_block_with_qc)
-                .map(|e| {
-                    e.vote_sigs.get(&my_name).unwrap().clone()
-                }).collect::<Vec<_>>()
+            self.pending_signatures.iter().map(|(_, sig)| sig.clone()).collect()
         } else {
             Vec::new()
         };
@@ -286,11 +278,13 @@ impl Staging {
         // If this block is signed, need a signature for the vote.
         if let Some(Sig::ProposerSig(_)) = last_block.block.block.sig {
             let vote_sig = self.crypto.sign(&last_block.block.block_hash).await;
-
-            vote.sig_array.push(ProtoSignatureArrayEntry {
+            let sig_entry = ProtoSignatureArrayEntry {
                 n: last_block.block.block.n,
                 sig: vote_sig.to_vec(),
-            });
+            };
+            vote.sig_array.push(sig_entry.clone());
+
+            self.pending_signatures.push_back((last_block.block.block.n, sig_entry));
         }
 
         let leader = self.config.get().consensus_config.get_leader_for_view(self.view);
@@ -343,7 +337,7 @@ impl Staging {
 
             // Flush the pending queue and cancel client requests.
             self.pending_blocks.clear();
-            self.pending_qcs.clear();
+            self.pending_signatures.clear();
             self.client_reply_tx.send(ClientReplyCommand::CancelAllRequests).await.unwrap();
             
             // Ready to accept the block normally.
@@ -406,7 +400,7 @@ impl Staging {
 
             // Flush the pending queue and cancel client requests.
             self.pending_blocks.clear();
-            self.pending_qcs.clear();
+            self.pending_signatures.clear();
             self.client_reply_tx.send(ClientReplyCommand::CancelAllRequests).await.unwrap();
             
             // Ready to accept the block normally.
@@ -430,7 +424,7 @@ impl Staging {
         self.do_crash_commit(self.ci, ae_stats.ci).await;
 
         let mut qc_list = self.pending_blocks.iter().last().unwrap()
-            .block.block.qc.iter().map(|e| (block_n, e.clone()))
+            .block.block.qc.iter().map(|e| e.clone())
             .collect::<Vec<_>>();
 
         for qc in qc_list.drain(..) {
@@ -562,7 +556,8 @@ impl Staging {
     }
 
     async fn maybe_create_qcs(&mut self) -> Result<(), ()> {
-        let mut qc_ns = Vec::new();
+        let mut qcs = Vec::new();
+        
         for block in &self.pending_blocks {
             if block.vote_sigs.len() >= self.byzantine_commit_threshold() {
                 let qc = ProtoQuorumCertificate {
@@ -576,14 +571,14 @@ impl Staging {
                     }).collect(),
                     digest: block.block.block_hash.clone()
                 };
-
-                let qc_n: QCWithBlockN = (block.block.block.n, qc);
-                qc_ns.push(qc_n);
+                qcs.push(qc);
             }
         }
 
-        for qc_n in qc_ns.drain(..) {
-            self.maybe_byzantine_commit(qc_n).await?;
+        for qc in qcs.drain(..) {
+            let _ = self.qc_tx.send(qc.clone()).await;
+
+            self.maybe_byzantine_commit(qc).await?;
         }
 
         Ok(())
@@ -592,27 +587,23 @@ impl Staging {
     /// Will push to pending_qcs and notify block_broadcaster to attach this qc.
     /// Then will try to byzantine commit.
     /// Precondition: All qcs in self.pending_qcs has same view as qc.view.
+    /// Fast path rule:
+    /// If qc_n has votes from all nodes, then qc.n is byz committed.
+    /// Slow path rule:
     /// If \E (block_n, qc2) in self.pending_qcs: qc.n >= block_n then qc2.n is byz committed.
     /// This is PBFT/Jolteon-style 2-hop rule.
     /// If this happens then all QCs in self.pending_qcs such that block_n <= new_bci is removed.
-    async fn maybe_byzantine_commit(&mut self, qc_n: QCWithBlockN) -> Result<(), ()> {
+    async fn maybe_byzantine_commit(&mut self, incoming_qc: ProtoQuorumCertificate) -> Result<(), ()> {
+        // Clean out the pending_signatures
+        self.pending_signatures.retain(|(n, _)| *n > incoming_qc.n);
         let old_bci = self.bci;
 
-        let new_bci = self.pending_qcs.iter().rev() // Iterate backwards
-            .filter(|(block_n, _)| *block_n <= qc_n.1.n) // Only see blocks that this QC certifies.
-            .map(|(_, qc)| {
-                if qc.view != qc_n.1.view {
-                    0       // Take QCs with same view as the new QC.
-                } else {
-                    qc.n    // qc.n refers to a block that this qc certifies. This qc is certified by qc_n.
-                            // They have the same view. So it satisfies the 2-hop rule.
-                }
-            })
-            .max() // Find the highest such qc.n that satisfies the 2-hop rule.
-            .unwrap_or(old_bci);    // In case pending_qcs is empty. Or nothing could be byz committed.
+        let new_bci = self.pending_blocks.iter().rev()
+            .filter(|b| b.block.block.n <= incoming_qc.n) // Th blocks pointed by this QC (and all its ancestors)
+            .map(|b| b.block.block.qc.iter().map(|qc| qc.n)) // Collect all the QCs in those blocks
+            .flatten()
+            .max().unwrap_or(old_bci); // All such qc.n must be byz committed, so new_bci = max(all such qc.n)
 
-        let _ = self.qc_tx.send(qc_n.1.clone()).await;
-        self.pending_qcs.push_back(qc_n);
 
         self.do_byzantine_commit(old_bci, new_bci).await;
         Ok(())
@@ -624,7 +615,6 @@ impl Staging {
         }
 
         self.bci = new_bci;
-        self.pending_qcs.retain(|(block_n, _)| *block_n > self.bci);
 
         // Invariant: All blocks in pending_blocks is in order.
         let mut byz_blocks = Vec::new();

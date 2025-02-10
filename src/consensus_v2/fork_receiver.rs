@@ -1,12 +1,9 @@
 use std::{collections::VecDeque, io::Error, sync::Arc};
 
-use ed25519_dalek::SIGNATURE_LENGTH;
 use log::warn;
-use nix::libc::SIGNATURE;
-use rand_chacha::rand_core::le;
 use tokio::sync::{Mutex, oneshot};
 
-use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock, CryptoServiceConnector, DIGEST_LENGTH}, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::client::PinnedClient, utils::{channel::{Receiver, Sender}, get_parent_hash_in_proto_block_ser}};
+use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries}, utils::channel::{Receiver, Sender}};
 
 
 pub enum ForkReceiverCommand {
