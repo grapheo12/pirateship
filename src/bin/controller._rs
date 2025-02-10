@@ -1,7 +1,7 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use std::{fs, io, path, str::FromStr};
+use std::{fs, io, path};
 
 use clap::{arg, command, Arg, ArgAction};
 use log::{debug, info, trace};

@@ -1,10 +1,10 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use log::{debug, error, info, warn};
-use pft::{config::{self, Config}, consensus::{self, utils::get_everyone_except_me}, crypto::{AtomicKeyStore, KeyStore}, execution::engines::{kvs::PinnedKVStoreEngine, logger::PinnedLoggerEngine, sql::PinnedSQLEngine}, rpc::{client::{Client, PinnedClient}, server::{LatencyProfile, MsgAckChan, RespType, Server, ServerContextType}, MessageRef, PinnedMessage}};
+use log::{debug, error, info};
+use pft::{config::{self, Config}, crypto::{AtomicKeyStore, KeyStore}, rpc::{client::{Client, PinnedClient}, server::{LatencyProfile, MsgAckChan, RespType, Server, ServerContextType}, MessageRef, PinnedMessage}};
 use tokio::{runtime, signal, task::JoinSet, time::sleep};
-use std::{env, fs, io::{self, Error}, path, pin::Pin, sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex}, time::{Duration, Instant}};
+use std::{env, fs, io::{self, Error}, path, pin::Pin, sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex}, time::Duration};
 use std::io::Write;
 
 #[global_allocator]
@@ -132,9 +132,13 @@ impl ProfilerNode
         js.spawn(async move {
             let payload = vec![2u8; payload_sz];
             let msg = PinnedMessage::from(payload, payload_sz, pft::rpc::SenderType::Anon);
-            let send_list = get_everyone_except_me(
-                &node2.ctx.0.config.net_config.name,
-                &node2.ctx.0.config.consensus_config.node_list);
+            // let send_list = get_everyone_except_me(
+                // &node2.ctx.0.config.net_config.name,
+                // &node2.ctx.0.config.consensus_config.node_list);
+
+            let send_list = node2.ctx.0.config.consensus_config.node_list.iter()
+                .filter(|e| *e != &node2.ctx.0.config.net_config.name)
+                .map(|e| e.clone()).collect::<Vec<String>>();
             
             info!("{:?}", send_list);
             if node2.ctx.0.config.net_config.name == "node1" {

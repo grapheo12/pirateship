@@ -8,12 +8,8 @@ use tokio::sync::{Mutex, oneshot};
 
 use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{CachedBlock, CryptoServiceConnector}, proto::{consensus::{proto_block::Sig, ProtoNameWithSignature, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, rpc::ProtoPayload}, rpc::{client::PinnedClient, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck}};
 
-use super::{block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}};
+use super::{app::AppCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}};
 
-pub enum AppCommand {
-    CrashCommit(u64 /* ci */, Vec<CachedBlock> /* all blocks from old_ci + 1 to new_ci */),
-    ByzCommit(u64 /* bci */, Vec<CachedBlock> /* all blocks from old_bci + 1 to new_bci */)
-}
 
 pub enum ClientReplyCommand {
     CancelAllRequests
@@ -190,6 +186,11 @@ impl Staging {
         n - u
     }
 
+    fn byzantine_fast_path_threshold(&self) -> usize {
+        // All nodes
+        self.config.get().consensus_config.node_list.len()
+    }
+
     fn check_continuity(&self, block: &CachedBlock) -> bool {
         match self.pending_blocks.back() {
             Some(b) => {
@@ -336,7 +337,13 @@ impl Staging {
             self.fork_receiver_command_tx.send(ForkReceiverCommand::UpdateView(self.view, self.config_num)).await.unwrap();
 
             // Flush the pending queue and cancel client requests.
-            self.pending_blocks.clear();
+            let old_pending_len = self.pending_blocks.len();
+            self.pending_blocks.retain(|e| e.block.block.n < block.block.n);
+            let new_pending_len = self.pending_blocks.len();
+            if new_pending_len < old_pending_len {
+                // Signal a rollback
+
+            }
             self.pending_signatures.clear();
             self.client_reply_tx.send(ClientReplyCommand::CancelAllRequests).await.unwrap();
             
@@ -598,12 +605,21 @@ impl Staging {
         self.pending_signatures.retain(|(n, _)| *n > incoming_qc.n);
         let old_bci = self.bci;
 
-        let new_bci = self.pending_blocks.iter().rev()
+        // Fast path: All votes rule
+        let new_bci_fast_path = if incoming_qc.sig.len() >= self.byzantine_fast_path_threshold() {
+            incoming_qc.n  
+        } else {
+            old_bci
+        };
+
+        // Slow path: 2-hop rule
+        let new_bci_slow_path = self.pending_blocks.iter().rev()
             .filter(|b| b.block.block.n <= incoming_qc.n) // Th blocks pointed by this QC (and all its ancestors)
             .map(|b| b.block.block.qc.iter().map(|qc| qc.n)) // Collect all the QCs in those blocks
             .flatten()
             .max().unwrap_or(old_bci); // All such qc.n must be byz committed, so new_bci = max(all such qc.n)
 
+        let new_bci = new_bci_fast_path.max(new_bci_slow_path);
 
         self.do_byzantine_commit(old_bci, new_bci).await;
         Ok(())

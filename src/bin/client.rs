@@ -1,11 +1,11 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender}, Semaphore};
+use tokio::sync::Semaphore;
 use log::{debug, error, info, trace, warn};
 use pft::{
-    config::{default_log4rs_config, ClientConfig}, consensus::utils::get_f_plus_one_send_list, crypto::{cmp_hash, KeyStore}, proto::{
-        client::{self, ProtoByzPollRequest, ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload
+    config::{default_log4rs_config, ClientConfig}, crypto::KeyStore, proto::{
+        client::{ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload
     }, rpc::{
         client::{Client, PinnedClient},
         MessageRef, PinnedMessage,
@@ -14,9 +14,8 @@ use pft::{
 use prost::Message;
 use rand::{distributions::WeightedIndex, prelude::*};
 use rand_chacha::ChaCha20Rng;
-use core::error;
 use std::{collections::HashMap, env, fs, io, ops::Deref, path, pin::Pin, sync::{Arc, Mutex}, time::Duration};
-use tokio::{sync::mpsc, task::JoinSet, time::sleep};
+use tokio::{task::JoinSet, time::sleep};
 use std::time::Instant;
 
 #[global_allocator]

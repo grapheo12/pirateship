@@ -4,13 +4,14 @@ mod block_broadcaster;
 mod staging;
 pub mod fork_receiver;
 mod timer;
+mod app;
 
 #[cfg(test)]
 mod tests;
 
 use std::{io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::Arc};
 
-use batch_proposal::{BatchProposer, MsgAckChanWithTag, TxWithAckChanTag};
+use batch_proposal::{BatchProposer, TxWithAckChanTag};
 use block_broadcaster::BlockBroadcaster;
 use block_sequencer::BlockSequencer;
 use fork_receiver::ForkReceiver;
