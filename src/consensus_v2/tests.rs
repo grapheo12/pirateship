@@ -1,8 +1,6 @@
-use std::{sync::Arc, thread, time::{Duration, Instant}};
-
-use rand::{thread_rng, Rng as _};
+use std::{sync::Arc, time::{Duration, Instant}};
 use tokio::{sync::Mutex, task::JoinSet};
-use crate::{consensus_v2::{block_broadcaster::BlockBroadcaster, fork_receiver, staging::Staging}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
+use crate::{consensus_v2::{block_broadcaster::BlockBroadcaster, staging::Staging}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
 
 use crate::{config::{AtomicConfig, Config}, consensus_v2::{batch_proposal::BatchProposer, block_sequencer::BlockSequencer}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}};
 
@@ -520,11 +518,7 @@ async fn test_staging() {
     let start = Instant::now();
     'main: while let Some(cmd) = app_rx.recv().await {
         match cmd {
-            crate::consensus_v2::staging::AppCommand::CrashCommit(ci, committed_blocks) => {
-                if committed_blocks.last().unwrap().block.n != ci {
-                    panic!("Last block should have same n as ci");
-                }
-                
+            crate::consensus_v2::app::AppCommand::CrashCommit(committed_blocks) => {
                 for block in committed_blocks {
                     if block.block.n != last_block + 1 {
                         panic!("Monotonicity broken!");

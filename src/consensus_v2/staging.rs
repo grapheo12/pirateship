@@ -6,13 +6,15 @@ use log::{debug, error, warn};
 use prost::Message;
 use tokio::sync::{Mutex, oneshot};
 
-use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{CachedBlock, CryptoServiceConnector}, proto::{consensus::{proto_block::Sig, ProtoNameWithSignature, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, rpc::ProtoPayload}, rpc::{client::PinnedClient, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck}};
+use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{CachedBlock, CryptoServiceConnector}, proto::{consensus::{proto_block::Sig, ProtoNameWithSignature, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, execution::ProtoTransactionResult, rpc::ProtoPayload}, rpc::{client::PinnedClient, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck}};
 
 use super::{app::AppCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}};
 
 
 pub enum ClientReplyCommand {
-    CancelAllRequests
+    CancelAllRequests,
+    CrashCommitAck(HashMap<u64, Vec<ProtoTransactionResult>>),
+    ByzCommitAck(HashMap<u64, Vec<ProtoTransactionResult>>),
 }
 
 
@@ -540,7 +542,7 @@ impl Staging {
             .filter(|e| e.block.block.n > old_ci && e.block.block.n <= new_ci)
             .map(|e| e.block.clone())
             .collect();
-        self.app_tx.send(AppCommand::CrashCommit(new_ci, blocks)).await.unwrap();
+        self.app_tx.send(AppCommand::CrashCommit(blocks)).await.unwrap();
     }
 
 
@@ -642,7 +644,7 @@ impl Staging {
             byz_blocks.push(self.pending_blocks.pop_front().unwrap().block);
         }
 
-        let _ = self.app_tx.send(AppCommand::ByzCommit(new_bci, byz_blocks)).await;
+        let _ = self.app_tx.send(AppCommand::ByzCommit(byz_blocks)).await;
 
     }
 

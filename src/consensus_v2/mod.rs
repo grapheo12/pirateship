@@ -4,7 +4,7 @@ mod block_broadcaster;
 mod staging;
 pub mod fork_receiver;
 mod timer;
-mod app;
+pub mod app;
 
 #[cfg(test)]
 mod tests;
