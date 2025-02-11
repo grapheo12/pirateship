@@ -1,6 +1,9 @@
+use std::collections::VecDeque;
 use std::{pin::Pin, sync::Arc, time::Duration};
 
-use log::trace;
+use log::{debug, trace};
+use lz4_flex::block;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{oneshot, Mutex};
 use crate::crypto::FutureHash;
 use crate::utils::channel::{Sender, Receiver};
@@ -24,7 +27,7 @@ pub struct BlockSequencer {
     
     signature_timer: Arc<Pin<Box<ResettableTimer>>>,
     
-    qc_rx: Receiver<ProtoQuorumCertificate>,
+    qc_rx: UnboundedReceiver<ProtoQuorumCertificate>,
     current_qc_list: Vec<ProtoQuorumCertificate>,
 
     block_broadcaster_tx: Sender<(u64, oneshot::Receiver<CachedBlock>)>, // Last-ditch effort to parallelize hashing and signing of blocks, shouldn't matter.
@@ -38,6 +41,8 @@ pub struct BlockSequencer {
     view_is_stable: bool,
     force_sign_next_batch: bool,
     last_signed_seq_num: u64,
+
+    send_buffer: VecDeque<(u64, oneshot::Receiver<CachedBlock>)>,
 }
 
 impl BlockSequencer {
@@ -45,7 +50,7 @@ impl BlockSequencer {
         config: AtomicConfig,
         control_command_rx: Receiver<BlockSequencerControlCommand>,
         batch_rx: Receiver<(RawBatch, Vec<MsgAckChanWithTag>)>,
-        qc_rx: Receiver<ProtoQuorumCertificate>,
+        qc_rx: UnboundedReceiver<ProtoQuorumCertificate>,
         block_broadcaster_tx: Sender<(u64, oneshot::Receiver<CachedBlock>)>,
         client_reply_tx: Sender<(oneshot::Receiver<HashType>, Vec<MsgAckChanWithTag>)>,
         crypto: CryptoServiceConnector,
@@ -72,15 +77,18 @@ impl BlockSequencer {
             view_is_stable: true,       // TODO: Start with stable for now, we'll change it later.
             force_sign_next_batch: false,
             last_signed_seq_num: 0,
+            send_buffer: VecDeque::new(),
+
         }
     }
 
     pub async fn run(block_maker: Arc<Mutex<Self>>) {
         let mut block_maker = block_maker.lock().await;
         let signature_timer_handle = block_maker.signature_timer.run().await;
+        let chan_depth = block_maker.config.get().rpc_config.channel_depth;
 
         loop {
-            if let Err(_) = block_maker.worker().await {
+            if let Err(_) = block_maker.worker(chan_depth as usize).await {
                 break;
             }
         }
@@ -94,12 +102,19 @@ impl BlockSequencer {
         leader == config.net_config.name
     }
 
-    async fn worker(&mut self) -> Result<(), ()> {
+    async fn worker(&mut self, chan_depth: usize) -> Result<(), ()> {
+
         let listen_for_new_batch = 
             self.view_is_stable && self.i_am_leader();
 
+        let mut qc_buf = Vec::new();
+    
         if listen_for_new_batch {
             tokio::select! {
+                biased;
+                _ = self.qc_rx.recv_many(&mut qc_buf, chan_depth) => {
+                    self.add_qcs(qc_buf).await;
+                }
                 _batch_and_client_reply = self.batch_rx.recv() => {
                     if let Some(_) = _batch_and_client_reply {
                         let (batch, client_reply) = _batch_and_client_reply.unwrap();
@@ -112,18 +127,16 @@ impl BlockSequencer {
                 _cmd = self.control_command_rx.recv() => {
                     self.handle_control_command(_cmd).await;
                 },
-                _qc = self.qc_rx.recv() => {
-                    self.add_qc(_qc).await;
-                }
             }
         } else {
             tokio::select! {
+                biased;
+                _ = self.qc_rx.recv_many(&mut qc_buf, chan_depth) => {
+                    self.add_qcs(qc_buf).await;
+                }
                 _cmd = self.control_command_rx.recv() => {
                     self.handle_control_command(_cmd).await;
                 },
-                _qc = self.qc_rx.recv() => {
-                    self.add_qc(_qc).await;
-                }
             }
         }
  
@@ -164,22 +177,20 @@ impl BlockSequencer {
 
         self.client_reply_tx.send((hash_rx2, replies)).await
             .expect("Should be able to send client_reply_tx");
+
         self.block_broadcaster_tx.send((n, block_rx)).await
             .expect("Should be able to send block_broadcaster_tx");
-        trace!("Sequenced: {}", n);
+        debug!("Sequenced: {}", n);
     }
 
-    async fn add_qc(&mut self, qc: Option<ProtoQuorumCertificate>) {
-        if qc.is_none() {
-            return;
+    async fn add_qcs(&mut self, mut qcs: Vec<ProtoQuorumCertificate>) {
+        for qc in qcs.drain(..) {
+            // Invariant: All qc.view in self.current_qc_list == self.view
+            if qc.view != self.view {
+                continue;
+            }
+            self.current_qc_list.push(qc);
         }
-        let qc = qc.unwrap();
-        // Invariant: All qc.view in self.current_qc_list == self.view
-        if qc.view != self.view {
-            return;
-        }
-
-        self.current_qc_list.push(qc);
     }
 
     async fn handle_control_command(&mut self, cmd: Option<BlockSequencerControlCommand>) {

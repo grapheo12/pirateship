@@ -10,7 +10,7 @@ pub mod engines;
 #[cfg(test)]
 mod tests;
 
-use std::{io::{Error, ErrorKind}, marker::PhantomData, ops::Deref, pin::Pin, sync::Arc};
+use std::{io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::Arc};
 
 use app::{AppEngine, Application};
 use batch_proposal::{BatchProposer, TxWithAckChanTag};
@@ -20,10 +20,10 @@ use fork_receiver::ForkReceiver;
 use log::{debug, warn};
 use prost::Message;
 use staging::{Staging, VoteWithSender};
-use tokio::{sync::Mutex, task::JoinSet};
-use crate::{proto::consensus::{ProtoAppendEntries, ProtoBlock, ProtoViewChange, ProtoVote}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
+use tokio::{sync::{mpsc::unbounded_channel, Mutex}, task::JoinSet};
+use crate::{proto::consensus::{ProtoAppendEntries, ProtoViewChange}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
 
-use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{execution::ProtoTransaction, rpc::ProtoPayload}, rpc::{server::{LatencyProfile, MsgAckChan, RespType, Server, ServerContextType}, MessageRef, PinnedMessage}};
+use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::rpc::ProtoPayload, rpc::{server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef}};
 
 pub struct ConsensusServerContext {
     config: AtomicConfig,
@@ -184,7 +184,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
 
         let (block_maker_tx, block_maker_rx) = make_channel(_chan_depth);
         let (control_command_tx, control_command_rx) = make_channel(_chan_depth);
-        let (qc_tx, qc_rx) = make_channel(_chan_depth);
+        let (qc_tx, qc_rx) = unbounded_channel();
         let (block_broadcaster_tx, block_broadcaster_rx) = make_channel(_chan_depth);
         let (other_block_tx, other_block_rx) = make_channel(_chan_depth);
         let (client_reply_tx, mut client_reply_rx) = make_channel(_chan_depth);

@@ -1,13 +1,13 @@
 use std::{sync::Arc, time::{Duration, Instant}};
-use tokio::{sync::Mutex, task::JoinSet};
+use tokio::{sync::{mpsc::unbounded_channel, Mutex}, task::JoinSet};
 use crate::{consensus_v2::{block_broadcaster::BlockBroadcaster, staging::Staging}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
 
 use crate::{config::{AtomicConfig, Config}, consensus_v2::{batch_proposal::BatchProposer, block_sequencer::BlockSequencer}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}};
 
 use super::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag};
 
-const TEST_CRYPTO_NUM_TASKS: usize = 6;
-const MAX_TXS: usize = 2_000_000;
+const TEST_CRYPTO_NUM_TASKS: usize = 32;
+const MAX_TXS: usize = 2_500_000;
 const MAX_CLIENTS: usize = 10;
 const TEST_RATE: f64 = 500_000.0;
 const PAYLOAD_SIZE: usize = 512;
@@ -52,7 +52,7 @@ async fn load(batch_proposer_tx: Sender<TxWithAckChanTag>, req_per_sec: f64) {
 }
 
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 32)]
 async fn test_batch_proposal() {
     // Generate configs first
     let cfg_path = "configs/node1_config.json";
@@ -124,7 +124,7 @@ async fn test_batch_proposal() {
 }
 
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 32)]
 async fn test_block_sequencer() {
     // Generate configs first
     let cfg_path = "configs/node1_config.json";
@@ -144,7 +144,7 @@ async fn test_block_sequencer() {
     let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
     let (block_maker_tx, block_maker_rx) = make_channel(_chan_depth);
     let (control_command_tx, control_command_rx) = make_channel(_chan_depth);
-    let (qc_tx, qc_rx) = make_channel(_chan_depth);
+    let (qc_tx, qc_rx) = unbounded_channel();
     let (block_broadcaster_tx, mut block_broadcaster_rx) = make_channel(_chan_depth);
     let (client_reply_tx, mut client_reply_rx) = make_channel(_chan_depth);
 
@@ -233,7 +233,7 @@ async fn test_block_sequencer() {
 }
 
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 32)]
 async fn test_block_broadcaster() {
     // Generate configs first
     let cfg_path = "configs/node1_config.json";
@@ -265,7 +265,7 @@ async fn test_block_broadcaster() {
     let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
     let (block_maker_tx, block_maker_rx) = make_channel(_chan_depth);
     let (control_command_tx, control_command_rx) = make_channel(_chan_depth);
-    let (qc_tx, qc_rx) = make_channel(_chan_depth);
+    let (qc_tx, qc_rx) = unbounded_channel();
     let (block_broadcaster_tx, block_broadcaster_rx) = make_channel(_chan_depth);
     let (other_block_tx, other_block_rx) = make_channel(_chan_depth);
     let (client_reply_tx, mut client_reply_rx) = make_channel(_chan_depth);
@@ -381,7 +381,7 @@ async fn test_block_broadcaster() {
     std::fs::remove_dir_all(&storage_path).unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 32)]
 async fn test_staging() {
     // Generate configs first
     let cfg_path = "configs/node1_config.json";
@@ -414,7 +414,7 @@ async fn test_staging() {
     let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
     let (block_maker_tx, block_maker_rx) = make_channel(_chan_depth);
     let (control_command_tx, control_command_rx) = make_channel(_chan_depth);
-    let (qc_tx, qc_rx) = make_channel(_chan_depth);
+    let (qc_tx, qc_rx) = unbounded_channel();
     let (block_broadcaster_tx, block_broadcaster_rx) = make_channel(_chan_depth);
     let (other_block_tx, other_block_rx) = make_channel(_chan_depth);
     let (client_reply_tx, mut client_reply_rx) = make_channel(_chan_depth);
@@ -506,6 +506,7 @@ async fn test_staging() {
         match cmd {
             crate::consensus_v2::app::AppCommand::CrashCommit(committed_blocks) => {
                 for block in committed_blocks {
+                    // println!("Block: {}", block.block.n);
                     if block.block.n != last_block + 1 {
                         panic!("Monotonicity broken!");
                     }
@@ -530,8 +531,12 @@ async fn test_staging() {
                 }
             },
 
+            crate::consensus_v2::app::AppCommand::ByzCommit(committed_blocks) => {
+                // println!("Byz commit: {:?}", committed_blocks.iter().map(|x| x.block.n).collect::<Vec<_>>());
+            },
+
             _ => {
-                // TODO: Log byz commit
+
             }
         }
     }

@@ -4,7 +4,7 @@ use async_recursion::async_recursion;
 use futures::future::try_join_all;
 use log::{debug, error, warn};
 use prost::Message;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
 use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{CachedBlock, CryptoServiceConnector}, proto::{consensus::{proto_block::Sig, ProtoNameWithSignature, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, execution::ProtoTransactionResult, rpc::ProtoPayload}, rpc::{client::PinnedClient, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck}};
 
@@ -62,7 +62,7 @@ pub struct Staging {
     block_broadcaster_command_tx: Sender<BlockBroadcasterCommand>,
     block_sequencer_command_tx: Sender<BlockSequencerControlCommand>,
     fork_receiver_command_tx: Sender<ForkReceiverCommand>,
-    qc_tx: Sender<ProtoQuorumCertificate>,
+    qc_tx: UnboundedSender<ProtoQuorumCertificate>,
 }
 
 
@@ -75,7 +75,7 @@ impl Staging {
         block_broadcaster_command_tx: Sender<BlockBroadcasterCommand>,
         block_sequencer_command_tx: Sender<BlockSequencerControlCommand>,
         fork_receiver_command_tx: Sender<ForkReceiverCommand>,
-        qc_tx: Sender<ProtoQuorumCertificate>,
+        qc_tx: UnboundedSender<ProtoQuorumCertificate>,
     ) -> Self {
         let _config = config.get();
         let _chan_depth = _config.rpc_config.channel_depth as usize;
@@ -162,7 +162,6 @@ impl Staging {
                 self.process_view_change_message(vc_msg, sender).await?;
             }
         }
-
         Ok(())
     }
 
@@ -308,7 +307,7 @@ impl Staging {
 
     #[async_recursion]
     async fn process_block_as_leader(&mut self, block: CachedBlock, storage_ack: oneshot::Receiver<StorageAck>, ae_stats: AppendEntriesStats) -> Result<(), ()> {
-        if block.block.view < self.view {
+        if ae_stats.view < self.view {
             // Do not accept anything from a lower view.
             return Ok(());
         } else if block.block.view == self.view {
@@ -319,7 +318,7 @@ impl Staging {
             self.view_is_stable = block.block.view_is_stable;
             // Invariant <ViewLock>: Within the same view, the log must be append-only.
             if !self.check_continuity(&block) {
-                println!("Continuity broken");
+                warn!("Continuity broken");
                 return Ok(());
             }
         } else {
@@ -329,10 +328,10 @@ impl Staging {
             
 
             // Jump to the new view
-            self.view = block.block.view;
+            self.view = ae_stats.view;
 
             self.view_is_stable = block.block.view_is_stable;
-            self.config_num = block.block.config_num;
+            self.config_num = ae_stats.config_num;
 
             // Notify upstream stages of view change
             self.block_sequencer_command_tx.send(BlockSequencerControlCommand::NewUnstableView(self.view, self.config_num)).await.unwrap();
@@ -377,10 +376,10 @@ impl Staging {
     /// This has a lot of similarities with process_block_as_leader.
     #[async_recursion]
     async fn process_block_as_follower(&mut self, block: CachedBlock, storage_ack: oneshot::Receiver<StorageAck>, ae_stats: AppendEntriesStats) -> Result<(), ()> {
-        if block.block.view < self.view {
+        if ae_stats.view < self.view {
             // Do not accept anything from a lower view.
             return Ok(());
-        } else if block.block.view == self.view {
+        } else if ae_stats.view == self.view {
             if !self.view_is_stable && block.block.view_is_stable {
                 // Notify upstream stages of view stabilization
                 self.block_sequencer_command_tx.send(BlockSequencerControlCommand::ViewStabilised(self.view, self.config_num)).await.unwrap();
@@ -388,7 +387,7 @@ impl Staging {
             self.view_is_stable = block.block.view_is_stable;
             // Invariant <ViewLock>: Within the same view, the log must be append-only.
             if !self.check_continuity(&block) {
-                println!("Continuity broken");
+                warn!("Continuity broken");
                 return Ok(());
             }
         } else {
@@ -398,7 +397,7 @@ impl Staging {
             
 
             // Jump to the new view
-            self.view = block.block.view;
+            self.view = ae_stats.view;
 
             self.view_is_stable = block.block.view_is_stable;
             self.config_num = block.block.config_num;
@@ -585,8 +584,14 @@ impl Staging {
         }
 
         for qc in qcs.drain(..) {
-            let _ = self.qc_tx.send(qc.clone()).await;
 
+            // This send needs to be non-blocking.
+            // Hence can't avoid using an unbounded channel.
+            // Otherwise: block_broadcaster_tx -> staging_tx -> qc_tx forms a cycle since BlockSequencer consumes from qc_rx.
+            // Had there been another thread consuming qc_rx, this would not have been a problem since there will always be an enabled consumer.
+            // But since this thread will block on block_broadcaster_tx.send, it will not be able to consume from qc_rx.
+            // Once the queues are saturated, the system will deadlock.
+            let _ = self.qc_tx.send(qc.clone());
             self.maybe_byzantine_commit(qc).await?;
         }
 

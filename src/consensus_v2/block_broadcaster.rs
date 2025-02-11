@@ -63,9 +63,10 @@ impl BlockBroadcaster {
         let mut block_broadcaster = block_broadcaster.lock().await;
 
         loop {
-            if let Err(_) = block_broadcaster.worker().await {
+            if let Err(_e) = block_broadcaster.worker().await {
                 break;
             }
+
         }
     }
 
@@ -78,22 +79,20 @@ impl BlockBroadcaster {
         // Invariant: Anything that outputs from Block broadcaster is stored on disk.
 
         // Logserver and staging will take care of hash-chaining logic and everything else.
-
         tokio::select! {
             block = self.my_block_rx.recv() => {
                 if block.is_none() {
-                    return Err(Error::new(ErrorKind::BrokenPipe, "channel closed"));
+                    return Err(Error::new(ErrorKind::BrokenPipe, "my_block_rx channel closed"));
                 }
                 let block = block.unwrap();
                 debug!("Expecting {}", block.0);
                 let block = block.1.await;
                 self.process_my_block(block.unwrap()).await?;
-
             },
 
             block_vec = self.other_block_rx.recv() => {
                 if block_vec.is_none() {
-                    return Err(Error::new(ErrorKind::BrokenPipe, "channel closed"));
+                    return Err(Error::new(ErrorKind::BrokenPipe, "other_block_rx channel closed"));
                 }
                 let blocks = block_vec.unwrap();
                 self.process_other_block(blocks).await?;
@@ -101,7 +100,7 @@ impl BlockBroadcaster {
 
             cmd = self.control_command_rx.recv() => {
                 if cmd.is_none() {
-                    return Err(Error::new(ErrorKind::BrokenPipe, "channel closed"));
+                    return Err(Error::new(ErrorKind::BrokenPipe, "control_command_rx channel closed"));
                 }
                 self.handle_control_command(cmd.unwrap()).await?;
             }
@@ -136,7 +135,6 @@ impl BlockBroadcaster {
         // Store
         let storage_ack = self.storage.put_block(block).await;
     
-    
         // Forward
         // Unfortunate cloning.
         self.logserver_tx.send(block.clone()).await.unwrap();
@@ -156,8 +154,7 @@ impl BlockBroadcaster {
             sender: self.config.get().net_config.name.clone(),
             ci: self.ci,
         }).await?;
-
-
+        
         // Forward to other nodes. Involves copies and serialization so done last.
 
         let names = self.get_everyone_except_me();
