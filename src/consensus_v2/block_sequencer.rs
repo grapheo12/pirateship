@@ -5,7 +5,7 @@ use tokio::sync::{oneshot, Mutex};
 use crate::crypto::FutureHash;
 use crate::utils::channel::{Sender, Receiver};
 
-use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{hash, CachedBlock, CryptoServiceConnector, HashType}, proto::consensus::{proto_block::Tx, DefferedSignature, ProtoBlock, ProtoForkValidation, ProtoQuorumCertificate, ProtoTransactionList}};
+use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{hash, CachedBlock, CryptoServiceConnector, HashType}, proto::consensus::{DefferedSignature, ProtoBlock, ProtoForkValidation, ProtoQuorumCertificate, ProtoTransactionList}};
 
 use super::batch_proposal::{MsgAckChanWithTag, RawBatch};
 
@@ -153,9 +153,7 @@ impl BlockSequencer {
             fork_validation,
             view_is_stable: self.view_is_stable,
             config_num: self.config_num,
-            tx: Some(crate::proto::consensus::proto_block::Tx::TxList(ProtoTransactionList {
-                tx_list: batch,
-            })),
+            tx_list: batch,
             sig: Some(crate::proto::consensus::proto_block::Sig::NoSig(DefferedSignature{})),
         };
 

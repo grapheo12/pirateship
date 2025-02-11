@@ -194,14 +194,7 @@ async fn test_block_sequencer() {
         }
         last_block += 1;
 
-        let block_sz = match block.block.tx.unwrap() {
-            crate::proto::consensus::proto_block::Tx::TxList(proto_transaction_list) => {
-                proto_transaction_list.tx_list.len()
-            },
-            crate::proto::consensus::proto_block::Tx::TxListHash(vec) => {
-                vec.len()
-            },
-        };
+        let block_sz = block.block.tx_list.len();
 
         if block_sz < config.get().consensus_config.max_backlog_batch_size {
             underfull_batches += 1;
@@ -349,14 +342,7 @@ async fn test_block_broadcaster() {
         }
         last_block += 1;
 
-        let block_sz = match block.block.tx.unwrap() {
-            crate::proto::consensus::proto_block::Tx::TxList(proto_transaction_list) => {
-                proto_transaction_list.tx_list.len()
-            },
-            crate::proto::consensus::proto_block::Tx::TxListHash(vec) => {
-                vec.len()
-            },
-        };
+        let block_sz = block.block.tx_list.len();
 
         if block_sz < config.get().consensus_config.max_backlog_batch_size {
             underfull_batches += 1;
@@ -525,14 +511,7 @@ async fn test_staging() {
                     }
                     last_block += 1;
             
-                    let block_sz = match block.block.tx.unwrap() {
-                        crate::proto::consensus::proto_block::Tx::TxList(proto_transaction_list) => {
-                            proto_transaction_list.tx_list.len()
-                        },
-                        crate::proto::consensus::proto_block::Tx::TxListHash(vec) => {
-                            vec.len()
-                        },
-                    };
+                    let block_sz = block.block.tx_list.len();
             
                     if block_sz < config.get().consensus_config.max_backlog_batch_size {
                         underfull_batches += 1;

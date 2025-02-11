@@ -5,6 +5,7 @@ mod staging;
 pub mod fork_receiver;
 mod timer;
 pub mod app;
+pub mod engines;
 
 #[cfg(test)]
 mod tests;

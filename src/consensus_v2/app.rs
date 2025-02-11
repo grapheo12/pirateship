@@ -9,6 +9,7 @@ use crate::{config::AtomicConfig, crypto::{CachedBlock, HashType, DIGEST_LENGTH}
 
 use super::{staging::ClientReplyCommand, timer::ResettableTimer};
 
+
 pub enum AppCommand {
     NewRequestBatch(u64 /* length of new batch of request */, HashType /* hash of the last block */),
     CrashCommit(Vec<CachedBlock> /* all blocks from old_ci + 1 to new_ci */),
@@ -17,7 +18,7 @@ pub enum AppCommand {
 }
 
 pub trait AppEngine {
-    type State: std::fmt::Display + std::fmt::Debug + Clone + Serialize + DeserializeOwned;
+    type State: std::fmt::Debug + Clone + Serialize + DeserializeOwned;
 
     fn new(config: AtomicConfig) -> Self;
     fn handle_crash_commit(&mut self, blocks: Vec<CachedBlock>) -> Vec<Vec<ProtoTransactionResult>>;
