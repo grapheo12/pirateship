@@ -1,13 +1,13 @@
 use std::{pin, sync::{atomic::AtomicUsize, Arc}, time::{Duration, Instant}};
 use core_affinity::CoreId;
 use tokio::{sync::{mpsc::unbounded_channel, Mutex}, task::JoinSet};
-use crate::{consensus_v2::{app::Application, block_broadcaster::BlockBroadcaster, engines::null_app::NullApp, staging::Staging}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
+use crate::{consensus_v2::{app::{self, Application}, block_broadcaster::BlockBroadcaster, engines::null_app::NullApp, staging::Staging}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
 use itertools::Itertools;
 use crate::{config::{AtomicConfig, Config}, consensus_v2::{batch_proposal::BatchProposer, block_sequencer::BlockSequencer}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}};
 
 use super::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag};
 
-const TEST_CRYPTO_NUM_TASKS: usize = 8;
+const TEST_CRYPTO_NUM_TASKS: usize = 4;
 const MAX_TXS: usize = 5_000_000;
 const MAX_CLIENTS: usize = 10;
 const TEST_RATE: f64 = 300_000.0;
@@ -15,6 +15,26 @@ const PAYLOAD_SIZE: usize = 512;
 
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc; 
+
+macro_rules! pinned_runtime {
+    ($fn_name: expr) => {
+        let num_cores = num_cpus::get();
+        let id = Arc::new(std::sync::Mutex::new(AtomicUsize::new(rand::random())));
+
+        // Pin thread to core
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(num_cores)
+            .enable_all()
+            .on_thread_start(move || {
+                let id = id.lock().unwrap();
+                let _ = core_affinity::set_for_current(CoreId{ id: id.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % num_cores});
+            })
+            .build()
+            .unwrap();
+
+        rt.block_on($fn_name());
+    };
+}
 
 async fn load(batch_proposer_tx: Sender<TxWithAckChanTag>, req_per_sec: f64) {
     let sleep_time = Duration::from_secs_f64(1.0f64 / req_per_sec);
@@ -71,8 +91,8 @@ async fn test_batch_proposal() {
 
     let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
     let (block_maker_tx, mut block_maker_rx) = make_channel(_chan_depth);
-
-    let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx)));
+    let (app_tx, mut app_rx) = make_channel(_chan_depth);
+    let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, app_tx)));
     // let block_maker = Arc::new(Mutex::new(BlockMaker::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto)));
 
     let mut handles = JoinSet::new();
@@ -80,6 +100,12 @@ async fn test_batch_proposal() {
     handles.spawn(async move {
         BatchProposer::run(batch_proposer).await;
         println!("Batch proposer quits");
+    });
+
+    handles.spawn(async move {
+        while let Some(_) = app_rx.recv().await {
+            // Sink
+        }
     });
 
 
@@ -124,9 +150,12 @@ async fn test_batch_proposal() {
     handles.shutdown().await;
 }
 
+#[test]
+fn test_block_sequencer() {
+    pinned_runtime!(_test_block_sequencer);
+}
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-async fn test_block_sequencer() {
+async fn _test_block_sequencer() {
     // Generate configs first
     let cfg_path = "configs/node1_config.json";
     let cfg_contents = std::fs::read_to_string(cfg_path).expect("Invalid file path");
@@ -148,10 +177,10 @@ async fn test_block_sequencer() {
     let (qc_tx, qc_rx) = unbounded_channel();
     let (block_broadcaster_tx, mut block_broadcaster_rx) = make_channel(_chan_depth);
     let (client_reply_tx, mut client_reply_rx) = make_channel(_chan_depth);
-
+    let (app_tx, mut app_rx) = make_channel(_chan_depth);
     let block_maker_crypto = crypto.get_connector();
 
-    let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx)));
+    let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, app_tx)));
     let block_maker = Arc::new(Mutex::new(BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto)));
 
     let mut handles = JoinSet::new();
@@ -163,6 +192,12 @@ async fn test_block_sequencer() {
 
     handles.spawn(async move {
         while let Some(_) = client_reply_rx.recv().await {
+            // Sink
+        }
+    });
+
+    handles.spawn(async move {
+        while let Some(_) = app_rx.recv().await {
             // Sink
         }
     });
@@ -234,26 +269,6 @@ async fn test_block_sequencer() {
 }
 
 
-
-macro_rules! pinned_runtime {
-    ($fn_name: expr) => {
-        let num_cores = 18; // num_cpus::get();
-        let id = Arc::new(std::sync::Mutex::new(AtomicUsize::new(rand::random())));
-
-        // Pin thread to core
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(num_cores)
-            .enable_all()
-            .on_thread_start(move || {
-                let id = id.lock().unwrap();
-                let _ = core_affinity::set_for_current(CoreId{ id: id.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % num_cores});
-            })
-            .build()
-            .unwrap();
-
-        rt.block_on($fn_name());
-    };
-}
 #[test]
 fn test_block_broadcaster() {
     pinned_runtime!(_test_block_broadcaster);
@@ -298,12 +313,13 @@ async fn _test_block_broadcaster() {
     let (staging_tx, mut staging_rx) = make_channel(_chan_depth);
     let (logserver_tx, mut logserver_rx) = make_channel(_chan_depth);
     let (fork_receiver_command_tx, mut fork_receiver_command_rx) = make_channel(_chan_depth);
+    let (app_tx, mut app_rx) = make_channel(_chan_depth);
 
     let block_maker_crypto = crypto.get_connector();
     let block_broadcaster_crypto = crypto.get_connector();
     let block_broadcaster_storage = storage.get_connector(block_broadcaster_crypto);
     
-    let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx)));
+    let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, app_tx)));
     let block_maker = Arc::new(Mutex::new(BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto)));
     let block_broadcaster = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx)));
     
@@ -332,6 +348,12 @@ async fn _test_block_broadcaster() {
 
     handles.spawn(async move {
         while let Some(_) = fork_receiver_command_rx.recv().await {
+            // Sink
+        }
+    });
+
+    handles.spawn(async move {
+        while let Some(_) = app_rx.recv().await {
             // Sink
         }
     });
@@ -365,6 +387,7 @@ async fn _test_block_broadcaster() {
         if block.block.n != last_block + 1 {
             panic!("Monotonicity broken!");
         }
+
         last_block += 1;
 
         let block_sz = block.block.tx_list.len();
@@ -460,7 +483,7 @@ async fn _test_staging() {
     let block_broadcaster_storage = storage.get_connector(block_broadcaster_crypto);
     let staging_crypto = crypto.get_connector();
     
-    let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx)));
+    let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, app_tx.clone())));
     let block_maker = Arc::new(Mutex::new(BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto)));
     let block_broadcaster = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx.clone())));
     let staging = Arc::new(Mutex::new(Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, view_change_rx, client_reply_command_tx, app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx)));
@@ -498,7 +521,6 @@ async fn _test_staging() {
             // Sink
         }
     });
-
 
 
     handles.spawn(async move {
@@ -655,7 +677,7 @@ async fn _test_null_app() {
     let block_broadcaster_storage = storage.get_connector(block_broadcaster_crypto);
     let staging_crypto = crypto.get_connector();
 
-    let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx)));
+    let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, app_tx.clone())));
     let block_maker = Arc::new(Mutex::new(BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto)));
     let block_broadcaster = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx.clone())));
     let staging = Arc::new(Mutex::new(Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, view_change_rx, client_reply_command_tx.clone(), app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx)));
@@ -756,7 +778,7 @@ async fn _test_null_app() {
             },
             crate::consensus_v2::staging::ClientReplyCommand::ByzCommitAck(committed_block_results) => {
                 total_byz_commit += committed_block_results.iter()
-                    .map(|(n, results)| results.len())
+                    .map(|(_n, results)| results.len())
                     .sum::<usize>();
             },
         }

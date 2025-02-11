@@ -1,4 +1,4 @@
-use std::{io::{BufReader, Error, ErrorKind}, sync::atomic::fence};
+use std::{io::{BufReader, Error, ErrorKind}, ops::Deref, pin::Pin, sync::{atomic::fence, Arc}};
 
 use ed25519_dalek::SIGNATURE_LENGTH;
 use futures::SinkExt;
@@ -14,11 +14,37 @@ use crate::{consensus_v2::fork_receiver::{AppendEntriesStats, MultipartFork}, cr
 use super::{hash, AtomicKeyStore, HashType, KeyStore};
 
 #[derive(Clone, Debug)]
-pub struct CachedBlock {
+pub struct __CachedBlock {
     pub block: ProtoBlock,
     pub block_ser: Vec<u8>,
     pub block_hash: HashType,
 }
+
+#[derive(Clone, Debug)]
+pub struct CachedBlock(pub Arc<Pin<Box<__CachedBlock>>>);
+
+impl Deref for CachedBlock {
+    type Target = __CachedBlock;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl CachedBlock {
+    pub fn new(block: ProtoBlock, block_ser: Vec<u8>, block_hash: HashType) -> Self {
+        Self(Arc::new(Box::pin(
+            __CachedBlock {
+                block,
+                block_ser,
+                block_hash,
+            }
+        )))
+    }
+}
+
+// But no DerefMut, I don't want to allow mutation of the inner block.
+
 
 pub enum FutureHash {
     None,
@@ -136,11 +162,7 @@ impl CryptoService {
 
                     let _ = hash_tx.send(hsh.clone());
                     let _ = hash_tx2.send(hsh.clone());
-                    let _ = block_tx.send(CachedBlock {
-                        block,
-                        block_ser: buf,
-                        block_hash: hsh,
-                    });
+                    let _ = block_tx.send(CachedBlock::new(block, buf, hsh));
                 },
                 CryptoServiceCommand::CheckBlockSer(hsh, ser_rx, block_tx) => {
                     let res = ser_rx.await.unwrap();
@@ -159,11 +181,7 @@ impl CryptoService {
                     let block = deserialize_proto_block(block_ser.as_ref());
                     match block {
                         Ok(block) => {
-                            block_tx.send(Ok(CachedBlock {
-                                block,
-                                block_ser,
-                                block_hash: hsh,
-                            })).unwrap();
+                            block_tx.send(Ok(CachedBlock::new(block, block_ser, hsh))).unwrap();
                         },
                         Err(_) => {
                             block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Decode error"))).unwrap();
@@ -179,11 +197,7 @@ impl CryptoService {
                     // TODO: If view_is_stable = False, verify ProtoForkValidation
                     match block {
                         Ok(block) => {
-                            block_tx.send(Ok(CachedBlock {
-                                block,
-                                block_ser,
-                                block_hash: hsh,
-                            })).unwrap();
+                            block_tx.send(Ok(CachedBlock::new(block, block_ser, hsh))).unwrap();
                         },
                         Err(_) => {
                             block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Decode error"))).unwrap();

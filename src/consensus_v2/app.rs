@@ -62,7 +62,7 @@ impl LogStats {
     }
 
     fn print(&self) {
-        info!("fork.last = {}, fork.last_qc = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, pending_qcs = {} num_crash_committed_txs = {}, num_byz_committed_txs = {}, fork.last_hash = {}, total_client_request = {}, view = {}, view_is_stable = {}, i_am_leader: {}",
+        println!("fork.last = {}, fork.last_qc = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, pending_qcs = {} num_crash_committed_txs = {}, num_byz_committed_txs = {}, fork.last_hash = {}, total_client_request = {}, view = {}, view_is_stable = {}, i_am_leader: {}",
             self.last_n,
             self.last_qc,
             self.ci,
@@ -192,19 +192,36 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
                 self.stats.last_hash = hash;
             }
             AppCommand::CrashCommit(blocks) => {
-                let block_ns = blocks.iter().map(|block| block.block.n).collect::<Vec<_>>();
+                let mut new_ci = self.stats.ci;
+                let block_ns = blocks.iter().map(|block| {
+                    if new_ci < block.block.n {
+                        new_ci = block.block.n;
+                    }
+                    block.block.n
+                }).collect::<Vec<_>>();
                 let results = self.engine.handle_crash_commit(blocks);
-                self.stats.total_crash_committed_txs += results.len() as u64;
+                self.stats.total_crash_committed_txs += results.iter().map(|e| e.len() as u64).sum::<u64>();
+                self.stats.ci = new_ci;
 
                 assert_eq!(block_ns.len(), results.len());
 
+                // self.log.extend(blocks); TODO: Add to log
+
                 let result_map = block_ns.into_iter().zip(results.into_iter()).collect();
                 self.client_reply_tx.send(ClientReplyCommand::CrashCommitAck(result_map)).await.unwrap();
+
             },
             AppCommand::ByzCommit(blocks) => {
-                let block_ns = blocks.iter().map(|block| block.block.n).collect::<Vec<_>>();
+                let mut new_bci = self.stats.bci;
+                let block_ns = blocks.iter().map(|block| {
+                    if new_bci < block.block.n {
+                        new_bci = block.block.n;
+                    }
+                    block.block.n
+                }).collect::<Vec<_>>();
                 let results = self.engine.handle_byz_commit(blocks);
-                self.stats.total_byz_committed_txs += results.len() as u64;
+                self.stats.total_byz_committed_txs += results.iter().map(|e| e.len() as u64).sum::<u64>();
+                self.stats.bci = new_bci;
 
                 assert_eq!(block_ns.len(), results.len());
 

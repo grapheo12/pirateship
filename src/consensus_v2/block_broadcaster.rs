@@ -137,6 +137,7 @@ impl BlockBroadcaster {
     
         // Forward
         // Unfortunate cloning.
+        // But CachedBlock is Arc<_> so this is just a ref count increment.
         self.logserver_tx.send(block.clone()).await.unwrap();
 
         debug!("Sending {}", block.block.n);
@@ -165,7 +166,7 @@ impl BlockBroadcaster {
                     view: block.block.view,
                     view_is_stable: block.block.view_is_stable,
                     config_num: block.block.config_num,
-                    serialized_body: block.block_ser 
+                    serialized_body: block.block_ser.clone(), 
                 }],
             }),
             commit_index: self.ci,

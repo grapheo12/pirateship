@@ -7,6 +7,8 @@ use tokio::sync::Mutex;
 
 use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, proto::execution::ProtoTransaction, rpc::server::MsgAckChan};
 
+use super::app::AppCommand;
+
 pub type RawBatch = Vec<ProtoTransaction>;
 
 pub type MsgAckChanWithTag = (MsgAckChan, u64);
@@ -18,6 +20,8 @@ pub struct BatchProposer {
     batch_proposer_rx: Receiver<TxWithAckChanTag>,
     block_maker_tx: Sender<(RawBatch, Vec<MsgAckChanWithTag>)>,
 
+    app_tx: Sender<AppCommand>,
+
     current_raw_batch: RawBatch,
     current_reply_vec: Vec<MsgAckChanWithTag>,
     batch_timer: Arc<Pin<Box<ResettableTimer>>>,
@@ -28,6 +32,7 @@ impl BatchProposer {
         config: AtomicConfig,
         batch_proposer_rx: Receiver<TxWithAckChanTag>,
         block_maker_tx: Sender<(RawBatch, Vec<MsgAckChanWithTag>)>,
+        app_tx: Sender<AppCommand>,
     ) -> Self {
         let batch_timer = ResettableTimer::new(
             Duration::from_millis(config.get().consensus_config.batch_max_delay_ms)
@@ -41,6 +46,7 @@ impl BatchProposer {
             current_raw_batch: RawBatch::with_capacity(max_batch_size),
             batch_timer,
             current_reply_vec: Vec::with_capacity(max_batch_size),
+            app_tx,
         }
     }
 
