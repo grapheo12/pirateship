@@ -209,7 +209,7 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
                 assert_eq!(block_ns.len(), results.len());
 
                 let result_map = block_ns.into_iter().zip(results.into_iter()).collect();
-                self.client_reply_tx.send(ClientReplyCommand::CrashCommitAck(result_map)).await.unwrap();
+                self.client_reply_tx.send(ClientReplyCommand::ByzCommitAck(result_map)).await.unwrap();
             },
             AppCommand::Rollback(new_last_block) => {
                 let rolled_back_blocks = self.log.drain((new_last_block + 1) as usize..).collect();

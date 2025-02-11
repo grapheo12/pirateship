@@ -1,6 +1,7 @@
-use std::io::{BufReader, Error, ErrorKind};
+use std::{io::{BufReader, Error, ErrorKind}, sync::atomic::fence};
 
 use ed25519_dalek::SIGNATURE_LENGTH;
+use futures::SinkExt;
 use log::trace;
 use nix::libc::PARENB;
 use prost::Message;
@@ -108,7 +109,9 @@ impl CryptoService {
                     let mut buf = serialize_proto_block_nascent(&proto_block).unwrap();
                     let mut hasher = Sha256::new();
                     hasher.update(&buf[DIGEST_LENGTH+SIGNATURE_LENGTH..]);
-
+                    // Memory fence to prevent reordering.
+                    fence(std::sync::atomic::Ordering::SeqCst);
+                    
                     let parent = match parent_hash_rx {
                         FutureHash::None => vec![0u8; DIGEST_LENGTH],
                         FutureHash::Immediate(val) => val,
@@ -287,13 +290,14 @@ impl CryptoServiceConnector {
     }
 
     pub async fn prepare_fork(&mut self, mut part: Vec<HalfSerializedBlock>, remaining_parts: usize, ae_stats: AppendEntriesStats) -> MultipartFork {
-        
+        let mut fork_future = Vec::with_capacity(part.len());
+        for e in part.drain(..) {
+            let (tx, rx) = oneshot::channel();
+            self.dispatch(CryptoServiceCommand::VerifyBlockSer(e.serialized_body.clone(), tx)).await;
+            fork_future.push(Some(rx));
+        }
         MultipartFork {
-            fork_future: part.drain(..).map(|e| {
-                let (tx, rx) = oneshot::channel();
-                self.dispatch(CryptoServiceCommand::VerifyBlockSer(e.serialized_body, tx));
-                Some(rx)
-            }).collect(),
+            fork_future,
             remaining_parts,
             ae_stats,
         }

@@ -1,15 +1,16 @@
-use std::{sync::Arc, time::{Duration, Instant}};
+use std::{pin, sync::{atomic::AtomicUsize, Arc}, time::{Duration, Instant}};
+use core_affinity::CoreId;
 use tokio::{sync::{mpsc::unbounded_channel, Mutex}, task::JoinSet};
-use crate::{consensus_v2::{block_broadcaster::BlockBroadcaster, staging::Staging}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
-
+use crate::{consensus_v2::{app::Application, block_broadcaster::BlockBroadcaster, engines::null_app::NullApp, staging::Staging}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
+use itertools::Itertools;
 use crate::{config::{AtomicConfig, Config}, consensus_v2::{batch_proposal::BatchProposer, block_sequencer::BlockSequencer}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}};
 
 use super::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag};
 
-const TEST_CRYPTO_NUM_TASKS: usize = 32;
+const TEST_CRYPTO_NUM_TASKS: usize = 8;
 const MAX_TXS: usize = 5_000_000;
 const MAX_CLIENTS: usize = 10;
-const TEST_RATE: f64 = 500_000.0;
+const TEST_RATE: f64 = 300_000.0;
 const PAYLOAD_SIZE: usize = 512;
 
 #[global_allocator]
@@ -233,8 +234,32 @@ async fn test_block_sequencer() {
 }
 
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-async fn test_block_broadcaster() {
+
+macro_rules! pinned_runtime {
+    ($fn_name: expr) => {
+        let num_cores = 18; // num_cpus::get();
+        let id = Arc::new(std::sync::Mutex::new(AtomicUsize::new(rand::random())));
+
+        // Pin thread to core
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(num_cores)
+            .enable_all()
+            .on_thread_start(move || {
+                let id = id.lock().unwrap();
+                let _ = core_affinity::set_for_current(CoreId{ id: id.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % num_cores});
+            })
+            .build()
+            .unwrap();
+
+        rt.block_on($fn_name());
+    };
+}
+#[test]
+fn test_block_broadcaster() {
+    pinned_runtime!(_test_block_broadcaster);
+}
+
+async fn _test_block_broadcaster() {
     // Generate configs first
     let cfg_path = "configs/node1_config.json";
     let cfg_contents = std::fs::read_to_string(cfg_path).expect("Invalid file path");
@@ -381,8 +406,11 @@ async fn test_block_broadcaster() {
     std::fs::remove_dir_all(&storage_path).unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-async fn test_staging() {
+#[test]
+fn test_staging() {
+    pinned_runtime!(_test_staging);
+}
+async fn _test_staging() {
     // Generate configs first
     let cfg_path = "configs/node1_config.json";
     let cfg_contents = std::fs::read_to_string(cfg_path).expect("Invalid file path");
@@ -561,6 +589,188 @@ async fn test_staging() {
 
     if signed_blocks < expected_signed_blocks - 15 || signed_blocks > expected_signed_blocks + 15 {
         panic!("Too much or too few signed blocks");
+    }
+
+    println!("Errors appearing after this are inconsequential");
+    handles.shutdown().await;
+
+    std::fs::remove_dir_all(&storage_path).unwrap();
+}
+
+
+#[test]
+fn test_null_app() {
+    pinned_runtime!(_test_null_app);
+}
+
+
+async fn _test_null_app() {
+    // Generate configs first
+    let cfg_path = "configs/node1_config.json";
+    let cfg_contents = std::fs::read_to_string(cfg_path).expect("Invalid file path");
+
+    let config = Config::deserialize(&cfg_contents);
+    let _chan_depth = config.rpc_config.channel_depth as usize;
+    let key_store = KeyStore::new(&config.rpc_config.allowed_keylist_path, &config.rpc_config.signing_priv_key_path);
+
+    let config = AtomicConfig::new(config);
+    let keystore = AtomicKeyStore::new(key_store);
+    let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone());
+    crypto.run();
+
+    let client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
+    let staging_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
+
+    let storage_config = &config.get().consensus_config.log_storage_config;
+    let (mut storage, storage_path) = match storage_config {
+        rocksdb_config @ crate::config::StorageConfig::RocksDB(_inner) => {
+            let _db = RocksDBStorageEngine::new(rocksdb_config.clone());
+            (StorageService::new(_db, _chan_depth), _inner.db_path.clone())
+        },
+        crate::config::StorageConfig::FileStorage(_) => {
+            panic!("File storage not supported!");
+        },
+    };
+
+
+    let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
+    let (block_maker_tx, block_maker_rx) = make_channel(_chan_depth);
+    let (control_command_tx, control_command_rx) = make_channel(_chan_depth);
+    let (qc_tx, qc_rx) = unbounded_channel();
+    let (block_broadcaster_tx, block_broadcaster_rx) = make_channel(_chan_depth);
+    let (other_block_tx, other_block_rx) = make_channel(_chan_depth);
+    let (client_reply_tx, mut client_reply_rx) = make_channel(_chan_depth);
+    let (client_reply_command_tx, mut client_reply_command_rx) = make_channel(_chan_depth);
+    let (broadcaster_control_command_tx, broadcaster_control_command_rx) = make_channel(_chan_depth);
+    let (staging_tx, staging_rx) = make_channel(_chan_depth);
+    let (logserver_tx, mut logserver_rx) = make_channel(_chan_depth);
+    let (vote_tx, vote_rx) = make_channel(_chan_depth);
+    let (view_change_tx, view_change_rx) = make_channel(_chan_depth);
+    let (app_tx, mut app_rx) = make_channel(_chan_depth);
+    let (fork_receiver_command_tx, mut fork_receiver_command_rx) = make_channel(_chan_depth);
+    let (unlogged_tx, unlogged_rx) = make_channel(_chan_depth);
+
+    let block_maker_crypto = crypto.get_connector();
+    let block_broadcaster_crypto = crypto.get_connector();
+    let block_broadcaster_storage = storage.get_connector(block_broadcaster_crypto);
+    let staging_crypto = crypto.get_connector();
+
+    let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx)));
+    let block_maker = Arc::new(Mutex::new(BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto)));
+    let block_broadcaster = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx.clone())));
+    let staging = Arc::new(Mutex::new(Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, view_change_rx, client_reply_command_tx.clone(), app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx)));
+    let app = Arc::new(Mutex::new(Application::<NullApp>::new(config.clone(), app_rx, unlogged_rx, client_reply_command_tx)));
+    
+    let mut handles = JoinSet::new();
+
+    handles.spawn(async move {
+        storage.run().await;
+    });
+
+    handles.spawn(async move {
+        BatchProposer::run(batch_proposer).await;
+        println!("Batch proposer quits");
+    });
+
+    handles.spawn(async move {
+        while let Some(_) = client_reply_rx.recv().await {
+            // Sink
+        }
+    });
+
+    handles.spawn(async move {
+        while let Some(_) = logserver_rx.recv().await {
+            // Sink
+        }
+    });
+
+    handles.spawn(async move {
+        while let Some(_) = fork_receiver_command_rx.recv().await {
+            // Sink
+        }
+    });
+
+
+
+    handles.spawn(async move {
+        BlockSequencer::run(block_maker).await;
+        println!("Block maker quits");
+    });
+
+    handles.spawn(async move {
+        BlockBroadcaster::run(block_broadcaster).await;
+        println!("Block broadcaster quits");
+    });
+
+    handles.spawn(async move {
+        Staging::run(staging).await;
+        println!("Staging quits");
+    });
+
+    handles.spawn(async move {
+        Application::<NullApp>::run(app).await;
+        println!("Application quits");
+    });
+
+
+    for _ in 0..MAX_CLIENTS {
+        let __tx = batch_proposer_tx.clone();
+        handles.spawn(async move {
+            load(__tx, TEST_RATE).await;
+        });
+    }
+
+    let mut total_txs_output = 0;
+    let mut total_byz_commit = 0;
+    let mut last_block = 0;
+    let mut underfull_batches = 0;
+
+    let start = Instant::now();
+    'main: while let Some(cmd) = client_reply_command_rx.recv().await {
+        match cmd {
+            crate::consensus_v2::staging::ClientReplyCommand::CancelAllRequests => {},
+            crate::consensus_v2::staging::ClientReplyCommand::CrashCommitAck(committed_block_results) => {
+                let mut committed_blocks = committed_block_results.keys().cloned().sorted().collect::<Vec<_>>();
+                
+                for n in committed_blocks.drain(..) {
+                    // println!("Block: {}", block.block.n);
+                    if n != last_block + 1 {
+                        panic!("Monotonicity broken! {} {}", n, last_block);
+                    }
+                    last_block += 1;
+
+                    let block_results = committed_block_results.get(&n).unwrap();
+            
+                    let block_sz = block_results.len();
+            
+                    if block_sz < config.get().consensus_config.max_backlog_batch_size {
+                        underfull_batches += 1;
+                    }
+            
+                    total_txs_output += block_sz;
+            
+                    if total_txs_output >= MAX_CLIENTS * MAX_TXS {
+                        break 'main;
+                    }
+                }
+            },
+            crate::consensus_v2::staging::ClientReplyCommand::ByzCommitAck(committed_block_results) => {
+                total_byz_commit += committed_block_results.iter()
+                    .map(|(n, results)| results.len())
+                    .sum::<usize>();
+            },
+        }
+    }
+    let total_time = start.elapsed().as_secs_f64();
+    let throughput = total_txs_output as f64 / total_time;
+    let byz_throughput = total_byz_commit as f64 / total_time;
+    println!("Crash Throughput: {} req/s", throughput);
+    println!("Byz Throughput: {} req/s", byz_throughput);
+    println!("Total blocks: {}", last_block);
+    println!("Underfull blocks: {}", underfull_batches);
+
+    if underfull_batches > 10 {
+        panic!("Too many underfull batches");
     }
 
     println!("Errors appearing after this are inconsequential");
