@@ -72,9 +72,12 @@ async fn load(batch_proposer_tx: Sender<TxWithAckChanTag>, req_per_sec: f64) {
     println!("Input rate: {} req/s", input_rate);
 }
 
+#[test]
+fn test_batch_proposal() {
+    pinned_runtime!(_test_batch_proposal);
+}
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-async fn test_batch_proposal() {
+async fn _test_batch_proposal() {
     // Generate configs first
     let cfg_path = "configs/node1_config.json";
     let cfg_contents = std::fs::read_to_string(cfg_path).expect("Invalid file path");

@@ -22,7 +22,7 @@ pub struct BatchProposer {
 
     app_tx: Sender<AppCommand>,
 
-    current_raw_batch: RawBatch,
+    current_raw_batch: Option<RawBatch>, // So that I can take()
     current_reply_vec: Vec<MsgAckChanWithTag>,
     batch_timer: Arc<Pin<Box<ResettableTimer>>>,
 }
@@ -43,7 +43,7 @@ impl BatchProposer {
         Self {
             config,
             batch_proposer_rx, block_maker_tx,
-            current_raw_batch: RawBatch::with_capacity(max_batch_size),
+            current_raw_batch: Some(RawBatch::with_capacity(max_batch_size)),
             batch_timer,
             current_reply_vec: Vec::with_capacity(max_batch_size),
             app_tx,
@@ -98,13 +98,13 @@ impl BatchProposer {
             let ack_chan = new_tx.1;
             let new_tx = new_tx.0.unwrap();
 
-            self.current_raw_batch.push(new_tx);
+            self.current_raw_batch.as_mut().unwrap().push(new_tx);
             self.current_reply_vec.push(ack_chan);
         }
 
         let max_batch_size = self.config.get().consensus_config.max_backlog_batch_size;
 
-        if self.current_raw_batch.len() >= max_batch_size || batch_timer_tick {
+        if self.current_raw_batch.as_ref().unwrap().len() >= max_batch_size || batch_timer_tick {
             self.propose_new_batch().await;
         }
 
@@ -116,7 +116,10 @@ impl BatchProposer {
     }
 
     pub async fn propose_new_batch(&mut self) {
-        let batch = self.current_raw_batch.drain(..).collect();
+        let batch = self.current_raw_batch.take().unwrap();
+        self.current_raw_batch = Some(RawBatch::with_capacity(
+            self.config.get().consensus_config.max_backlog_batch_size
+        ));
         let reply_chans = self.current_reply_vec.drain(..).collect();
         self.block_maker_tx.send((batch, reply_chans)).await
             .expect("Could not push a new block");
