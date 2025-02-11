@@ -3,10 +3,18 @@
 
 import subprocess
 
+def executeCommandArgs(command):
+    print("Executing command: ", command)
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode !=0: 
+        ret = result.stderr
+    else: 
+        ret = result.stdout
+    return ret.rstrip()
+
 # (Helper) Execute a bash command in Python. Throws exception if error
 def executeCommand(command):
-    print("Calling " + command)
-    subprocess.check_call(command, shell=True)
+    return executeCommandArgs(command.split())
 
 # (Helper) Sends file to remote host
 def sendRemoteFile(local_file, user, h, remote_dir, key=None, port=None):
