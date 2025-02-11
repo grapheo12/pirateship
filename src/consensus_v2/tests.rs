@@ -7,7 +7,7 @@ use crate::{config::{AtomicConfig, Config}, consensus_v2::{batch_proposal::Batch
 use super::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag};
 
 const TEST_CRYPTO_NUM_TASKS: usize = 32;
-const MAX_TXS: usize = 2_500_000;
+const MAX_TXS: usize = 5_000_000;
 const MAX_CLIENTS: usize = 10;
 const TEST_RATE: f64 = 500_000.0;
 const PAYLOAD_SIZE: usize = 512;
@@ -497,6 +497,7 @@ async fn test_staging() {
     }
 
     let mut total_txs_output = 0;
+    let mut total_byz_commit = 0;
     let mut last_block = 0;
     let mut underfull_batches = 0;
     let mut signed_blocks = 0;
@@ -532,7 +533,10 @@ async fn test_staging() {
             },
 
             crate::consensus_v2::app::AppCommand::ByzCommit(committed_blocks) => {
-                // println!("Byz commit: {:?}", committed_blocks.iter().map(|x| x.block.n).collect::<Vec<_>>());
+                // println!("Byz commit batch size: {}", committed_blocks.len());
+                total_byz_commit += committed_blocks.iter()
+                    .map(|block| block.block.tx_list.len())
+                    .sum::<usize>();
             },
 
             _ => {
@@ -542,7 +546,9 @@ async fn test_staging() {
     }
     let total_time = start.elapsed().as_secs_f64();
     let throughput = total_txs_output as f64 / total_time;
-    println!("Throughput: {} req/s", throughput);
+    let byz_throughput = total_byz_commit as f64 / total_time;
+    println!("Crash Throughput: {} req/s", throughput);
+    println!("Byz Throughput: {} req/s", byz_throughput);
     println!("Total blocks: {}", last_block);
     println!("Underfull blocks: {}", underfull_batches);
     println!("Signed blocks: {}", signed_blocks);
