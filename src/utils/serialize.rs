@@ -112,9 +112,7 @@ mod test {
                 is_reconfiguration: false,
             });
         }
-        block.tx = Some(crate::proto::consensus::proto_block::Tx::TxList(crate::proto::consensus::ProtoTransactionList {
-            tx_list: tx,
-        }));
+        block.tx_list = tx;
 
         let ser = super::serialize_proto_block_nascent(&block).unwrap();
 

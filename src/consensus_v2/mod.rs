@@ -10,8 +10,9 @@ pub mod engines;
 #[cfg(test)]
 mod tests;
 
-use std::{io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::Arc};
+use std::{io::{Error, ErrorKind}, marker::PhantomData, ops::Deref, pin::Pin, sync::Arc};
 
+use app::{AppEngine, Application};
 use batch_proposal::{BatchProposer, TxWithAckChanTag};
 use block_broadcaster::BlockBroadcaster;
 use block_sequencer::BlockSequencer;
@@ -128,7 +129,7 @@ impl ServerContextType for PinnedConsensusServerContext {
     }
 }
 
-pub struct ConsensusNode {
+pub struct ConsensusNode<E: AppEngine + Send + Sync + 'static> {
     config: AtomicConfig,
     keystore: AtomicKeyStore,
 
@@ -144,17 +145,16 @@ pub struct ConsensusNode {
     block_broadcaster: Arc<Mutex<BlockBroadcaster>>,
     staging: Arc<Mutex<Staging>>,
     fork_receiver: Arc<Mutex<ForkReceiver>>,
+    app: Arc<Mutex<Application<'static, E>>>,
 
 
     /// TODO: When all wiring is done, this will be empty.
     __sink_handles: JoinSet<()>,
-
-
 }
 
 const CRYPTO_NUM_TASKS: usize = 4;
 
-impl ConsensusNode {
+impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
     pub fn new(config: Config) -> Self {
         let _chan_depth = config.rpc_config.channel_depth as usize;
 
@@ -194,9 +194,10 @@ impl ConsensusNode {
         let (logserver_tx, mut logserver_rx) = make_channel(_chan_depth);
         let (vote_tx, vote_rx) = make_channel(_chan_depth);
         let (view_change_tx, view_change_rx) = make_channel(_chan_depth);
-        let (app_tx, mut app_rx) = make_channel(_chan_depth);
+        let (app_tx, app_rx) = make_channel(_chan_depth);
         let (fork_receiver_command_tx, fork_receiver_command_rx) = make_channel(_chan_depth);
         let (fork_tx, fork_rx) = make_channel(_chan_depth);
+        let (unlogged_tx, unlogged_rx) = make_channel(_chan_depth);
 
         let block_maker_crypto = crypto.get_connector();
         let block_broadcaster_crypto = crypto.get_connector();
@@ -208,8 +209,10 @@ impl ConsensusNode {
         let batch_proposer = BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx);
         let block_sequencer = BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto);
         let block_broadcaster = BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx.clone());
-        let staging = Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, view_change_rx, client_reply_command_tx, app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx);
+        let staging = Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, view_change_rx, client_reply_command_tx.clone(), app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx);
         let fork_receiver = ForkReceiver::new(config.clone(), fork_receiver_crypto, fork_rx, fork_receiver_command_rx, other_block_tx);
+        let app = Application::new(config.clone(), app_rx, unlogged_rx, client_reply_command_tx);
+        
         let mut handles = JoinSet::new();
         
         handles.spawn(async move {
@@ -230,11 +233,11 @@ impl ConsensusNode {
             }
         });
 
-        handles.spawn(async move {
-            while let Some(_) = app_rx.recv().await {
-                // Sink
-            }
-        });
+        // handles.spawn(async move {
+        //     while let Some(_) = app_rx.recv().await {
+        //         // Sink
+        //     }
+        // });
 
         // handles.spawn(async move {
         //     while let Some(_) = block_acceptor_rx.recv().await {
@@ -259,6 +262,8 @@ impl ConsensusNode {
             crypto,
             storage: Arc::new(Mutex::new(storage)),
             __sink_handles: handles,
+
+            app: Arc::new(Mutex::new(app)),
         }
     }
 
@@ -269,6 +274,7 @@ impl ConsensusNode {
         let storage = self.storage.clone();
         let block_broadcaster = self.block_broadcaster.clone();
         let staging = self.staging.clone();
+        let app = self.app.clone();
 
         let mut handles = JoinSet::new();
 
@@ -296,9 +302,11 @@ impl ConsensusNode {
         handles.spawn(async move {
             Staging::run(staging).await;
         });
+
+        handles.spawn(async move {
+            Application::run(app).await;
+        });
     
-
-
         handles
     }
 }

@@ -3,7 +3,7 @@ use serde::{Serialize, Deserialize};
 use crate::{consensus_v2::app::AppEngine, proto::execution::{ProtoTransactionOpResult, ProtoTransactionPhase, ProtoTransactionResult}};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct NullApp;
+pub struct NullApp;
 
 impl AppEngine  for NullApp {
     type State = Self;

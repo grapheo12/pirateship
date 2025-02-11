@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, VecDeque}, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::{HashMap, VecDeque}, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
 use hex::ToHex;
 use log::info;
@@ -80,7 +80,7 @@ impl LogStats {
     }
 }
 
-struct Application<E: AppEngine> {
+pub struct Application<'a, E: AppEngine + Send + Sync + 'a> {
     config: AtomicConfig,
 
     engine: E,
@@ -94,10 +94,12 @@ struct Application<E: AppEngine> {
 
     checkpoint_timer: Arc<Pin<Box<ResettableTimer>>>,
     log_timer: Arc<Pin<Box<ResettableTimer>>>,
+
+    phantom: PhantomData<&'a E>,
 }
 
 
-impl<E: AppEngine> Application<E> {
+impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
     pub fn new(
         config: AtomicConfig,
         staging_rx: Receiver<AppCommand>, unlogged_rx: Receiver<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)>,
@@ -115,6 +117,8 @@ impl<E: AppEngine> Application<E> {
             client_reply_tx,
             checkpoint_timer,
             log_timer,
+
+            phantom: PhantomData
         }
     }
 
