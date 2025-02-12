@@ -2,15 +2,14 @@ use std::{sync::{atomic::AtomicUsize, Arc}, time::{Duration, Instant}};
 use core_affinity::CoreId;
 use tokio::{sync::{mpsc::unbounded_channel, Mutex}, task::JoinSet};
 use crate::{consensus_v2::{app::Application, block_broadcaster::BlockBroadcaster, engines::null_app::NullApp, staging::Staging}, rpc::client::Client, utils::{channel::{make_channel, Receiver, Sender}, RocksDBStorageEngine, StorageService}};
-use itertools::Itertools;
 use crate::{config::{AtomicConfig, Config}, consensus_v2::{batch_proposal::BatchProposer, block_sequencer::BlockSequencer}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}};
 
-use super::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag};
+use super::super::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag};
 
 const TEST_CRYPTO_NUM_TASKS: usize = 3;
 const MAX_TXS: usize = 5_00_000;
 const TEST_RATE: f64 = 300_000.0;
-const PAYLOAD_SIZE: usize = 4096;
+const PAYLOAD_SIZE: usize = 512;
 
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc; 
