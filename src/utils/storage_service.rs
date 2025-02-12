@@ -6,7 +6,6 @@ use crate::crypto::{CachedBlock, CryptoServiceConnector, HashType};
 
 use super::{channel::{make_channel, Receiver, Sender}, StorageEngine};
 
-
 enum StorageServiceCommand {
     Put(HashType /* key */, Vec<u8> /* val */, oneshot::Sender<Result<(), Error>>),
     Get(HashType /* key */, oneshot::Sender<Result<Vec<u8>, Error>>)
