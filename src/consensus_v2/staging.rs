@@ -8,14 +8,8 @@ use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
 use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{CachedBlock, CryptoServiceConnector}, proto::{consensus::{proto_block::Sig, ProtoNameWithSignature, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, execution::ProtoTransactionResult, rpc::ProtoPayload}, rpc::{client::PinnedClient, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck}};
 
-use super::{app::AppCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}};
+use super::{app::AppCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}};
 
-
-pub enum ClientReplyCommand {
-    CancelAllRequests,
-    CrashCommitAck(HashMap<u64, Vec<ProtoTransactionResult>>),
-    ByzCommitAck(HashMap<u64, Vec<ProtoTransactionResult>>),
-}
 
 
 struct CachedBlockWithVotes {

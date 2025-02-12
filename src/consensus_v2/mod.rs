@@ -6,6 +6,7 @@ pub mod fork_receiver;
 mod timer;
 pub mod app;
 pub mod engines;
+pub mod client_reply;
 
 #[cfg(test)]
 mod tests;
@@ -16,6 +17,7 @@ use app::{AppEngine, Application};
 use batch_proposal::{BatchProposer, TxWithAckChanTag};
 use block_broadcaster::BlockBroadcaster;
 use block_sequencer::BlockSequencer;
+use client_reply::ClientReplyHandler;
 use fork_receiver::ForkReceiver;
 use log::{debug, warn};
 use prost::Message;
@@ -146,6 +148,7 @@ pub struct ConsensusNode<E: AppEngine + Send + Sync + 'static> {
     staging: Arc<Mutex<Staging>>,
     fork_receiver: Arc<Mutex<ForkReceiver>>,
     app: Arc<Mutex<Application<'static, E>>>,
+    client_reply: Arc<Mutex<ClientReplyHandler>>,
 
 
     /// TODO: When all wiring is done, this will be empty.
@@ -187,8 +190,8 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let (qc_tx, qc_rx) = unbounded_channel();
         let (block_broadcaster_tx, block_broadcaster_rx) = make_channel(_chan_depth);
         let (other_block_tx, other_block_rx) = make_channel(_chan_depth);
-        let (client_reply_tx, mut client_reply_rx) = make_channel(_chan_depth);
-        let (client_reply_command_tx, mut client_reply_command_rx) = make_channel(_chan_depth);
+        let (client_reply_tx, client_reply_rx) = make_channel(_chan_depth);
+        let (client_reply_command_tx, client_reply_command_rx) = make_channel(_chan_depth);
         let (broadcaster_control_command_tx, broadcaster_control_command_rx) = make_channel(_chan_depth);
         let (staging_tx, staging_rx) = make_channel(_chan_depth);
         let (logserver_tx, mut logserver_rx) = make_channel(_chan_depth);
@@ -212,20 +215,20 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let staging = Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, view_change_rx, client_reply_command_tx.clone(), app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx);
         let fork_receiver = ForkReceiver::new(config.clone(), fork_receiver_crypto, fork_rx, fork_receiver_command_rx, other_block_tx);
         let app = Application::new(config.clone(), app_rx, unlogged_rx, client_reply_command_tx);
-        
+        let client_reply = ClientReplyHandler::new(config.clone(), client_reply_rx, client_reply_command_rx);
         let mut handles = JoinSet::new();
         
-        handles.spawn(async move {
-            while let Some(_) = client_reply_rx.recv().await {
-                // Sink
-            }
-        });
+        // handles.spawn(async move {
+        //     while let Some(_) = client_reply_rx.recv().await {
+        //         // Sink
+        //     }
+        // });
     
-        handles.spawn(async move {
-            while let Some(_) = client_reply_command_rx.recv().await {
-                // Sink
-            }
-        });
+        // handles.spawn(async move {
+        //     while let Some(_) = client_reply_command_rx.recv().await {
+        //         // Sink
+        //     }
+        // });
     
         handles.spawn(async move {
             while let Some(_) = logserver_rx.recv().await {
@@ -258,6 +261,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
             block_broadcaster: Arc::new(Mutex::new(block_broadcaster)),
             staging: Arc::new(Mutex::new(staging)),
             fork_receiver: Arc::new(Mutex::new(fork_receiver)),
+            client_reply: Arc::new(Mutex::new(client_reply)),
 
             crypto,
             storage: Arc::new(Mutex::new(storage)),
@@ -275,6 +279,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let block_broadcaster = self.block_broadcaster.clone();
         let staging = self.staging.clone();
         let app = self.app.clone();
+        let client_reply = self.client_reply.clone();
 
         let mut handles = JoinSet::new();
 
@@ -305,6 +310,10 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
 
         handles.spawn(async move {
             Application::run(app).await;
+        });
+
+        handles.spawn(async move {
+            ClientReplyHandler::run(client_reply).await;
         });
     
         handles

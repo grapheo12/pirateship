@@ -7,10 +7,10 @@ use crate::{config::{AtomicConfig, Config}, consensus_v2::{batch_proposal::Batch
 
 use super::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag};
 
-const TEST_CRYPTO_NUM_TASKS: usize = 4;
-const MAX_TXS: usize = 5_000_000;
+const TEST_CRYPTO_NUM_TASKS: usize = 3;
+const MAX_TXS: usize = 5_00_000;
 const TEST_RATE: f64 = 300_000.0;
-const PAYLOAD_SIZE: usize = 512;
+const PAYLOAD_SIZE: usize = 4096;
 
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc; 
@@ -747,19 +747,16 @@ async fn _test_null_app(config: Config, batch_proposer_rx: Receiver<TxWithAckCha
     let start = Instant::now();
     'main: while let Some(cmd) = client_reply_command_rx.recv().await {
         match cmd {
-            crate::consensus_v2::staging::ClientReplyCommand::CancelAllRequests => {},
-            crate::consensus_v2::staging::ClientReplyCommand::CrashCommitAck(committed_block_results) => {
-                let mut committed_blocks = committed_block_results.keys().cloned().sorted().collect::<Vec<_>>();
+            crate::consensus_v2::client_reply::ClientReplyCommand::CancelAllRequests => {},
+            crate::consensus_v2::client_reply::ClientReplyCommand::CrashCommitAck(mut committed_block_results) => {
                 
-                for n in committed_blocks.drain(..) {
+                for (_, (n, block_results)) in committed_block_results.drain() {
                     // println!("Block: {}", block.block.n);
                     if n != last_block + 1 {
                         panic!("Monotonicity broken! {} {}", n, last_block);
                     }
                     last_block += 1;
 
-                    let block_results = committed_block_results.get(&n).unwrap();
-            
                     let block_sz = block_results.len();
             
                     if block_sz < config.get().consensus_config.max_backlog_batch_size {
@@ -773,9 +770,9 @@ async fn _test_null_app(config: Config, batch_proposer_rx: Receiver<TxWithAckCha
                     }
                 }
             },
-            crate::consensus_v2::staging::ClientReplyCommand::ByzCommitAck(committed_block_results) => {
+            crate::consensus_v2::client_reply::ClientReplyCommand::ByzCommitAck(committed_block_results) => {
                 total_byz_commit += committed_block_results.iter()
-                    .map(|(_n, results)| results.len())
+                    .map(|(_, (_, results))| results.len())
                     .sum::<usize>();
             },
         }

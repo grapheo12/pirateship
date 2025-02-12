@@ -7,7 +7,7 @@ use tokio::sync::{oneshot, Mutex};
 
 use crate::{config::AtomicConfig, crypto::{CachedBlock, HashType, DIGEST_LENGTH}, proto::execution::{ProtoTransaction, ProtoTransactionResult}, utils::channel::{Receiver, Sender}};
 
-use super::{staging::ClientReplyCommand, timer::ResettableTimer};
+use super::{client_reply::ClientReplyCommand, timer::ResettableTimer};
 
 
 pub enum AppCommand {
@@ -197,7 +197,7 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
             AppCommand::CrashCommit(blocks) => {
                 let mut new_ci = self.stats.ci;
                 let mut new_last_qc = self.stats.last_qc;
-                let block_ns = blocks.iter().map(|block| {
+                let (block_hashes, block_ns) = blocks.iter().map(|block| {
                     if new_ci < block.block.n {
                         new_ci = block.block.n;
                     }
@@ -207,36 +207,38 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
                             new_last_qc = qc.n;
                         }
                     }
-                    block.block.n
-                }).collect::<Vec<_>>();
+                    (block.block_hash.clone(), block.block.n)
+                }).collect::<(Vec<_>, Vec<_>)>();
                 let results = self.engine.handle_crash_commit(blocks);
                 self.stats.total_crash_committed_txs += results.iter().map(|e| e.len() as u64).sum::<u64>();
                 self.stats.ci = new_ci;
                 self.stats.last_qc = new_last_qc;
 
-                assert_eq!(block_ns.len(), results.len());
+                assert_eq!(block_hashes.len(), results.len());
 
-                // self.log.extend(blocks); TODO: Add to log
-
-                let result_map = block_ns.into_iter().zip(results.into_iter()).collect();
+                let result_map = block_hashes.into_iter().zip( // (HashType, (u64, Vec<ProtoTransactionResult>)) ---> HashMap<HashType, (u64, Vec<ProtoTransactionResult>)>
+                    block_ns.into_iter().zip(results.into_iter()) // (u64, Vec<ProtoTransactionResult>)
+                ).collect();
                 self.client_reply_tx.send(ClientReplyCommand::CrashCommitAck(result_map)).await.unwrap();
 
             },
             AppCommand::ByzCommit(blocks) => {
                 let mut new_bci = self.stats.bci;
-                let block_ns = blocks.iter().map(|block| {
+                let (block_hashes, block_ns) = blocks.iter().map(|block| {
                     if new_bci < block.block.n {
                         new_bci = block.block.n;
                     }
-                    block.block.n
-                }).collect::<Vec<_>>();
+                    (block.block_hash.clone(), block.block.n)
+                }).collect::<(Vec<_>, Vec<_>)>();
                 let results = self.engine.handle_byz_commit(blocks);
                 self.stats.total_byz_committed_txs += results.iter().map(|e| e.len() as u64).sum::<u64>();
                 self.stats.bci = new_bci;
 
-                assert_eq!(block_ns.len(), results.len());
+                assert_eq!(block_hashes.len(), results.len());
 
-                let result_map = block_ns.into_iter().zip(results.into_iter()).collect();
+                let result_map = block_hashes.into_iter().zip( // (HashType, (u64, Vec<ProtoTransactionResult>)) ---> HashMap<HashType, (u64, Vec<ProtoTransactionResult>)>
+                    block_ns.into_iter().zip(results.into_iter()) // (u64, Vec<ProtoTransactionResult>)
+                ).collect();
                 self.client_reply_tx.send(ClientReplyCommand::ByzCommitAck(result_map)).await.unwrap();
             },
             AppCommand::Rollback(new_last_block) => {               
