@@ -1,7 +1,7 @@
 use std::{collections::{HashMap, VecDeque}, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
 use hex::ToHex;
-use log::info;
+use log::{info, warn};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::{oneshot, Mutex};
 

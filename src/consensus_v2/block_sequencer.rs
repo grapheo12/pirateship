@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::{pin::Pin, sync::Arc, time::Duration};
 
-use log::{debug, trace};
+use log::{debug, trace, warn};
 use lz4_flex::block;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{oneshot, Mutex};
@@ -156,7 +156,12 @@ impl BlockSequencer {
             self.force_sign_next_batch = false;
         }
 
-        let qc_list = self.current_qc_list.drain(..).collect();
+        // Invariant: Only signed blocks get QCs.
+        let qc_list = if must_sign {
+            self.current_qc_list.drain(..).collect()
+        } else {
+            Vec::new()
+        };
 
         let block = ProtoBlock {
             n,
