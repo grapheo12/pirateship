@@ -11,9 +11,6 @@ const MAX_TXS: usize = 5_00_000;
 const TEST_RATE: f64 = 300_000.0;
 const PAYLOAD_SIZE: usize = 512;
 
-#[global_allocator]
-static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc; 
-
 macro_rules! pinned_runtime {
     ($fn_name: expr) => {
         // Generate configs first

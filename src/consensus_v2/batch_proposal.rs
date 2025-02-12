@@ -121,8 +121,7 @@ impl BatchProposer {
             self.config.get().consensus_config.max_backlog_batch_size
         ));
         let reply_chans = self.current_reply_vec.drain(..).collect();
-        self.block_maker_tx.send((batch, reply_chans)).await
-            .expect("Could not push a new block");
+        let _ = self.block_maker_tx.send((batch, reply_chans)).await;
         self.batch_timer.reset();
     }
 
