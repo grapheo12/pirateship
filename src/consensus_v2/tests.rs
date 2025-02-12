@@ -1,7 +1,7 @@
-use std::{pin, sync::{atomic::AtomicUsize, Arc}, time::{Duration, Instant}};
+use std::{sync::{atomic::AtomicUsize, Arc}, time::{Duration, Instant}};
 use core_affinity::CoreId;
 use tokio::{sync::{mpsc::unbounded_channel, Mutex}, task::JoinSet};
-use crate::{consensus_v2::{app::{self, Application}, block_broadcaster::BlockBroadcaster, engines::null_app::NullApp, staging::Staging}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
+use crate::{consensus_v2::{app::Application, block_broadcaster::BlockBroadcaster, engines::null_app::NullApp, staging::Staging}, rpc::client::Client, utils::{channel::{make_channel, Receiver, Sender}, RocksDBStorageEngine, StorageService}};
 use itertools::Itertools;
 use crate::{config::{AtomicConfig, Config}, consensus_v2::{batch_proposal::BatchProposer, block_sequencer::BlockSequencer}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}};
 
@@ -9,7 +9,6 @@ use super::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag};
 
 const TEST_CRYPTO_NUM_TASKS: usize = 4;
 const MAX_TXS: usize = 5_000_000;
-const MAX_CLIENTS: usize = 10;
 const TEST_RATE: f64 = 300_000.0;
 const PAYLOAD_SIZE: usize = 512;
 
@@ -18,13 +17,35 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 macro_rules! pinned_runtime {
     ($fn_name: expr) => {
+        // Generate configs first
+        let cfg_path = "configs/node1_config.json";
+        let cfg_contents = std::fs::read_to_string(cfg_path).expect("Invalid file path");
+
+        let config = Config::deserialize(&cfg_contents);
+        let _chan_depth = config.rpc_config.channel_depth as usize;
+        
         colog::init();
         let num_cores = num_cpus::get();
-        let id = Arc::new(std::sync::Mutex::new(AtomicUsize::new(rand::random())));
+        let id = Arc::new(std::sync::Mutex::new(AtomicUsize::new(0)));
+        let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
+
+        let num_consensus_cores = num_cores / 2;
+        let num_client_cores = num_cores - num_consensus_cores;
+
+        let id1 = id.clone();
+        let client_rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(num_client_cores)
+            .enable_all()
+            .on_thread_start(move || {
+                let id = id1.lock().unwrap();
+                let _ = core_affinity::set_for_current(CoreId{ id: id.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % num_cores});
+            })
+            .build()
+            .unwrap();
 
         // Pin thread to core
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(num_cores)
+        let consensus_rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(num_consensus_cores)
             .enable_all()
             .on_thread_start(move || {
                 let id = id.lock().unwrap();
@@ -33,7 +54,9 @@ macro_rules! pinned_runtime {
             .build()
             .unwrap();
 
-        rt.block_on($fn_name());
+        client_rt.spawn(client_runner(batch_proposer_tx, num_client_cores));
+
+        consensus_rt.block_on($fn_name(config, batch_proposer_rx, num_client_cores));
     };
 }
 
@@ -73,17 +96,31 @@ async fn load(batch_proposer_tx: Sender<TxWithAckChanTag>, req_per_sec: f64) {
     println!("Input rate: {} req/s", input_rate);
 }
 
+async fn client_runner(batch_proposer_tx: Sender<TxWithAckChanTag>, num_clients: usize) {
+    for _ in 0..num_clients {
+        let __tx = batch_proposer_tx.clone();
+        tokio::spawn(async move {
+            load(__tx, TEST_RATE).await;
+        });
+    }
+
+    let __tx = batch_proposer_tx.clone();
+    tokio::spawn(async move {
+        __tx.send((None, (tokio::sync::mpsc::channel(1).0, 0))).await.unwrap();
+        // This is just so we don't drop the channel prematurely.
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+
+}
+
 #[test]
 fn test_batch_proposal() {
     pinned_runtime!(_test_batch_proposal);
 }
 
-async fn _test_batch_proposal() {
-    // Generate configs first
-    let cfg_path = "configs/node1_config.json";
-    let cfg_contents = std::fs::read_to_string(cfg_path).expect("Invalid file path");
-
-    let config = Config::deserialize(&cfg_contents);
+async fn _test_batch_proposal(config: Config, batch_proposer_rx: Receiver<TxWithAckChanTag>, num_clients: usize) {
     let _chan_depth = config.rpc_config.channel_depth as usize;
     let key_store = KeyStore::new(&config.rpc_config.allowed_keylist_path, &config.rpc_config.signing_priv_key_path);
 
@@ -93,7 +130,6 @@ async fn _test_batch_proposal() {
     let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone());
     crypto.run();
 
-    let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
     let (block_maker_tx, mut block_maker_rx) = make_channel(_chan_depth);
     let (app_tx, mut app_rx) = make_channel(_chan_depth);
     let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, app_tx)));
@@ -112,14 +148,6 @@ async fn _test_batch_proposal() {
         }
     });
 
-
-    for _ in 0..MAX_CLIENTS {
-        let __tx = batch_proposer_tx.clone();
-        handles.spawn(async move {
-            load(__tx, TEST_RATE).await;
-        });
-    }
-
     let mut total_txs_output = 0;
     let mut last_block = 0;
     let mut underfull_batches = 0;
@@ -136,7 +164,7 @@ async fn _test_batch_proposal() {
 
         total_txs_output += block_sz;
 
-        if total_txs_output >= MAX_CLIENTS * MAX_TXS {
+        if total_txs_output >= num_clients * MAX_TXS {
             break;
         }
     }
@@ -159,7 +187,7 @@ fn test_block_sequencer() {
     pinned_runtime!(_test_block_sequencer);
 }
 
-async fn _test_block_sequencer() {
+async fn _test_block_sequencer(config: Config, batch_proposer_rx: Receiver<TxWithAckChanTag>, num_clients: usize) {
     // Generate configs first
     let cfg_path = "configs/node1_config.json";
     let cfg_contents = std::fs::read_to_string(cfg_path).expect("Invalid file path");
@@ -175,7 +203,6 @@ async fn _test_block_sequencer() {
     let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone());
     crypto.run();
 
-    let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
     let (block_maker_tx, block_maker_rx) = make_channel(_chan_depth);
     let (control_command_tx, control_command_rx) = make_channel(_chan_depth);
     let (qc_tx, qc_rx) = unbounded_channel();
@@ -212,14 +239,6 @@ async fn _test_block_sequencer() {
         println!("Block maker quits");
     });
 
-
-    for _ in 0..MAX_CLIENTS {
-        let __tx = batch_proposer_tx.clone();
-        handles.spawn(async move {
-            load(__tx, TEST_RATE).await;
-        });
-    }
-
     let mut total_txs_output = 0;
     let mut last_block = 0;
     let mut underfull_batches = 0;
@@ -247,7 +266,7 @@ async fn _test_block_sequencer() {
         }
 
 
-        if total_txs_output >= MAX_CLIENTS * MAX_TXS {
+        if total_txs_output >= num_clients * MAX_TXS {
             break;
         }
     }
@@ -278,7 +297,7 @@ fn test_block_broadcaster() {
     pinned_runtime!(_test_block_broadcaster);
 }
 
-async fn _test_block_broadcaster() {
+async fn _test_block_broadcaster(config: Config, batch_proposer_rx: Receiver<TxWithAckChanTag>, num_clients: usize) {
     // Generate configs first
     let cfg_path = "configs/node1_config.json";
     let cfg_contents = std::fs::read_to_string(cfg_path).expect("Invalid file path");
@@ -306,7 +325,6 @@ async fn _test_block_broadcaster() {
     };
 
     
-    let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
     let (block_maker_tx, block_maker_rx) = make_channel(_chan_depth);
     let (control_command_tx, control_command_rx) = make_channel(_chan_depth);
     let (qc_tx, qc_rx) = unbounded_channel();
@@ -373,14 +391,6 @@ async fn _test_block_broadcaster() {
         println!("Block broadcaster quits");
     });
 
-
-    for _ in 0..MAX_CLIENTS {
-        let __tx = batch_proposer_tx.clone();
-        handles.spawn(async move {
-            load(__tx, TEST_RATE).await;
-        });
-    }
-
     let mut total_txs_output = 0;
     let mut last_block = 0;
     let mut underfull_batches = 0;
@@ -407,7 +417,7 @@ async fn _test_block_broadcaster() {
         }
 
 
-        if total_txs_output >= MAX_CLIENTS * MAX_TXS {
+        if total_txs_output >= num_clients * MAX_TXS {
             break;
         }
     }
@@ -437,7 +447,7 @@ async fn _test_block_broadcaster() {
 fn test_staging() {
     pinned_runtime!(_test_staging);
 }
-async fn _test_staging() {
+async fn _test_staging(config: Config, batch_proposer_rx: Receiver<TxWithAckChanTag>, num_clients: usize) {
     // Generate configs first
     let cfg_path = "configs/node1_config.json";
     let cfg_contents = std::fs::read_to_string(cfg_path).expect("Invalid file path");
@@ -466,7 +476,6 @@ async fn _test_staging() {
     };
 
     
-    let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
     let (block_maker_tx, block_maker_rx) = make_channel(_chan_depth);
     let (control_command_tx, control_command_rx) = make_channel(_chan_depth);
     let (qc_tx, qc_rx) = unbounded_channel();
@@ -543,13 +552,6 @@ async fn _test_staging() {
     });
 
 
-    for _ in 0..MAX_CLIENTS {
-        let __tx = batch_proposer_tx.clone();
-        handles.spawn(async move {
-            load(__tx, TEST_RATE).await;
-        });
-    }
-
     let mut total_txs_output = 0;
     let mut total_byz_commit = 0;
     let mut last_block = 0;
@@ -580,7 +582,7 @@ async fn _test_staging() {
                     }
             
             
-                    if total_txs_output >= MAX_CLIENTS * MAX_TXS {
+                    if total_txs_output >= num_clients * MAX_TXS {
                         break 'main;
                     }
                 }
@@ -630,7 +632,7 @@ fn test_null_app() {
 }
 
 
-async fn _test_null_app() {
+async fn _test_null_app(config: Config, batch_proposer_rx: Receiver<TxWithAckChanTag>, num_clients: usize) {
     // Generate configs first
     let cfg_path = "configs/node1_config.json";
     let cfg_contents = std::fs::read_to_string(cfg_path).expect("Invalid file path");
@@ -659,7 +661,6 @@ async fn _test_null_app() {
     };
 
 
-    let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
     let (block_maker_tx, block_maker_rx) = make_channel(_chan_depth);
     let (control_command_tx, control_command_rx) = make_channel(_chan_depth);
     let (qc_tx, qc_rx) = unbounded_channel();
@@ -738,14 +739,6 @@ async fn _test_null_app() {
         println!("Application quits");
     });
 
-
-    for _ in 0..MAX_CLIENTS {
-        let __tx = batch_proposer_tx.clone();
-        handles.spawn(async move {
-            load(__tx, TEST_RATE).await;
-        });
-    }
-
     let mut total_txs_output = 0;
     let mut total_byz_commit = 0;
     let mut last_block = 0;
@@ -775,7 +768,7 @@ async fn _test_null_app() {
             
                     total_txs_output += block_sz;
             
-                    if total_txs_output >= MAX_CLIENTS * MAX_TXS {
+                    if total_txs_output >= num_clients * MAX_TXS {
                         break 'main;
                     }
                 }
@@ -800,7 +793,5 @@ async fn _test_null_app() {
     }
 
     println!("Errors appearing after this are inconsequential");
-    handles.shutdown().await;
-
     std::fs::remove_dir_all(&storage_path).unwrap();
 }
