@@ -40,7 +40,7 @@ impl AppEngine  for NullApp {
         }).collect()
     }
 
-    fn handle_rollback(&mut self, _rolled_back_blocks: Vec<crate::crypto::CachedBlock>) {
+    fn handle_rollback(&mut self, _num_rolled_back_blocks: u64) {
         // Nothing to do
     }
 

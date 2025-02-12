@@ -23,7 +23,7 @@ pub trait AppEngine {
     fn new(config: AtomicConfig) -> Self;
     fn handle_crash_commit(&mut self, blocks: Vec<CachedBlock>) -> Vec<Vec<ProtoTransactionResult>>;
     fn handle_byz_commit(&mut self, blocks: Vec<CachedBlock>) -> Vec<Vec<ProtoTransactionResult>>;
-    fn handle_rollback(&mut self, rolled_back_blocks: Vec<CachedBlock>);
+    fn handle_rollback(&mut self, new_last_block: u64);
     fn handle_unlogged_request(&mut self, request: ProtoTransaction) -> ProtoTransactionResult;
     fn get_current_state(&self) -> Self::State;
 }
@@ -84,7 +84,6 @@ pub struct Application<'a, E: AppEngine + Send + Sync + 'a> {
     config: AtomicConfig,
 
     engine: E,
-    log: VecDeque<CachedBlock>,
     stats: LogStats,
 
     staging_rx: Receiver<AppCommand>,
@@ -110,7 +109,6 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
         Self {
             config,
             engine,
-            log: VecDeque::new(),
             stats: LogStats::new(),
             staging_rx,
             unlogged_rx,
@@ -241,14 +239,12 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
                 let result_map = block_ns.into_iter().zip(results.into_iter()).collect();
                 self.client_reply_tx.send(ClientReplyCommand::ByzCommitAck(result_map)).await.unwrap();
             },
-            AppCommand::Rollback(new_last_block) => {
-                let rolled_back_blocks = self.log.drain((new_last_block + 1) as usize..).collect();
-                self.engine.handle_rollback(rolled_back_blocks);
-
+            AppCommand::Rollback(new_last_block) => {               
                 assert!(new_last_block >= self.stats.bci);
                 if self.stats.ci > new_last_block {
                     self.stats.ci = new_last_block;
                 }
+                self.engine.handle_rollback(new_last_block);
             }
         }
     }
