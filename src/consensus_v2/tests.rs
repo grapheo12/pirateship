@@ -18,6 +18,7 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 macro_rules! pinned_runtime {
     ($fn_name: expr) => {
+        colog::init();
         let num_cores = num_cpus::get();
         let id = Arc::new(std::sync::Mutex::new(AtomicUsize::new(rand::random())));
 
@@ -322,9 +323,9 @@ async fn _test_block_broadcaster() {
     let block_broadcaster_crypto = crypto.get_connector();
     let block_broadcaster_storage = storage.get_connector(block_broadcaster_crypto);
     
-    let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, app_tx)));
+    let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, app_tx.clone())));
     let block_maker = Arc::new(Mutex::new(BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto)));
-    let block_broadcaster = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx)));
+    let block_broadcaster = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx, app_tx)));
     
     let mut handles = JoinSet::new();
     
@@ -488,7 +489,7 @@ async fn _test_staging() {
     
     let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, app_tx.clone())));
     let block_maker = Arc::new(Mutex::new(BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto)));
-    let block_broadcaster = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx.clone())));
+    let block_broadcaster = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx.clone(), app_tx.clone())));
     let staging = Arc::new(Mutex::new(Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, view_change_rx, client_reply_command_tx, app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx)));
     let mut handles = JoinSet::new();
     
@@ -682,7 +683,7 @@ async fn _test_null_app() {
 
     let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, app_tx.clone())));
     let block_maker = Arc::new(Mutex::new(BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto)));
-    let block_broadcaster = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx.clone())));
+    let block_broadcaster = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx.clone(), app_tx.clone())));
     let staging = Arc::new(Mutex::new(Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, view_change_rx, client_reply_command_tx.clone(), app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx)));
     let app = Arc::new(Mutex::new(Application::<NullApp>::new(config.clone(), app_rx, unlogged_rx, client_reply_command_tx)));
     

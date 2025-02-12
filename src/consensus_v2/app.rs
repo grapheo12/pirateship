@@ -11,7 +11,7 @@ use super::{staging::ClientReplyCommand, timer::ResettableTimer};
 
 
 pub enum AppCommand {
-    NewRequestBatch(u64 /* length of new batch of request */, HashType /* hash of the last block */),
+    NewRequestBatch(u64 /* block.n */, u64 /* view */, bool /* view_is_stable */, bool /* i_am_leader */, usize /* length of new batch of request */, HashType /* hash of the last block */),
     CrashCommit(Vec<CachedBlock> /* all blocks from old_ci + 1 to new_ci */),
     ByzCommit(Vec<CachedBlock> /* all blocks from old_bci + 1 to new_bci */),
     Rollback(u64 /* new last block */)
@@ -62,13 +62,13 @@ impl LogStats {
     }
 
     fn print(&self) {
-        println!("fork.last = {}, fork.last_qc = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, pending_qcs = {} num_crash_committed_txs = {}, num_byz_committed_txs = {}, fork.last_hash = {}, total_client_request = {}, view = {}, view_is_stable = {}, i_am_leader: {}",
+        info!("fork.last = {}, fork.last_qc = {}, commit_index = {}, byz_commit_index = {}, pending_acks = {}, pending_qcs = {} num_crash_committed_txs = {}, num_byz_committed_txs = {}, fork.last_hash = {}, total_client_request = {}, view = {}, view_is_stable = {}, i_am_leader: {}",
             self.last_n,
             self.last_qc,
             self.ci,
             self.bci,
             self.total_requests - (self.total_crash_committed_txs + self.total_unlogged_txs),
-            self.total_crash_committed_txs - self.total_byz_committed_txs,
+            self.ci - self.bci,
             self.total_crash_committed_txs,
             self.total_byz_committed_txs,
             self.last_hash.encode_hex::<String>(),
@@ -187,21 +187,34 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
 
     async fn handle_staging_command(&mut self, cmd: AppCommand) {
         match cmd {
-            AppCommand::NewRequestBatch(batch_size, hash) => {
-                self.stats.total_requests += batch_size;
-                self.stats.last_hash = hash;
-            }
+            AppCommand::NewRequestBatch(n, view, view_is_stable, i_am_leader, length, last_hash) => {
+                self.stats.last_n = n;
+                self.stats.view = view;
+                self.stats.view_is_stable = view_is_stable;
+                self.stats.i_am_leader = i_am_leader;
+                self.stats.last_hash = last_hash;
+
+                self.stats.total_requests += length as u64;
+            },
             AppCommand::CrashCommit(blocks) => {
                 let mut new_ci = self.stats.ci;
+                let mut new_last_qc = self.stats.last_qc;
                 let block_ns = blocks.iter().map(|block| {
                     if new_ci < block.block.n {
                         new_ci = block.block.n;
+                    }
+
+                    for qc in &block.block.qc {
+                        if new_last_qc < qc.n {
+                            new_last_qc = qc.n;
+                        }
                     }
                     block.block.n
                 }).collect::<Vec<_>>();
                 let results = self.engine.handle_crash_commit(blocks);
                 self.stats.total_crash_committed_txs += results.iter().map(|e| e.len() as u64).sum::<u64>();
                 self.stats.ci = new_ci;
+                self.stats.last_qc = new_last_qc;
 
                 assert_eq!(block_ns.len(), results.len());
 

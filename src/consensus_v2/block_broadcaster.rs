@@ -6,7 +6,7 @@ use tokio::sync::{oneshot, Mutex};
 
 use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::{consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck, StorageServiceConnector}};
 
-use super::fork_receiver::{AppendEntriesStats, ForkReceiverCommand, MultipartFork};
+use super::{app::AppCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand, MultipartFork}};
 
 pub enum BlockBroadcasterCommand {
     UpdateCI(u64)
@@ -29,6 +29,7 @@ pub struct BlockBroadcaster {
 
     // Command ports
     fork_receiver_command_tx: Sender<ForkReceiverCommand>,
+    app_command_tx: Sender<AppCommand>,
 
 }
 
@@ -43,6 +44,7 @@ impl BlockBroadcaster {
         staging_tx: Sender<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats)>,
         logserver_tx: Sender<CachedBlock>,
         fork_receiver_command_tx: Sender<ForkReceiverCommand>,
+        app_command_tx: Sender<AppCommand>,
     ) -> Self {
         
         Self {
@@ -56,6 +58,7 @@ impl BlockBroadcaster {
             staging_tx,
             logserver_tx,
             fork_receiver_command_tx,
+            app_command_tx,
         }
     }
 
@@ -156,6 +159,9 @@ impl BlockBroadcaster {
             ci: self.ci,
         }).await?;
         
+        // Forward to app for stats.
+        self.app_command_tx.send(AppCommand::NewRequestBatch(block.block.n, view, view_is_stable, true, block.block.tx_list.len(), block.block_hash.clone())).await.unwrap();
+
         // Forward to other nodes. Involves copies and serialization so done last.
 
         let names = self.get_everyone_except_me();
@@ -202,10 +208,15 @@ impl BlockBroadcaster {
             }
         }
 
+        let (view, view_is_stable) = (blocks.ae_stats.view, _blocks.last().unwrap().as_ref().unwrap().block.view_is_stable);
         for block in _blocks {
             let block = block.unwrap();
             debug!("Processing {}", block.block.n);
             self.store_and_forward_internally(&block, blocks.ae_stats.clone()).await?;
+
+            // Forward to app for stats.
+            self.app_command_tx.send(AppCommand::NewRequestBatch(block.block.n, view, view_is_stable, false, block.block.tx_list.len(), block.block_hash.clone())).await.unwrap();
+
         }
 
         Ok(())
