@@ -1,6 +1,6 @@
 use std::{io::{BufReader, Error, ErrorKind}, ops::Deref, pin::Pin, sync::{atomic::fence, Arc}};
 
-use ed25519_dalek::SIGNATURE_LENGTH;
+use ed25519_dalek::{verify_batch, Signature, SIGNATURE_LENGTH};
 use futures::SinkExt;
 use log::trace;
 use nix::libc::PARENB;
@@ -9,7 +9,7 @@ use rand::{thread_rng, Rng};
 use sha2::{Digest, Sha256};
 use tokio::{sync::{mpsc::{channel, Receiver, Sender}, oneshot}, task::JoinSet};
 
-use crate::{consensus_v2::fork_receiver::{AppendEntriesStats, MultipartFork}, crypto::DIGEST_LENGTH, proto::consensus::{HalfSerializedBlock, ProtoBlock}, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser}};
+use crate::{config::AtomicConfig, consensus_v2::fork_receiver::{AppendEntriesStats, MultipartFork}, crypto::DIGEST_LENGTH, proto::consensus::{HalfSerializedBlock, ProtoBlock, ProtoQuorumCertificate}, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser}};
 
 use super::{hash, AtomicKeyStore, HashType, KeyStore};
 
@@ -66,6 +66,36 @@ fn hash_proto_block_ser(data: &[u8]) -> HashType {
     hasher.finalize().to_vec()
 }
 
+/// Uses Ed25519 batch verify to verify a quorum certificate.
+fn verify_qc(keystore: &KeyStore, qc: &ProtoQuorumCertificate) -> bool {
+    let mut keys = Vec::new();
+    let mut sigs = Vec::new();
+    for sig in &qc.sig {
+        let _sig: Signature = match sig.sig.as_slice().try_into() {
+            Ok(_sig) => _sig,
+            Err(_) => {
+                return false;
+            }
+        };
+        match keystore.get_pubkey(&sig.name) {
+            Some(pubkey) => {
+                keys.push(pubkey.clone());
+                sigs.push(_sig);
+            },
+            None => {
+                return false;
+            }
+        }
+    }
+
+    let msgs = (0..keys.len()).map(|_| qc.digest.as_slice()).collect::<Vec<_>>();
+
+
+    verify_batch(&msgs, sigs.as_slice(), &keys)
+        .is_ok()
+
+}
+
 enum CryptoServiceCommand {
     Hash(Vec<u8>, oneshot::Sender<Vec<u8>>),
     Sign(Vec<u8>, oneshot::Sender<[u8; SIGNATURE_LENGTH]>),
@@ -83,6 +113,7 @@ enum CryptoServiceCommand {
 
 pub struct CryptoService {
     num_tasks: usize,
+    config: AtomicConfig,
     keystore: AtomicKeyStore,
     handles: JoinSet<()>,
     cmd_txs: Vec<Sender<CryptoServiceCommand>>,
@@ -97,12 +128,12 @@ pub struct CryptoServiceConnector {
 }
 
 impl CryptoService {
-    pub fn new(num_tasks: usize, keystore: AtomicKeyStore) -> Self {
+    pub fn new(num_tasks: usize, keystore: AtomicKeyStore, config: AtomicConfig) -> Self {
         assert!(num_tasks > 0);
-        Self { num_tasks, keystore, handles: JoinSet::new(), cmd_txs: Vec::with_capacity(num_tasks) }
+        Self { num_tasks, config, keystore, handles: JoinSet::new(), cmd_txs: Vec::with_capacity(num_tasks) }
     }
 
-    async fn worker(keystore: AtomicKeyStore, mut cmd_rx: Receiver<CryptoServiceCommand>, worker_id: usize) {
+    async fn worker(keystore: AtomicKeyStore, config: AtomicConfig, mut cmd_rx: Receiver<CryptoServiceCommand>, worker_id: usize) {
         let mut total_work = 0;
         while let Some(cmd) = cmd_rx.recv().await {
             total_work += 1usize;
@@ -192,11 +223,48 @@ impl CryptoService {
                     let block = deserialize_proto_block(block_ser.as_ref());
                     let hsh = hash_proto_block_ser(&block_ser);
 
-                    // TODO: Verify signature
-                    // TODO: Verify each QuorumCertificate attached.
                     // TODO: If view_is_stable = False, verify ProtoForkValidation
                     match block {
                         Ok(block) => {
+                            // Verify signature
+                            if let Some(crate::proto::consensus::proto_block::Sig::ProposerSig(sig)) = &block.sig {
+                                let partial_hsh = hash(&block_ser[SIGNATURE_LENGTH..]);
+                                let keystore = keystore.get();
+                                let view = block.view;
+                                let leader_for_view = config.get().consensus_config.get_leader_for_view(view);
+
+                                let _sig = sig.as_slice().try_into();
+                                match _sig {
+                                    Ok(_sig) => {
+                                        if !keystore.verify(&leader_for_view, &_sig, &partial_hsh) {
+                                            block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid signature"))).unwrap();
+                                            continue;
+                                        }
+                                    },
+                                    Err(_) => {
+                                        block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid signature"))).unwrap();
+                                        continue;
+                                    }
+                                }
+
+                                // Verify QCs
+                                let mut all_qcs_valid = true;
+                                for qc in &block.qc {
+                                    if !verify_qc(&keystore, qc) {
+                                        all_qcs_valid = false;
+                                        break;
+                                    }
+                                }
+                                if !all_qcs_valid {
+                                    block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid QC"))).unwrap();
+                                    continue;
+                                }
+                            } else {
+                                if block.qc.len() > 0 {
+                                    block_tx.send(Err(Error::new(ErrorKind::InvalidData, "QC without signed block"))).unwrap();
+                                    continue;
+                                }
+                            }
                             block_tx.send(Ok(CachedBlock::new(block, block_ser, hsh))).unwrap();
                         },
                         Err(_) => {
@@ -215,8 +283,9 @@ impl CryptoService {
             let (tx, rx) = channel(2048);
             self.cmd_txs.push(tx);
             let key_store = self.keystore.clone();
+            let config = self.config.clone();
             self.handles.spawn(async move {
-                Self::worker(key_store, rx, i).await;
+                Self::worker(key_store, config, rx, i).await;
             });
         }
     }
@@ -307,7 +376,7 @@ impl CryptoServiceConnector {
         let mut fork_future = Vec::with_capacity(part.len());
         for e in part.drain(..) {
             let (tx, rx) = oneshot::channel();
-            self.dispatch(CryptoServiceCommand::VerifyBlockSer(e.serialized_body.clone(), tx)).await;
+            self.dispatch(CryptoServiceCommand::VerifyBlockSer(e.serialized_body, tx)).await;
             fork_future.push(Some(rx));
         }
         MultipartFork {

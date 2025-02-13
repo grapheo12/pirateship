@@ -423,7 +423,7 @@ where
                 break;
             }
 
-            resp_tx.send(resp).await;
+            let _ = resp_tx.send(resp).await;
 
             
         }

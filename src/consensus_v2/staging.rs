@@ -609,13 +609,14 @@ impl Staging {
         // Fast path: All votes rule
         let new_bci_fast_path = if incoming_qc.sig.len() >= self.byzantine_fast_path_threshold() {
             incoming_qc.n  
+            // old_bci
         } else {
             old_bci
         };
 
         // Slow path: 2-hop rule
         let new_bci_slow_path = self.pending_blocks.iter().rev()
-            .filter(|b| b.block.block.n <= incoming_qc.n) // Th blocks pointed by this QC (and all its ancestors)
+            .filter(|b| b.block.block.n <= incoming_qc.n) // The blocks pointed by this QC (and all its ancestors)
             .map(|b| b.block.block.qc.iter().map(|qc| qc.n)) // Collect all the QCs in those blocks
             .flatten()
             .max().unwrap_or(old_bci); // All such qc.n must be byz committed, so new_bci = max(all such qc.n)

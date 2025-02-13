@@ -165,10 +165,10 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
             &config.rpc_config.allowed_keylist_path,
             &config.rpc_config.signing_priv_key_path,
         );
-        let keystore = AtomicKeyStore::new(key_store);
-        let mut crypto = CryptoService::new(CRYPTO_NUM_TASKS, keystore.clone());
-        crypto.run();
         let config = AtomicConfig::new(config);
+        let keystore = AtomicKeyStore::new(key_store);
+        let mut crypto = CryptoService::new(CRYPTO_NUM_TASKS, keystore.clone(), config.clone());
+        crypto.run();
         let storage_config = &config.get().consensus_config.log_storage_config;
         let mut storage = match storage_config {
             rocksdb_config @ crate::config::StorageConfig::RocksDB(_) => {

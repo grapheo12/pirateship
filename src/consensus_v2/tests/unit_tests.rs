@@ -123,7 +123,7 @@ async fn _test_batch_proposal(config: Config, batch_proposer_rx: Receiver<TxWith
     let config = AtomicConfig::new(config);
     let keystore = AtomicKeyStore::new(key_store);
     println!("num tasks: {}", TEST_CRYPTO_NUM_TASKS);
-    let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone());
+    let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone(), config.clone());
     crypto.run();
 
     let (block_maker_tx, mut block_maker_rx) = make_channel(_chan_depth);
@@ -196,7 +196,7 @@ async fn _test_block_sequencer(config: Config, batch_proposer_rx: Receiver<TxWit
     let keystore = AtomicKeyStore::new(key_store);
     println!("num tasks: {}", TEST_CRYPTO_NUM_TASKS);
 
-    let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone());
+    let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone(), config.clone());
     crypto.run();
 
     let (block_maker_tx, block_maker_rx) = make_channel(_chan_depth);
@@ -304,7 +304,7 @@ async fn _test_block_broadcaster(config: Config, batch_proposer_rx: Receiver<TxW
 
     let config = AtomicConfig::new(config);
     let keystore = AtomicKeyStore::new(key_store);
-    let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone());
+    let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone(), config.clone());
     crypto.run();
 
     let client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
@@ -454,7 +454,7 @@ async fn _test_staging(config: Config, batch_proposer_rx: Receiver<TxWithAckChan
 
     let config = AtomicConfig::new(config);
     let keystore = AtomicKeyStore::new(key_store);
-    let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone());
+    let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone(), config.clone());
     crypto.run();
 
     let client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
@@ -639,7 +639,7 @@ async fn _test_null_app(config: Config, batch_proposer_rx: Receiver<TxWithAckCha
 
     let config = AtomicConfig::new(config);
     let keystore = AtomicKeyStore::new(key_store);
-    let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone());
+    let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone(), config.clone());
     crypto.run();
 
     let client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);

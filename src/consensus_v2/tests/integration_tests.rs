@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::process::exit;
 use std::time::{Duration, Instant};
 
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use core_affinity::CoreId;
 use log::{error, info};
 use prost::Message;
+use tokio::signal;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -228,7 +230,7 @@ async fn _test_client_reply(config: Config, batch_proposer_rx: Receiver<TxWithAc
 
     let config = AtomicConfig::new(config);
     let keystore = AtomicKeyStore::new(key_store);
-    let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone());
+    let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone(), config.clone());
     crypto.run();
 
     let client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
