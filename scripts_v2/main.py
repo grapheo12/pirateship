@@ -1,4 +1,5 @@
 import multiprocessing
+from time import sleep
 import tomli
 import click
 from click_default_group import DefaultGroup
@@ -42,13 +43,16 @@ See config.toml for a sample TOML config format.
 ```
 """
 
-def run_local(cmds: list, hide=True):
+def run_local(cmds: list, hide=True, asynchronous=False):
     results = []
     for cmd in cmds:
-        res = invoke.run(cmd, hide=hide)
-        results.append(res.stdout.strip())
+        res = invoke.run(cmd, hide=hide, asynchronous=asynchronous)
+        results.append(res)
 
-    return results
+    if not asynchronous:
+        return [res.stdout.strip() for res in results]
+    else:
+        return [res.join().stdout.strip() for res in results]
 
 
 @dataclass
@@ -96,6 +100,18 @@ def copy_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
     # # run_local([
     # #     f"scp -i {ssh_key} -r {src} {ssh_user}@{host.public_ip}:{dest}"
     # # ])
+
+def copy_file_from_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
+    conn = Connection(
+        host=host.public_ip,
+        user=ssh_user,
+        connect_kwargs={
+            "key_filename": ssh_key
+        }
+    )
+
+    conn.get(src, local=dest, preserve_mode=True)
+
 
 def copy_dir_from_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
     conn = Connection(
@@ -307,38 +323,21 @@ class Deployment:
 
 
     def copy_all_to_remote_public_ip(self):
-        # Make one file for all of workdir
-        # run_local([
-        #     f"zip -r {self.workdir}.zip {self.workdir}"
-        # ])
+        # Use rsync to copy the entire directory to all nodes
+        print(f"Copying {self.workdir} to {len(self.nodelist)} nodes")
 
-        # basename = f"{os.path.basename(self.workdir)}.zip"
-
-
-        # print(f"Copying {basename} to all nodes and unzipping")
         for node in self.nodelist:
-            print(f"Copying to {node.name}")
-            copy_remote_public_ip(f"{self.workdir}", f"/home/{self.ssh_user}/", self.ssh_user, self.ssh_key, node)
-            # print(f"Unzipping {basename} in {node.name}")
-            # run_remote_public_ip([f"unzip /home/{self.ssh_user}/{basename}"], self.ssh_user, self.ssh_key, node)
-        # # Transfer the zip file to all nodes
-        # pool = multiprocessing.Pool(processes=len(self.nodelist))
-        # pool.starmap(copy_remote_public_ip, [
-        #     (f"{self.workdir}.zip", f"/home/{self.ssh_user}/{basename}", self.ssh_user, self.ssh_key, node)
-        #     for node in self.nodelist
-        # ])
-        # pool.close()
-        # pool.join()
+            run_remote_public_ip([
+                f"mkdir -p {self.workdir}",
+            ], self.ssh_user, self.ssh_key, node)
 
-        # print(f"Unzipping {basename} in all nodes")
-        # # Unzip the file in all nodes
-        # pool = multiprocessing.Pool(processes=len(self.nodelist))
-        # pool.starmap(run_remote_public_ip, [
-        #     ([f"unzip /home/{self.ssh_user}/{basename}"], self.ssh_user, self.ssh_key, node)
-        #     for node in self.nodelist
-        # ])
-        # pool.close()
-        # pool.join()
+        res = run_local([
+            f"rsync -avz -e 'ssh -o StrictHostKeyChecking=no -i {self.ssh_key}' {self.workdir} {self.ssh_user}@{node.public_ip}:~/{self.workdir}/"
+            for node in self.nodelist
+        ], hide=True, asynchronous=True)
+
+        for (i, node) in enumerate(self.nodelist):
+            print("Copied to", node.name, "Output (truncated):\n", "\n".join(res[i].split("\n")[-2:]))
 
 
 
@@ -678,9 +677,13 @@ class Experiment:
             f"cd {remote_repo} && {self.build_command}"
         ]
         run_remote_public_ip(cmds, self.dev_ssh_user, self.dev_ssh_key, self.dev_vm, hide=False)
+        sleep(0.5)
+
+        TARGET_BINARIES = ["client", "controller", "server", "net-perf"]
 
         # Copy the target/release to build directory
-        copy_dir_from_remote_public_ip(f"{remote_repo}/target/release", os.path.join(self.local_workdir, "build"), self.dev_ssh_user, self.dev_ssh_key, self.dev_vm)
+        for bin in TARGET_BINARIES:
+            copy_file_from_remote_public_ip(f"{remote_repo}/target/release/{bin}", os.path.join(self.local_workdir, "build", bin), self.dev_ssh_user, self.dev_ssh_key, self.dev_vm)
 
 
     def deploy(self, deployment: Deployment):
@@ -920,7 +923,11 @@ def run_command(config, workdir, command):
         # Get deployment from the config if the pickle file doesn't exist
         deployment, _, _ = parse_config(config, workdir)
 
+    print(f"Running command on {len(deployment.nodelist)} nodes")
+    
+
     for node in deployment.nodelist:
+        print(f"Running command on {node.name}")
         run_remote_public_ip([command], deployment.ssh_user, deployment.ssh_key, node, hide=False)
 
 
@@ -973,6 +980,11 @@ def deploy_experiments(config, workdir):
 @click.option(
     "-d", "--workdir", required=True,
     type=click.Path(file_okay=False, resolve_path=True)
+)
+@click.option(
+    "-n", "--name", required=False,
+    type=str,
+    default=None
 )
 def run_experiments(config, workdir):
     # Try to get deployment from the pickle file
