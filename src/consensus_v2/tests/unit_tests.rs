@@ -79,7 +79,7 @@ async fn load(batch_proposer_tx: Sender<TxWithAckChanTag>, req_per_sec: f64) {
 
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
 
-        let ack_chan_with_tag: MsgAckChanWithTag = (tx, tag as u64);
+        let ack_chan_with_tag: MsgAckChanWithTag = (tx, tag as u64, "client".to_string());
 
         batch_proposer_tx.send((Some(transaction.clone()), ack_chan_with_tag)).await.unwrap();
 
@@ -102,7 +102,7 @@ async fn client_runner(batch_proposer_tx: Sender<TxWithAckChanTag>, num_clients:
 
     let __tx = batch_proposer_tx.clone();
     tokio::spawn(async move {
-        __tx.send((None, (tokio::sync::mpsc::channel(1).0, 0))).await.unwrap();
+        __tx.send((None, (tokio::sync::mpsc::channel(1).0, 0, "client".to_string()))).await.unwrap();
         // This is just so we don't drop the channel prematurely.
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;

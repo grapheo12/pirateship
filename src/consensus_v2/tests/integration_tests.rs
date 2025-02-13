@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use core_affinity::CoreId;
 use log::{error, info};
+use prost::Message;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -16,6 +18,8 @@ use crate::consensus_v2::client_reply::ClientReplyHandler;
 use crate::consensus_v2::engines::null_app::NullApp;
 use crate::consensus_v2::staging::Staging;
 use crate::crypto::{AtomicKeyStore, CryptoService, KeyStore};
+use crate::proto::client::proto_client_reply::Reply;
+use crate::proto::client::ProtoClientReply;
 use crate::rpc::client::Client;
 use crate::utils::channel::make_channel;
 use crate::utils::{RocksDBStorageEngine, StorageService};
@@ -28,7 +32,7 @@ const NUM_CLIENTS: usize = 100;
 const NUM_CONCURRENT_REQUESTS: usize = 100;
 const TEST_CRYPTO_NUM_TASKS: usize = 3;
 
-async fn load_close_loop(batch_proposer_tx: Sender<TxWithAckChanTag>, client_id: usize) -> (Duration, usize) {
+async fn load_close_loop(batch_proposer_tx: Sender<TxWithAckChanTag>, client_id: usize) -> (Duration, usize, Duration, usize) {
     let start = Instant::now();
     let transaction = ProtoTransaction {
         on_receive: None,
@@ -42,13 +46,19 @@ async fn load_close_loop(batch_proposer_tx: Sender<TxWithAckChanTag>, client_id:
         is_reconfiguration: false,
     };
 
+    let client_name = format!("client{}", client_id);
+
     let mut num_tx = 0;
     tokio::time::sleep(Duration::from_millis(10)).await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(NUM_CONCURRENT_REQUESTS);
     let mut latencies_total = Duration::from_micros(0);
     let mut latencies_total_num = 0;
+    let mut byz_latencies_total = Duration::from_micros(0);
+    let mut byz_latencies_total_num = 0;
 
     let tout = Duration::from_secs(1);
+
+    let mut byz_latencies = HashMap::<u64, Instant>::new();
     
     'main: while start.elapsed() < RUNTIME {
         let mut _start_times = Vec::new();
@@ -57,12 +67,13 @@ async fn load_close_loop(batch_proposer_tx: Sender<TxWithAckChanTag>, client_id:
                 break 'main;
             }
 
-            let ack_chan_with_tag: MsgAckChanWithTag = (tx.clone(), num_tx);
+            let ack_chan_with_tag: MsgAckChanWithTag = (tx.clone(), num_tx, client_name.clone());
     
             let res = timeout(tout, batch_proposer_tx.send((Some(transaction.clone()), ack_chan_with_tag))).await;
             match res {
                 Ok(Ok(_)) => {
                     _start_times.push(Instant::now());
+                    byz_latencies.insert(num_tx, Instant::now());
                 },
                 Ok(Err(_)) => {
                     break 'main;
@@ -71,6 +82,7 @@ async fn load_close_loop(batch_proposer_tx: Sender<TxWithAckChanTag>, client_id:
                     continue;
                 }
             }
+            num_tx += 1;
         }
         let mut total_replies = 0;
         while total_replies < NUM_CONCURRENT_REQUESTS {
@@ -83,17 +95,40 @@ async fn load_close_loop(batch_proposer_tx: Sender<TxWithAckChanTag>, client_id:
                 continue;
             }
 
-            num_tx += replies.len() as u64;
-            for _reply in replies {
+            // num_tx += replies.len() as u64;
+            for _reply in &replies {
                 let latency = _start_times[total_replies].elapsed();
                 latencies_total += latency;
                 total_replies += 1;
                 latencies_total_num += 1;
             }
+
+            for reply in &replies {
+                let (msg, _) = reply;
+                let sz = msg.as_ref().1;
+                let resp = ProtoClientReply::decode(&msg.as_ref().0.as_slice()[..sz]).unwrap();
+                if let Some(Reply::Receipt(receipt)) = resp.reply {
+                    for byz_resp in &receipt.byz_responses {
+                        let start_time = byz_latencies.remove(&byz_resp.client_tag);
+                        match start_time {
+                            Some(start_time) => {
+                                let latency = start_time.elapsed();
+                                byz_latencies_total += latency;
+                                byz_latencies_total_num += 1;
+                            },
+                            None => {
+                                error!("Client {} Byzantine response without a corresponding request: {} {:?}", client_id, byz_resp.client_tag, byz_latencies);
+                            }
+                        }
+                    }
+                }
+            }
+
+
         }
     }
 
-    (latencies_total, latencies_total_num)
+    (latencies_total, latencies_total_num, byz_latencies_total, byz_latencies_total_num)
 
 
 }
@@ -160,13 +195,20 @@ async fn client_runner(batch_proposer_tx: Sender<TxWithAckChanTag>, num_clients:
     let mut latencies_total = Duration::from_micros(0);
     let mut latencies_total_num = 0;
 
+    let mut byz_latencies_total = Duration::from_micros(0);
+    let mut byz_latencies_total_num = 0;
+
     for handle in handles {
-        let (latencies, total) = handle.await.unwrap();
+        let (latencies, total, byz_latencies, byz_total) = handle.await.unwrap();
         latencies_total += latencies;
         latencies_total_num += total;
+
+        byz_latencies_total += byz_latencies;
+        byz_latencies_total_num += byz_total;
     }
 
-    println!("Average latency: {} us", latencies_total.div_f64(latencies_total_num as f64).as_micros());
+    println!("Average crash commit latency: {} us", latencies_total.div_f64(latencies_total_num as f64).as_micros());
+    println!("Average byzantine commit latency: {} us", byz_latencies_total.div_f64(byz_latencies_total_num as f64).as_micros());
 }
 
 

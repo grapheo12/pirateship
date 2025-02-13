@@ -11,7 +11,7 @@ use super::app::AppCommand;
 
 pub type RawBatch = Vec<ProtoTransaction>;
 
-pub type MsgAckChanWithTag = (MsgAckChan, u64);
+pub type MsgAckChanWithTag = (MsgAckChan, u64 /* client tag */, String /* client name */);
 pub type TxWithAckChanTag = (Option<ProtoTransaction>, MsgAckChanWithTag);
 
 pub struct BatchProposer {

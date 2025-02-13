@@ -17,6 +17,7 @@ message ProtoClientRequest {
 message ProtoByzResponse {
     uint64 block_n = 1;
     uint64 tx_n = 2;
+    uint64 client_tag = 3;
     // bytes req_digest = 3;
 }
 

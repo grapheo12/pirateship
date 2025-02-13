@@ -5,7 +5,7 @@ use log::{info, warn};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{CachedBlock, HashType, DIGEST_LENGTH}, proto::execution::{ProtoTransaction, ProtoTransactionResult}, utils::channel::{Receiver, Sender}};
+use crate::{config::AtomicConfig, crypto::{CachedBlock, HashType, DIGEST_LENGTH}, proto::{client::ProtoByzResponse, execution::{ProtoTransaction, ProtoTransactionResult}}, utils::channel::{Receiver, Sender}};
 
 use super::{client_reply::ClientReplyCommand, timer::ResettableTimer};
 
@@ -22,7 +22,7 @@ pub trait AppEngine {
 
     fn new(config: AtomicConfig) -> Self;
     fn handle_crash_commit(&mut self, blocks: Vec<CachedBlock>) -> Vec<Vec<ProtoTransactionResult>>;
-    fn handle_byz_commit(&mut self, blocks: Vec<CachedBlock>) -> Vec<Vec<ProtoTransactionResult>>;
+    fn handle_byz_commit(&mut self, blocks: Vec<CachedBlock>) -> Vec<Vec<ProtoByzResponse>>;
     fn handle_rollback(&mut self, new_last_block: u64);
     fn handle_unlogged_request(&mut self, request: ProtoTransaction) -> ProtoTransactionResult;
     fn get_current_state(&self) -> Self::State;

@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
 
-use crate::{consensus_v2::app::AppEngine, proto::execution::{ProtoTransactionOpResult, ProtoTransactionPhase, ProtoTransactionResult}};
+use crate::{consensus_v2::app::AppEngine, proto::{client::ProtoByzResponse, execution::{ProtoTransactionOpResult, ProtoTransactionPhase, ProtoTransactionResult}}};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NullApp;
@@ -26,15 +26,13 @@ impl AppEngine  for NullApp {
         }).collect()
     }
 
-    fn handle_byz_commit(&mut self, blocks: Vec<crate::crypto::CachedBlock>) -> Vec<Vec<crate::proto::execution::ProtoTransactionResult>> {
+    fn handle_byz_commit(&mut self, blocks: Vec<crate::crypto::CachedBlock>) -> Vec<Vec<crate::proto::client::ProtoByzResponse>> {
         blocks.iter().map(|block| {
-            block.block.tx_list.iter().map(|tx| {
-                ProtoTransactionResult {
-                    result: tx.on_crash_commit.as_ref().unwrap_or(&ProtoTransactionPhase::default())
-                        .ops.iter().map(|_| ProtoTransactionOpResult {
-                            success: true,
-                            values: vec![],
-                        }).collect(),
+            block.block.tx_list.iter().enumerate().map(|(tx_n, tx)| {
+                ProtoByzResponse {
+                    block_n: block.block.n,
+                    tx_n: tx_n as u64,
+                    client_tag: 0,          // This will be filled in by the client_reply_handler
                 }
             }).collect()
         }).collect()

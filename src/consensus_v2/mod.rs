@@ -116,7 +116,7 @@ impl ServerContextType for PinnedConsensusServerContext {
             },
             crate::proto::rpc::proto_payload::Message::ClientRequest(proto_client_request) => {
                 let client_tag = proto_client_request.client_tag;
-                self.batch_proposal_tx.send((proto_client_request.tx, (ack_chan, client_tag))).await
+                self.batch_proposal_tx.send((proto_client_request.tx, (ack_chan, client_tag, sender))).await
                     .expect("Channel send error");
 
                 return Ok(RespType::Resp);
