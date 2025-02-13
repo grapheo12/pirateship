@@ -30,7 +30,7 @@ pub struct ClientReplyHandler {
     byz_commit_reply_buf: HashMap<HashType, (u64, Vec<ProtoTransactionResult>)>,
 
     reply_processors: JoinSet<()>,
-    reply_processor_queue: (flume::Sender<ReplyProcessorCommand>, flume::Receiver<ReplyProcessorCommand>),
+    reply_processor_queue: (async_channel::Sender<ReplyProcessorCommand>, async_channel::Receiver<ReplyProcessorCommand>),
 }
 
 impl ClientReplyHandler {
@@ -48,7 +48,7 @@ impl ClientReplyHandler {
             crash_commit_reply_buf: HashMap::new(),
             byz_commit_reply_buf: HashMap::new(),
             reply_processors: JoinSet::new(),
-            reply_processor_queue: flume::bounded(_chan_depth),
+            reply_processor_queue: async_channel::bounded(_chan_depth),
         }
     }
 
@@ -57,7 +57,7 @@ impl ClientReplyHandler {
         for _ in 0..20 {
             let rx = client_reply_handler.reply_processor_queue.1.clone();
             client_reply_handler.reply_processors.spawn(async move {
-                while let Ok(cmd) = rx.recv_async().await {
+                while let Ok(cmd) = rx.recv().await {
                     match cmd {
                         ReplyProcessorCommand::CrashCommit(block_n, tx_n, hsh, reply, (reply_chan, client_tag)) => {
                             let reply = ProtoClientReply {
@@ -127,7 +127,7 @@ impl ClientReplyHandler {
     async fn do_crash_commit_reply(&mut self, reply_sender_vec: Vec<MsgAckChanWithTag>, hash: HashType, n: u64, reply_vec: Vec<ProtoTransactionResult>) {
         assert_eq!(reply_sender_vec.len(), reply_vec.len());
         for (tx_n, ((reply_chan, client_tag), reply)) in reply_sender_vec.into_iter().zip(reply_vec.into_iter()).enumerate() {
-            self.reply_processor_queue.0.send_async(ReplyProcessorCommand::CrashCommit(n, tx_n as u64, hash.clone(), reply, (reply_chan, client_tag))).await.unwrap();
+            self.reply_processor_queue.0.send(ReplyProcessorCommand::CrashCommit(n, tx_n as u64, hash.clone(), reply, (reply_chan, client_tag))).await.unwrap();
         }
     }
 

@@ -29,16 +29,21 @@ pub mod channel {
         }
     }
 
-    mod channel_flume {
-        #[derive(Clone)]
-        pub struct AsyncSenderWrapper<T>(flume::Sender<T>);
+    mod channel_async {
+        pub struct AsyncSenderWrapper<T>(async_channel::Sender<T>);
+
+        impl<T> Clone for AsyncSenderWrapper<T> {
+            fn clone(&self) -> Self {
+                Self(self.0.clone())
+            }
+        }
 
         #[derive(Clone)]
-        pub struct AsyncReceiverWrapper<T>(flume::Receiver<T>);
+        pub struct AsyncReceiverWrapper<T>(async_channel::Receiver<T>);
 
         impl<T> AsyncReceiverWrapper<T> {
-            pub async fn recv(&mut self) -> Option<T> {
-                match self.0.recv_async().await {
+            pub async fn recv(&self) -> Option<T> {
+                match self.0.recv().await {
                     Ok(e) => Some(e),
                     Err(_) => None,
                 }
@@ -46,8 +51,8 @@ pub mod channel {
         }
 
         impl <T> AsyncSenderWrapper<T> {
-            pub async fn send(&mut self, e: T) -> Result<(), flume::SendError<T>> {
-                self.0.send_async(e).await
+            pub async fn send(&self, e: T) -> Result<(), async_channel::SendError<T>> {
+                self.0.send(e).await
             }
         }
 
@@ -56,7 +61,7 @@ pub mod channel {
         pub type Receiver<T> = AsyncReceiverWrapper<T>;
     
         pub fn make_channel<T>(buffer: usize) -> (Sender<T>, Receiver<T>) {
-            let (tx, rx) = flume::bounded(buffer);
+            let (tx, rx) = async_channel::bounded(buffer);
             (AsyncSenderWrapper(tx), AsyncReceiverWrapper(rx))
         }
     }
@@ -82,6 +87,6 @@ pub mod channel {
         }
     }
 
-    pub use channel_tokio::*;
+    pub use channel_async::*;
 
 }

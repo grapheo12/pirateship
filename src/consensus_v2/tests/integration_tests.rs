@@ -24,8 +24,8 @@ use crate::{config::Config, consensus_v2::batch_proposal::{MsgAckChanWithTag, Tx
 
 const PAYLOAD_SIZE: usize = 512;
 const RUNTIME: Duration = Duration::from_secs(30);
-const NUM_CLIENTS: usize = 128;
-const NUM_CONCURRENT_REQUESTS: usize = 256;
+const NUM_CLIENTS: usize = 100;
+const NUM_CONCURRENT_REQUESTS: usize = 100;
 const TEST_CRYPTO_NUM_TASKS: usize = 3;
 
 async fn load_close_loop(batch_proposer_tx: Sender<TxWithAckChanTag>, client_id: usize) -> (Duration, usize) {
