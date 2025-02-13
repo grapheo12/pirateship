@@ -253,6 +253,8 @@ resource "azurerm_linux_virtual_machine" "sevpool_vm" {
 
 #   delete_os_disk_on_termination    = true
 #   delete_data_disks_on_termination = true
+  # priority = "Spot"
+  # eviction_policy = "Deallocate"
 
   os_disk {
     name                 = "sevpool_disk${count.index}"
@@ -297,6 +299,8 @@ resource "azurerm_linux_virtual_machine" "tdxpool_vm" {
 
 #   delete_os_disk_on_termination    = true
 #   delete_data_disks_on_termination = true
+  # priority = "Spot"
+  # eviction_policy = "Deallocate"
 
   os_disk {
     name                 = "tdxpool_disk${count.index}"
@@ -341,6 +345,8 @@ resource "azurerm_linux_virtual_machine" "clientpool_vm" {
 
 #   delete_os_disk_on_termination    = true
 #   delete_data_disks_on_termination = true
+  # priority = "Spot"
+  # eviction_policy = "Deallocate"
 
   os_disk {
     name                 = "clientpool_disk${count.index}"
@@ -380,6 +386,8 @@ resource "azurerm_linux_virtual_machine" "nonteepool_vm" {
 
 #   delete_os_disk_on_termination    = true
 #   delete_data_disks_on_termination = true
+  # priority = "Spot"
+  # eviction_policy = "Deallocate"
 
   os_disk {
     name                 = "nonteepool_disk${count.index}"
