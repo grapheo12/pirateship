@@ -332,7 +332,7 @@ class Deployment:
             ], self.ssh_user, self.ssh_key, node)
 
         res = run_local([
-            f"rsync -avz -e 'ssh -o StrictHostKeyChecking=no -i {self.ssh_key}' {self.workdir} {self.ssh_user}@{node.public_ip}:~/{self.workdir}/"
+            f"rsync -avz -e 'ssh -o StrictHostKeyChecking=no -i {self.ssh_key}' {self.workdir}/* {self.ssh_user}@{node.public_ip}:~/{self.workdir}/"
             for node in self.nodelist
         ], hide=True, asynchronous=True)
 
@@ -758,16 +758,54 @@ class Experiment:
         self.local_workdir = workdir
 
         # Hard dependency on Linux style paths
-        self.remote_workdir = f"/home/{deployment.ssh_user}/experiments/{self.name}"
+        self.remote_workdir = f"/home/{deployment.ssh_user}/{deployment.workdir}/experiments/{self.name}"
 
         # Clone repo in remote and build
         self.remote_build()
+
+        # Save myself (again)
+        with open(os.path.join(workdir, "experiment.pkl"), "wb") as f:
+            pickle.dump(self, f)
+
+        # Save myself in text (again)
+        with open(os.path.join(workdir, "experiment.txt"), "w") as f:
+            pprint(self, f)
 
 
     def run(self):
         if self.done():
             return # May arise if this experiment is brought back from the dead
         self.__done__ = False
+
+        # Find which repeats have logs copied to local machine.
+        # I will not check for integrity of the log dir.
+        # If the log dir is not empty, I will assume the logs are complete.
+        # If that is not the case, delete the logs manually.
+        maybe_incomplete_repeats = []
+        for i in range(self.repeats):
+            dirname = os.path.join(self.local_workdir, "logs", str(i))
+            print("Checking locally:", dirname)
+            # Does this dir have any files?
+            if len(os.listdir(dirname)) > 0:
+                print(f"Skipping repeat {i} for experiment {self.name}")
+                continue
+            maybe_incomplete_repeats.append(i)
+
+        # Does the remote workdir have the logs?
+        need_to_run_repeats = []
+        for i in maybe_incomplete_repeats:
+            dirname = os.path.join(self.remote_workdir, "logs", str(i))
+            print("Checking remotely:", dirname)
+            res = run_remote_public_ip([
+                f"ls {dirname}"
+            ], self.dev_ssh_user, self.dev_ssh_key, self.dev_vm, hide=True)[0]
+            if len(res) == 0:
+                need_to_run_repeats.append(i)
+            else:
+                print(f"Logs for repeat {i} already exist in remote")
+
+        print("Need to run repeats:", need_to_run_repeats)
+            
         
 
 
@@ -1041,7 +1079,7 @@ def deploy_experiments(config, workdir):
     type=str,
     default=None
 )
-def run_experiments(config, workdir):
+def run_experiments(config, workdir, name):
     # Try to get deployment from the pickle file
     pickle_path = os.path.join(workdir, "deployment", "deployment.pkl")
     with open(pickle_path, "rb") as f:
