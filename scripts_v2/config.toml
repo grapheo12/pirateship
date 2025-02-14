@@ -108,7 +108,7 @@ max_backlog_batch_size = 1000
 [[experiments]]
 name = "test"
 repeats = 1
-num_nodes = 5
+num_nodes = 49
 node_distribution = "uniform"  # "sev_only", "tdx_only", "nontee_only", "wan_1", "wan_2", "wan_3"
 build_command = "make"
 git_hash = "73cb5ae2bfa2e2eb03124f821834637c6de63eb8" # v0.2-beta tag
