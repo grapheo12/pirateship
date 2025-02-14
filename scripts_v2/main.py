@@ -518,8 +518,9 @@ class Experiment:
     def create_directory(self, workdir):
         build_dir = os.path.join(workdir, "build")
         config_dir = os.path.join(workdir, "configs")
+        log_dir_base = os.path.join(workdir, "logs")
         log_dirs = [
-            os.path.join(workdir, "logs", str(i))
+            os.path.join(log_dir_base, str(i))
             for i in range(self.repeats)
         ]
 
@@ -528,7 +529,7 @@ class Experiment:
             for d in [build_dir] + [config_dir] + log_dirs
         ])
 
-        return build_dir, config_dir, log_dirs
+        return build_dir, config_dir, log_dir_base, log_dirs
 
     def tag_source(self, workdir):
         if self.git_hash_override is None:
@@ -563,7 +564,7 @@ class Experiment:
         }
         
 
-    def generate_configs(self, deployment: Deployment, config_dir):
+    def generate_configs(self, deployment: Deployment, config_dir, log_dir):
         # If config_dir is not empty, assume the configs have already been generated
         if len(os.listdir(config_dir)) > 0:
             print("Skipping config generation for experiment", self.name)
@@ -613,7 +614,7 @@ class Experiment:
             config = deepcopy(self.base_node_config)
             config["net_config"]["name"] = name
             config["net_config"]["addr"] = listen_addr
-            config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"./{name}-db"
+            config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"{log_dir}/{name}-db"
 
 
             node_configs[name] = config
@@ -637,6 +638,44 @@ class Experiment:
 
             with open(os.path.join(config_dir, f"{k}_config.json"), "w") as f:
                 json.dump(v, f, indent=4)
+
+        num_clients_per_vm = [self.num_clients // len(client_vms) for _ in range(len(client_vms))]
+        num_clients_per_vm[-1] += (self.num_clients - sum(num_clients_per_vm))
+
+        for client_num in range(len(client_vms)):
+            config = deepcopy(self.base_client_config)
+            client = "client" + str(client_num + 1)
+            config["net_config"]["name"] = client
+            config["net_config"]["nodes"] = deepcopy(nodes)
+
+            tls_cert_path, tls_key_path, tls_root_ca_cert_path,\
+            allowed_keylist_path, signing_priv_key_path = crypto_info[client]
+
+            config["net_config"]["tls_root_ca_cert_path"] = tls_root_ca_cert_path
+            config["rpc_config"] = {"signing_priv_key_path": signing_priv_key_path}
+
+            config["workload_config"]["num_clients"] = num_clients_per_vm[client_num]
+
+            with open(os.path.join(config_dir, f"{client}_config.json"), "w") as f:
+                json.dump(config, f, indent=4)
+
+        # Controller config
+        config = deepcopy(self.base_client_config)
+        name = "controller"
+        config["net_config"]["name"] = name
+        config["net_config"]["nodes"] = deepcopy(nodes)
+
+        tls_cert_path, tls_key_path, tls_root_ca_cert_path,\
+        allowed_keylist_path, signing_priv_key_path = crypto_info[name]
+
+        config["net_config"]["tls_root_ca_cert_path"] = tls_root_ca_cert_path
+        config["rpc_config"] = {"signing_priv_key_path": signing_priv_key_path}
+
+        config["workload_config"]["num_clients"] = 1
+
+        with open(os.path.join(config_dir, f"{name}_config.json"), "w") as f:
+            json.dump(config, f, indent=4)
+
 
 
     def tag_experiment(self, workdir):
@@ -665,17 +704,33 @@ class Experiment:
         except Exception as e:
             print("Failed to clone repo. It may already exist. Continuing...")
 
+        cmds = [
+            f"git checkout main",       # Move out of DETACHED HEAD state
+            f"git fetch --all && git pull --all"
+        ]
+        try:
+            run_remote_public_ip(cmds, self.dev_ssh_user, self.dev_ssh_key, self.dev_vm)
+        except Exception as e:
+            print("Failed to pull repo. Continuing...")
+
+
         # Copy the diff patch to the remote
         copy_remote_public_ip(os.path.join(self.local_workdir, "diff.patch"), f"{remote_repo}/diff.patch", self.dev_ssh_user, self.dev_ssh_key, self.dev_vm)
 
+        # Setup git env
+        cmd = []
+
         # Checkout the git hash and apply the diff 
-        # Then build       
         cmds = [
             f"cd {remote_repo} && git reset --hard",
             f"cd {remote_repo} && git checkout {git_hash}",
             f"cd {remote_repo} && git apply --allow-empty --reject --whitespace=fix diff.patch",
-            f"cd {remote_repo} && {self.build_command}"
         ]
+        
+        # Then build       
+        cmds.append(
+            f"cd {remote_repo} && {self.build_command}"
+        )
         run_remote_public_ip(cmds, self.dev_ssh_user, self.dev_ssh_key, self.dev_vm, hide=False)
         sleep(0.5)
 
@@ -693,10 +748,10 @@ class Experiment:
 
         # Create the necessary directories
         workdir = os.path.join(deployment.workdir, "experiments", self.name)
-        build_dir, config_dir, log_dirs = self.create_directory(workdir)
+        build_dir, config_dir, log_dir_base, log_dirs = self.create_directory(workdir)
         self.tag_source(workdir)
         self.tag_experiment(workdir)
-        self.generate_configs(deployment, config_dir)
+        self.generate_configs(deployment, config_dir, log_dir_base)
         self.dev_vm = deployment.dev_vm
         self.dev_ssh_user = deployment.ssh_user
         self.dev_ssh_key = deployment.ssh_key
@@ -832,10 +887,10 @@ def all(config, workdir):
         experiment.run()
 
 
-    for result in results:
-        result.output()
+    # for result in results:
+    #     result.output()
 
-    deployment.teardown()
+    # deployment.teardown()
 
 
 @main.command()
