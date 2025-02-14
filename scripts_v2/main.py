@@ -535,7 +535,7 @@ class Experiment:
         if self.git_hash_override is None:
             git_hash, patch = run_local([
                 "git rev-parse HEAD",
-                "git diff"
+                "git diff --binary --no-prefix"
             ])
         else:
             git_hash = self.git_hash_override
@@ -731,7 +731,13 @@ class Experiment:
         cmds.append(
             f"cd {remote_repo} && {self.build_command}"
         )
-        run_remote_public_ip(cmds, self.dev_ssh_user, self.dev_ssh_key, self.dev_vm, hide=False)
+
+        try:
+            run_remote_public_ip(cmds, self.dev_ssh_user, self.dev_ssh_key, self.dev_vm, hide=False)
+        except Exception as e:
+            print("Failed to build:", e)
+            print("\033[91mTry committing the changes and pushing to the remote repo\033[0m")
+            exit(1)
         sleep(0.5)
 
         TARGET_BINARIES = ["client", "controller", "server", "net-perf"]
@@ -805,6 +811,8 @@ class Experiment:
                 print(f"Logs for repeat {i} already exist in remote")
 
         print("Need to run repeats:", need_to_run_repeats)
+
+
             
         
 
