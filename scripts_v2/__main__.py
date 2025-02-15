@@ -325,8 +325,11 @@ def run_command(config, workdir, command):
 
     for node in deployment.nodelist:
         print(f"Running command on {node.name}")
-        run_remote_public_ip([command], deployment.ssh_user,
-                             deployment.ssh_key, node, hide=False)
+        try:
+            run_remote_public_ip([command], deployment.ssh_user,
+                                deployment.ssh_key, node, hide=False)
+        except Exception as e:
+            pass
 
 
 @main.command()
@@ -361,10 +364,25 @@ def deploy_experiments(config, workdir):
         deployment = pickle.load(f)
         assert isinstance(deployment, Deployment)
 
-    _, experiments, _ = parse_config(config, workdir=workdir)
+    # Try to get experiments from the pickle file
+    experiments = []
+    for root, _, files in os.walk(os.path.join(workdir, "experiments")):
+        for f in files:
+            if f == "experiment.pkl":
+                with open(os.path.join(root, f), "rb") as f:
+                    experiment = pickle.load(f)
+                    assert isinstance(experiment, Experiment)
+                    experiments.append(experiment)
+
+    if len(experiments) == 0:
+        _, experiments, _ = parse_config(config, workdir=workdir)
 
     for experiment in experiments:
-        experiment.deploy(deployment)
+        try:
+            experiment.deploy(deployment)
+        except Exception as e:
+            print(f"Error deploying {experiment.name}. Continuing anyway: {e}")
+
 
     # Copy over the entire directory to all nodes
     deployment.copy_all_to_remote_public_ip()

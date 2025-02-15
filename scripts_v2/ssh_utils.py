@@ -39,8 +39,13 @@ def run_remote_public_ip(cmds: list, ssh_user, ssh_key, host: Node, hide=True):
         }
     )
     for cmd in cmds:
-        res = conn.run(cmd, hide=hide, pty=True)
-        results.append(res.stdout.strip())
+        try:
+            res = conn.run(cmd, hide=hide, pty=True)
+            results.append(res.stdout.strip())
+        except Exception as e:
+            results.append(str(e))
+
+    conn.close()
 
     return results
 
@@ -60,6 +65,8 @@ def copy_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
 
     conn.put(src, remote=dest)
 
+    conn.close()
+
 
 
 def copy_file_from_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
@@ -75,6 +82,8 @@ def copy_file_from_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
     )
 
     conn.get(src, local=dest, preserve_mode=True)
+
+    conn.close()
 
 
 def copy_dir_from_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
@@ -96,3 +105,5 @@ def copy_dir_from_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
     for fname in fnames:
         print(fname, _dest)
         conn.get(fname, local=_dest, preserve_mode=False)
+
+    conn.close()
