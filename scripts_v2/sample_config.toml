@@ -121,7 +121,8 @@ num_clients = [10]
 
 
 [[results]]
-plotter = "tput_latency_client_sweep"
+name = "tput_latency_client_sweep"
+plotter = "tput_latency_sweep"
 ramp_up = 30
 ramp_down = 30
 legends = ["pirateship+byz", "pbft+onlybyz"]

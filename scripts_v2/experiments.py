@@ -17,6 +17,8 @@ DEFAULT_CA_NAME = "Pft"
 @dataclass
 class Experiment:
     name: str
+    group_name: str
+    seq_num: int
     repeats: int
     duration: int
     num_nodes: int

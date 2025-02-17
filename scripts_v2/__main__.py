@@ -8,7 +8,6 @@ import click
 from click_default_group import DefaultGroup
 import invoke
 from fabric import Connection
-from fabric.runners import Result
 from pprint import pprint
 import os.path
 from dataclasses import dataclass
@@ -102,27 +101,7 @@ def flatten_sweeping_params(e):
     return ret
 
 
-def print_dummy(experiments, **kwargs):
-    pprint(experiments)
-    print(kwargs)
-
-
-@dataclass
-class Result:
-    plotter_func: Callable
-    experiments: list
-    kwargs: dict
-
-    def __init__(self, fn_name, experiments, kwargs):
-        self.plotter_func = print_dummy  # TODO: Port plotting functions
-        self.experiments = experiments[:]
-        self.kwargs = deepcopy(kwargs)
-
-    def output(self):
-        self.plotter_func(self.experiments, **self.kwargs)
-
-
-def parse_config(path, workdir=None):
+def parse_config(path, workdir=None, existing_experiments=None):
     with open(path, "rb") as f:
         toml_dict = tomli.load(f)
 
@@ -153,6 +132,8 @@ def parse_config(path, workdir=None):
                 _e = nested_override(e, params)
                 experiments.append(Experiment(
                     os.path.join(_e['name'], str(i)),
+                    _e['name'], # Group name
+                    i, # Seq num
                     int(_e["repeats"]),
                     int(_e["duration"]),
                     int(_e["num_nodes"]),
@@ -168,6 +149,8 @@ def parse_config(path, workdir=None):
         else:
             experiments.append(Experiment(
                 e["name"],
+                e["name"],  # Group name
+                i, # Seq num
                 int(e["repeats"]),
                 int(e["duration"]),
                 int(e["num_nodes"]),
@@ -182,11 +165,14 @@ def parse_config(path, workdir=None):
             ))
 
     results = []
+    if existing_experiments is not None:
+        experiments = existing_experiments
     for r in toml_dict["results"]:
         args = deepcopy(r)
         del args["plotter"]
+
         results.append(
-            Result(r["plotter"], experiments, args)
+            Result(r["name"], workdir, r["plotter"], experiments, args)
         )
 
     return (deployment, experiments, results)
@@ -548,6 +534,46 @@ def clean_dev(config, workdir):
 
     deployment.clean_dev_vm()
 
+
+@main.command()
+@click.option(
+    "-c", "--config", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
+    "-d", "--workdir", required=True,
+    type=click.Path(file_okay=False, resolve_path=True)
+)
+def results(config, workdir):
+    # Try to get deployment from the pickle file
+    pickle_path = os.path.join(workdir, "deployment", "deployment.pkl")
+    with open(pickle_path, "rb") as f:
+        deployment = pickle.load(f)
+        assert isinstance(deployment, Deployment)
+
+    # Find all experiments pickle files recursively in workdir/experiments
+    experiments = []
+    for root, _, files in os.walk(os.path.join(workdir, "experiments")):
+        for f in files:
+            if f == "experiment.pkl":
+                with open(os.path.join(root, f), "rb") as f:
+                    experiment = pickle.load(f)
+                    assert isinstance(experiment, Experiment)
+                    experiments.append(experiment)
+
+    script_lines = []
+    for experiment in experiments:
+        _script = experiment.run_plan()
+        script_lines.extend(_script)
+
+    if len(script_lines) > 0:
+        deployment.run_job_in_dev_vm(script_lines)
+
+    deployment.sync_local_to_dev_vm()
+
+    _, _, results = parse_config(config, workdir=workdir, existing_experiments=experiments)
+    for result in results:
+        result.output()
 
 if __name__ == "__main__":
     main()
