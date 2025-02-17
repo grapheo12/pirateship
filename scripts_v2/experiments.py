@@ -8,7 +8,7 @@ import pickle
 from collections import defaultdict
 import json
 from time import sleep
-from typing import List
+from typing import List, Tuple
 import os
 
 
@@ -342,8 +342,35 @@ sleep 1
                 f.write(_script + "\n\n")
 
 
+    def bins_already_exist(self):
+        TARGET_BINARIES = ["client", "controller", "server", "net-perf"]
+        remote_repo = f"/home/{self.dev_ssh_user}/repo"
 
-    def deploy(self, deployment: Deployment):
+        res = run_remote_public_ip([
+            f"ls {remote_repo}/target/release"
+        ], self.dev_ssh_user, self.dev_ssh_key, self.dev_vm, hide=True)
+
+        return all([bin in res[0] for bin in TARGET_BINARIES])
+    
+
+    def get_build_details(self) -> Tuple[str, str]:
+        '''
+        Get the git hash and the diff patch and build command
+        '''
+        with open(os.path.join(self.local_workdir, "git_hash.txt"), "r") as f:
+            git_hash = f.read().strip()
+        with open(os.path.join(self.local_workdir, "diff.patch"), "r") as f:
+            diff = f.read().strip()
+        
+        return git_hash, diff, self.build_command
+
+
+    def deploy(self, deployment: Deployment, last_git_hash="", last_git_diff="", last_build_command=""):
+        '''
+        Generate necessary config
+        Git checkout and apply diff, then build (if necessary), remotely.
+        Copy back the binaries.
+        '''
         if self.done():
             print("Experiment already done")
             return
@@ -363,7 +390,10 @@ sleep 1
         self.remote_workdir = f"/home/{deployment.ssh_user}/{deployment.workdir}/experiments/{self.name}"
 
         # Clone repo in remote and build
-        self.remote_build()
+        git_hash, git_diff, build_cmd = self.get_build_details()
+        use_cached_build = git_hash == last_git_hash and git_diff == last_git_diff and build_cmd == last_build_command
+        if not(use_cached_build and self.bins_already_exist()):
+            self.remote_build()
 
         # Generate the shell script to run the experiment
         self.generate_arbiter_script()
