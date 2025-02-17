@@ -240,9 +240,13 @@ def all(config, workdir):
         _lines = experiment.run_plan()
         script_lines.extend(_lines)
 
-    deployment.run_job_in_dev_vm(script_lines)
+    if len(script_lines) > 0:
+        deployment.run_job_in_dev_vm(script_lines)
 
     deployment.sync_local_to_dev_vm()
+
+    for experiment in experiments:
+        experiment.save_if_done()
 
     # for result in results:
     #     result.output()
@@ -450,9 +454,13 @@ def run_experiments(config, workdir, name):
         _script = experiment.run_plan()
         script_lines.extend(_script)
 
-    deployment.run_job_in_dev_vm(script_lines)
+    if len(script_lines) > 0:
+        deployment.run_job_in_dev_vm(script_lines)
 
     deployment.sync_local_to_dev_vm()
+
+    for experiment in experiments:
+        experiment.save_if_done()
 
 
 @main.command()

@@ -217,6 +217,15 @@ class Experiment:
         with open(os.path.join(workdir, "experiment.pkl"), "wb") as f:
             pickle.dump(self, f)
 
+    def copy_back_build_files(self):
+        remote_repo = f"/home/{self.dev_ssh_user}/repo"
+        TARGET_BINARIES = ["client", "controller", "server", "net-perf"]
+
+        # Copy the target/release to build directory
+        for bin in TARGET_BINARIES:
+            copy_file_from_remote_public_ip(f"{remote_repo}/target/release/{bin}", os.path.join(self.local_workdir, "build", bin), self.dev_ssh_user, self.dev_ssh_key, self.dev_vm)
+
+
 
     def remote_build(self):
         # If the local build dir is not empty, we assume the build has already been done
@@ -272,12 +281,9 @@ class Experiment:
             exit(1)
         sleep(0.5)
 
-        TARGET_BINARIES = ["client", "controller", "server", "net-perf"]
+        self.copy_back_build_files()
 
-        # Copy the target/release to build directory
-        for bin in TARGET_BINARIES:
-            copy_file_from_remote_public_ip(f"{remote_repo}/target/release/{bin}", os.path.join(self.local_workdir, "build", bin), self.dev_ssh_user, self.dev_ssh_key, self.dev_vm)
-
+        
 
     def generate_arbiter_script(self):
 
@@ -394,6 +400,8 @@ sleep 1
         use_cached_build = git_hash == last_git_hash and git_diff == last_git_diff and build_cmd == last_build_command
         if not(use_cached_build and self.bins_already_exist()):
             self.remote_build()
+        else:
+            self.copy_back_build_files()
 
         # Generate the shell script to run the experiment
         self.generate_arbiter_script()
@@ -409,7 +417,7 @@ sleep 1
 
     def run_plan(self) -> List[str]:
         if self.done():
-            return # May arise if this experiment is brought back from the dead
+            return [] # May arise if this experiment is brought back from the dead
         self.__done__ = False
 
         # Find which repeats have logs copied to local machine.
@@ -444,3 +452,19 @@ sleep 1
         script_lines = [f"sh {self.remote_workdir}/arbiter_{i}.sh" for i in need_to_run_repeats]
 
         return script_lines
+    
+
+    def save_if_done(self):
+        # Check if all the logs are present
+        for i in range(self.repeats):
+            dirname = os.path.join(self.local_workdir, "logs", str(i))
+            if len(os.listdir(dirname)) == 0:
+                print(f"Logs for repeat {i} are missing. Experiment {self.name} is not done.")
+                return
+
+        self.__done__ = True
+        with open(os.path.join(self.local_workdir, "experiment.pkl"), "wb") as f:
+            pickle.dump(self, f)
+        print("Experiment", self.name, "is done.")
+
+
