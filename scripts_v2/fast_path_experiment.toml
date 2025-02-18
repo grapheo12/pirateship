@@ -79,7 +79,7 @@ name = "tput_latency_client_sweep"
 plotter = "tput_latency_sweep"
 ramp_up = 30
 ramp_down = 30
-output = "lan_experiment.pdf"
+output = "fast_path_experiment.pdf"
 
 [results.legends]
 # Experiment group to legend mapping

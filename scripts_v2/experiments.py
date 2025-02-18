@@ -419,7 +419,7 @@ sleep 1
 
     def run_plan(self) -> Tuple[List[str], int]:
         if self.done():
-            return [] # May arise if this experiment is brought back from the dead
+            return [], 0 # May arise if this experiment is brought back from the dead
         self.__done__ = False
 
         # Find which repeats have logs copied to local machine.
