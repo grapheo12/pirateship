@@ -687,6 +687,11 @@ class Result:
         output = self.kwargs.get('output', None)
         self.tput_latency_sweep_plot(plot_dict, output)
 
+    def update_experiments(self, experiments):
+        self.experiments = experiments[:]
+        self.experiment_groups = defaultdict(list)
+        for experiment in self.experiments:
+            self.experiment_groups[experiment.group_name].append(experiment)
 
     def __init__(self, name, workdir, fn_name, experiments, kwargs):
         self.name = name
@@ -695,10 +700,7 @@ class Result:
         os.makedirs(self.workdir, exist_ok=True)
 
         self.plotter_func = getattr(self, fn_name, self.default_output)
-        self.experiments = experiments[:]
-        self.experiment_groups = defaultdict(list)
-        for experiment in self.experiments:
-            self.experiment_groups[experiment.group_name].append(experiment)
+        self.update_experiments(experiments)
         
         self.kwargs = deepcopy(kwargs)
 

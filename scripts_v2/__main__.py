@@ -222,9 +222,13 @@ def all(config, workdir):
     deployment.copy_all_to_remote_public_ip()
 
     script_lines = []
+    force_redo_results = False
     for experiment in experiments:
-        _lines, _ = experiment.run_plan()
+        _lines, available_remotely = experiment.run_plan()
         script_lines.extend(_lines)
+        force_redo_results = force_redo_results or (available_remotely > 0)
+
+    force_redo_results = force_redo_results or (len(script_lines) > 0)
 
     if len(script_lines) > 0:
         deployment.run_job_in_dev_vm(script_lines)
@@ -234,10 +238,15 @@ def all(config, workdir):
     for experiment in experiments:
         experiment.save_if_done()
 
-    # for result in results:
-    #     result.output()
+    for result in results:
+        result.update_experiments(experiments)
+        if force_redo_results:
+            result.kwargs["force_parse"] = True
+            print("Forcing parse")
+            
+        result.output()
 
-    # deployment.teardown()
+    
 
 
 @main.command()
