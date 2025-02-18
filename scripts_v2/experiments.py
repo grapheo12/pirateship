@@ -417,7 +417,7 @@ sleep 1
             pprint(self, f)
 
 
-    def run_plan(self) -> List[str]:
+    def run_plan(self) -> Tuple[List[str], int]:
         if self.done():
             return [] # May arise if this experiment is brought back from the dead
         self.__done__ = False
@@ -438,6 +438,7 @@ sleep 1
 
         # Does the remote workdir have the logs?
         need_to_run_repeats = []
+        available_remotely = 0
         for i in maybe_incomplete_repeats:
             dirname = os.path.join(self.remote_workdir, "logs", str(i))
             print("Checking remotely:", dirname)
@@ -448,12 +449,13 @@ sleep 1
                 need_to_run_repeats.append(i)
             else:
                 print(f"Logs for repeat {i} already exist in remote")
+                available_remotely += 1
 
         print("Need to run repeats:", need_to_run_repeats)
 
         script_lines = [f"sh {self.remote_workdir}/arbiter_{i}.sh" for i in need_to_run_repeats]
 
-        return script_lines
+        return script_lines, available_remotely
     
 
     def save_if_done(self):

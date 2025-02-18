@@ -2,6 +2,7 @@
 from copy import deepcopy
 from dataclasses import dataclass
 import os
+import pickle
 from typing import Callable, Dict, List
 
 from experiments import Experiment
@@ -11,6 +12,7 @@ from dateutil.parser import isoparse
 import datetime
 import numpy as np
 from pprint import pprint
+import matplotlib
 import matplotlib.pyplot as plt
 
 # Log format follows the log4rs config.
@@ -205,7 +207,7 @@ class Result:
         except:
             pass
 
-    def process_experiment(self, experiment, ramp_up, ramp_down, byz) -> Stats:
+    def process_experiment(self, experiment, ramp_up, ramp_down, byz, tput_scale=1000.0, latency_scale=1000.0) -> Stats | None:
         tputs = []
         tputs_unbatched = []
         latencies = []
@@ -219,7 +221,7 @@ class Result:
             self.parse_client_logs(log_dir, client_log_files, ramp_up, ramp_down, latencies, byz=byz)
         print(len(tputs), len(tputs_unbatched), len(latencies))
         if len(latencies) == 0:
-            latencies = [float('inf')]
+            return None
         latency_prob_dist = np.array(latencies)
         latency_prob_dist.sort()
         # latency_prob_dist = latency_prob_dist.clip(latency_prob_dist[0], quantiles(latencies, n=100)[98])
@@ -252,7 +254,7 @@ class Result:
             p75_latency = mean_latency
             p99_latency = mean_latency
 
-        return Stats(
+        ret = Stats(
             mean_tput=np.mean(tputs),
             stdev_tput=stdev_tput,
             mean_tput_unbatched=np.mean(tputs_unbatched),
@@ -268,6 +270,385 @@ class Result:
             stdev_latency=stdev_latency
         )
 
+        for k, v in ret.__dict__.items():
+            if "tput" in k and isinstance(v, float):
+                ret.__dict__[k] /= tput_scale
+            if "latency" in k and isinstance(v, float):
+                ret.__dict__[k] /= latency_scale
+
+        return ret
+
+
+    def tput_latency_sweep_parse(self, ramp_up, ramp_down, legends) -> Dict[str, List[Stats]]:
+        plot_dict = {}
+
+        # Find parsing log files for each group
+        for group_name, experiments in self.experiment_groups.items():
+            print("========", group_name, "========")
+            experiments.sort(key=lambda x: x.seq_num)
+            crash_legend = None
+            byz_legend = None
+            legend = legends.get(group_name, None)
+            if legend is None:
+                print("\x1b[31;1mNo legend found for", group_name, ". Skipping...\x1b[0m")
+                continue
+            if "+byz" in legend:
+                needs_byz = True
+                needs_crash = True
+                names = legend.split("+")
+                _legend = names[0]
+                crash_legend = _legend[:]
+                if len(names) == 2:
+                    byz_legend = _legend[:] + "-byz"
+                else:
+                    byz_legend = names[1]
+            elif "+onlybyz" in legend:
+                needs_byz = True
+                needs_crash = False
+                _legend = legend.replace("+onlybyz", "")
+                byz_legend = _legend[:]
+            else:
+                needs_byz = False
+                needs_crash = True
+                crash_legend = legend[:]
+            
+            if needs_crash:
+                final_stats = []
+
+                for experiment in experiments:
+                    stats = self.process_experiment(experiment, ramp_up, ramp_down, byz=False)
+                    if stats is not None:
+                        final_stats.append(stats)
+                    else:
+                        print("\x1b[31;1mSkipping experiment", experiment.name, "for crash commit\x1b[0m")
+
+                plot_dict[crash_legend] = final_stats
+                
+
+            if needs_byz:
+                final_stats = []
+
+                for experiment in experiments:
+                    stats = self.process_experiment(experiment, ramp_up, ramp_down, byz=True)
+                    if stats is not None:
+                        final_stats.append(stats)
+                    else:
+                        print("\x1b[31;1mSkipping experiment", experiment.name, "for byz commit\x1b[0m")
+
+                plot_dict[byz_legend] = final_stats
+
+        pprint(plot_dict)
+        return plot_dict
+
+
+    def tput_latency_sweep_plot(self, plot_dict: Dict[str, List[Stats]], output: str | None):
+        # Find how many subfigures we need.
+
+        bounding_boxes = {
+            k: [
+                min([stat.mean_tput for stat in v]),    # Xmin
+                max([stat.mean_tput for stat in v]),    # Xmax
+                min([stat.mean_latency for stat in v]), # Ymin
+                max([stat.mean_latency for stat in v]), # Ymax
+            ]
+            for k, v in plot_dict.items()
+        }
+
+
+        # Leave padding around bounding boxes
+        for k, v in bounding_boxes.items():
+            v[0] -= 0.1 * v[0]
+            v[1] += 0.1 * v[1]
+            v[2] -= 0.1 * v[2]
+            v[3] += 0.1 * v[3]
+            bounding_boxes[k] = v
+
+        num_x_axis_breaks = 0
+        num_y_axis_breaks = 0
+
+        x_sorted_box = list(bounding_boxes.items())
+        x_sorted_box.sort(key=lambda x: x[1][0])
+        curr_x_cluster = [x_sorted_box[0]]
+        x_clusters = []
+        for i in range(1, len(x_sorted_box)):
+            last_x_start = x_sorted_box[i-1][1][0]
+            last_x_end = x_sorted_box[i-1][1][1]
+            this_x_start = x_sorted_box[i][1][0]
+            this_x_end = x_sorted_box[i][1][1]
+
+            total_x_range = this_x_end - last_x_start
+            gap = this_x_start - last_x_end
+
+            if this_x_start > last_x_end and gap > 0.2 * total_x_range:
+                # This is a heuristic to determine if we need to break the x-axis
+                num_x_axis_breaks += 1
+                x_clusters.append(deepcopy(curr_x_cluster))
+                curr_x_cluster = [x_sorted_box[i]]
+            else:
+                curr_x_cluster.append(x_sorted_box[i])
+        
+        if len(curr_x_cluster) > 0:
+            x_clusters.append(deepcopy(curr_x_cluster))
+
+        x_ranges = [
+            (min([v[1][0] for v in cluster]), max([v[1][1] for v in cluster]))
+            for cluster in x_clusters
+        ]
+
+
+        y_sorted_box = list(bounding_boxes.items())
+        y_sorted_box.sort(key=lambda x: x[1][2])
+        curr_y_cluster = [y_sorted_box[0]]
+        y_clusters = []
+        for i in range(1, len(y_sorted_box)):
+            last_y_start = y_sorted_box[i-1][1][2]
+            last_y_end = y_sorted_box[i-1][1][3]
+            this_y_start = y_sorted_box[i][1][2]
+            this_y_end = y_sorted_box[i][1][3]
+
+            total_y_range = this_y_end - last_y_start
+            gap = this_y_start - last_y_end
+
+            if this_y_start > last_y_end and gap > 0.2 * total_y_range:
+                # This is a heuristic to determine if we need to break the y-axis
+                num_y_axis_breaks += 1
+                y_clusters.append(deepcopy(curr_y_cluster))
+                curr_y_cluster = [y_sorted_box[i]]
+            else:
+                curr_y_cluster.append(y_sorted_box[i])
+        if len(curr_y_cluster) > 0:
+            y_clusters.append(deepcopy(curr_y_cluster))
+
+        y_ranges = [
+            (min([v[1][2] for v in cluster]), max([v[1][3] for v in cluster]))
+            for cluster in y_clusters
+        ]
+
+        total_x_axes = num_x_axis_breaks + 1
+        total_y_axes = num_y_axis_breaks + 1
+        print(total_x_axes, total_y_axes, x_clusters, y_clusters)
+
+        assert(total_x_axes == len(x_ranges))
+        assert(total_y_axes == len(y_ranges))
+
+        is_1d = total_x_axes == 1 or total_y_axes == 1
+
+        font = self.kwargs.get('font', {
+            'size'   : 65
+        })
+        matplotlib.rc('font', **font)
+        matplotlib.rc("axes.formatter", limits=(-99, 99))
+
+        fig, axes = plt.subplots(
+            total_y_axes, total_x_axes,
+            figsize=(10 * total_x_axes, 6 * total_y_axes),
+            sharex='col', sharey='row',
+        )
+
+
+        fig.subplots_adjust(hspace=0.1, wspace=0.1)
+
+        num_lines = len(plot_dict)
+        colors = self.kwargs.get('colors', ['b', 'g', 'r', 'c', 'm', 'y', 'k'])
+        markers = self.kwargs.get('markers', ['o', 's', 'D', '^', 'v', 'p', 'P', '*', 'X', 'H'])
+        while len(colors) < num_lines:
+            colors += colors
+        while len(markers) < num_lines:
+            markers += markers
+
+        
+        legends_ncols = self.kwargs.get('legends_ncols', len(plot_dict))
+        if legends_ncols > 5:
+            legends_ncols = 5
+
+    
+        for ax in axes:
+            ax.grid()
+            for i, (legend, stat_list) in enumerate(plot_dict.items()):
+                tputs = [stat.mean_tput for stat in stat_list]
+                latencies = [stat.mean_latency for stat in stat_list]
+                ax.plot(tputs, latencies, label=legend, color=colors[i], marker=markers[i], mew=6, ms=12, linewidth=6)
+
+        if is_1d:
+            axes[0].set_xlabel("Throughput (k req/s)")
+            axes[0].set_ylabel("Latency (ms)")
+            axes[0].yaxis.set_label_coords(0.04, 0.5, transform=fig.transFigure)
+            axes[0].xaxis.set_label_coords(0.5, 0.05, transform=fig.transFigure)
+            axes[0].legend(loc='upper center', bbox_to_anchor=(0.5, 1.45), ncol=legends_ncols, fontsize=55, columnspacing=1)
+        else:
+            axes[0, 0].set_xlabel("Throughput (k req/s)")
+            axes[0, 0].set_ylabel("Latency (ms)")
+            axes[0, 0].yaxis.set_label_coords(0.04, 0.5, transform=fig.transFigure)
+            axes[0, 0].xaxis.set_label_coords(0.5, 0.05, transform=fig.transFigure)
+            axes[0, 0].legend(loc='upper center', bbox_to_anchor=(0.5, 1.45), ncol=legends_ncols, fontsize=55, columnspacing=1)
+
+        for ax in axes:
+            ax.spines.bottom.set_visible(False)
+            ax.spines.top.set_visible(False)
+            ax.xaxis.tick_top()
+            ax.xaxis.tick_bottom()
+            ax.tick_params(labeltop=False, labelbottom=False)
+            ax.spines.right.set_visible(False)
+            ax.spines.left.set_visible(False)
+            ax.yaxis.tick_left()
+            ax.yaxis.tick_right()
+            ax.tick_params(labelright=False, labelleft=False)
+
+        # Make bottom spine visible for the last row
+        for x in range(total_x_axes):
+            ycoord = -1
+            if is_1d and total_x_axes > 1:
+                # ----------
+                axes[x].spines.bottom.set_visible(True)
+                axes[x].tick_params(labelbottom=True)
+            elif is_1d:
+                # |
+                # |
+                # |
+                axes[ycoord].spines.bottom.set_visible(True)
+                axes[ycoord].tick_params(labelbottom=True)
+            else:
+                # |||
+                # |||
+                axes[ycoord, x].spines.bottom.set_visible(True)
+                axes[ycoord, x].tick_params(labelbottom=True)
+
+        # Make top spine visible for the first row
+        for x in range(total_x_axes):
+            ycoord = 0
+            if is_1d and total_x_axes > 1:
+                # ----------
+                axes[x].spines.top.set_visible(True)
+                # axes[x].tick_params(labeltop=True)
+            elif is_1d:
+                # |
+                # |
+                # |
+                axes[ycoord].spines.top.set_visible(True)
+                # axes[ycoord].tick_params(labeltop=True)
+            else:
+                # |||
+                # |||
+                axes[ycoord, x].spines.top.set_visible(True)
+                # axes[ycoord, x].tick_params(labeltop=True)
+
+        # Make left spine visible for the first col
+        for y in range(total_y_axes):
+            if is_1d and total_y_axes > 1:
+                # |
+                # |
+                # |
+                axes[y].spines.left.set_visible(True)
+                axes[y].tick_params(labelleft=True)
+            elif is_1d:
+                # ----------
+                axes[0].spines.left.set_visible(True)
+                axes[0].tick_params(labelleft=True)
+            else:
+                # |||
+                # |||
+                axes[y, 0].spines.left.set_visible(True)
+                axes[y, 0].tick_params(labelleft=True)
+
+        # Make right spine visible for the last col
+        for y in range(total_y_axes):
+            xcoord = -1
+            if is_1d and total_y_axes > 1:
+                # |
+                # |
+                # |
+                axes[y].spines.right.set_visible(True)
+                # axes[y].tick_params(labelright=True)
+            elif is_1d:
+                # ----------
+                axes[xcoord].spines.right.set_visible(True)
+                # axes[xcoord].tick_params(labelright=True)
+            else:
+                # |||
+                # |||
+                axes[y, xcoord].spines.right.set_visible(True)
+                # axes[y, xcoord].tick_params(labelright=True)
+
+        
+        d = .5  # proportion of vertical to horizontal extent of the slanted line
+        kwargs = dict(marker=[(-1, -d), (1, d)], markersize=12,
+                    linestyle="none", color='k', mec='k', mew=1, clip_on=False)
+        if is_1d and total_x_axes > 1:
+            # ----------
+            # Put a \ mark on the right of x-axis for all except the last one
+            for x in range(total_x_axes - 1):
+                axes[x].plot([1, 1], [1, 0], transform=axes[x].transAxes, **kwargs)
+            
+            # Put a \ mark on the left of x-axis for all except the first one
+            for x in range(1, total_x_axes):
+                axes[x].plot([0, 0], [1, 0], transform=axes[x].transAxes, **kwargs)
+
+        elif is_1d:
+            # |
+            # |
+            # |
+            # Put a \ mark on the top of y-axis for all except the first one
+            for y in range(1, total_y_axes):
+                axes[y].plot([0, 1], [1, 1], transform=axes[y].transAxes, **kwargs)
+
+            # Put a \ mark on the bottom of y-axis for all except the last one
+            for y in range(total_y_axes - 1):
+                axes[y].plot([0, 1], [0, 0], transform=axes[y].transAxes, **kwargs)
+
+        else:
+            # |||
+            # |||
+            for x in range(total_x_axes):
+                # Put a \ mark on the top of y-axis for all except the first one
+                for y in range(1, total_y_axes):
+                    axes[y, x].plot([0, 1], [1, 1], transform=axes[y, x].transAxes, **kwargs)
+
+                # Put a \ mark on the bottom of y-axis for all except the last one
+                for y in range(total_y_axes - 1):
+                    axes[y, x].plot([0, 1], [0, 0], transform=axes[y, x].transAxes, **kwargs)
+
+            for y in range(total_y_axes):
+                # Put a \ mark on the right of x-axis for all except the last one
+                for x in range(total_x_axes - 1):
+                    axes[x].plot([1, 1], [1, 0], transform=axes[x].transAxes, **kwargs)
+                
+                # Put a \ mark on the left of x-axis for all except the first one
+                for x in range(1, total_x_axes):
+                    axes[x].plot([0, 0], [1, 0], transform=axes[x].transAxes, **kwargs)
+            
+
+
+        for x in range(total_x_axes):
+            for y in range(total_y_axes):
+                xlim = x_ranges[x]
+                ylim = y_ranges[y]
+                ycoord = total_y_axes - y - 1
+                xcoord = x
+
+                if total_x_axes == 1:
+                    axes[ycoord].set_xlim(xlim)
+                    axes[ycoord].set_ylim(ylim)
+                elif total_y_axes == 1:
+                    axes[xcoord].set_xlim(xlim)
+                    axes[xcoord].set_ylim(ylim)
+                else:
+                    axes[ycoord, xcoord].set_xlim(xlim)
+                    axes[ycoord, xcoord].set_ylim(ylim)
+
+
+        plt.gcf().set_size_inches(
+            self.kwargs.get("output_width", 30),
+            self.kwargs.get("output_height", 12)
+        )
+
+        if output is not None:
+            output = os.path.join(self.workdir, output)
+            plt.savefig(output, bbox_inches="tight")
+        else:
+            plt.show()
+
+
+
 
     def tput_latency_sweep(self):
         '''
@@ -279,70 +660,32 @@ class Result:
         Legend guide:
         - <name>: Plot throughput vs latency for crash commit only
         - <name>+byz: Plot byz commit latency separately, new line for <name>-byz
+        - <name_1>+<name_2>+byz: Plot byz commit latency separately with legend <name2>
         - <name>+onlybyz: Plot only byz commit latency.
         '''
 
         # Parse args
         ramp_up = self.kwargs.get('ramp_up', 0)
         ramp_down = self.kwargs.get('ramp_down', 0)
-        legends = self.kwargs.get('legends', [])
-        output = self.kwargs.get('output', 'plot.png')
-        output = os.path.join(self.workdir, output)
-        print(ramp_up, ramp_down, legends, output)
-        assert len(legends) == len(self.experiment_groups)
+        legends = self.kwargs.get('legends', {})
+        force_parse = self.kwargs.get('force_parse', False)
 
-        final_legends = []
-        all_stats = []
+        # Try retreive plot dict from cache
+        try:
+            if force_parse:
+                raise Exception("Force parse")
 
+            with open(os.path.join(self.workdir, "plot_dict.pkl"), "rb") as f:
+                plot_dict = pickle.load(f)
+        except:
+            plot_dict = self.tput_latency_sweep_parse(ramp_up, ramp_down, legends)
 
-        # Find parsing log files for each group
-        for experiment_group_num, (group_name, experiments) in enumerate(self.experiment_groups.items()):
-            print("========", group_name, "========")
-            experiments.sort(key=lambda x: x.seq_num)
-            final_stats = []
-            if "+byz" in legends[experiment_group_num]:
-                needs_byz = True
-                needs_crash = True
-                _legend = legends[experiment_group_num].replace("+byz", "")
-                final_legends.extend([_legend, f"{_legend}-byz"])
-            elif "+onlybyz" in legends[experiment_group_num]:
-                needs_byz = True
-                needs_crash = False
-                _legend = legends[experiment_group_num].replace("+onlybyz", "")
-                final_legends.append(_legend)
-            else:
-                needs_byz = False
-                needs_crash = True
-                final_legends.append(legends[experiment_group_num])
-            
-            if needs_crash:
-                for experiment in experiments:
-                    stats = self.process_experiment(experiment, ramp_up, ramp_down, byz=False)
-                    final_stats.append(stats)
+        # Save plot dict
+        with open(os.path.join(self.workdir, "plot_dict.pkl"), "wb") as f:
+            pickle.dump(plot_dict, f)
 
-
-            if needs_byz:
-                for experiment in experiments:
-                    stats = self.process_experiment(experiment, ramp_up, ramp_down, byz=True)
-                    final_stats.append(stats)
-
-            all_stats.append(final_stats)
-
-        
-        plot_dict = {x[0]: x[1] for x in zip(final_legends, all_stats)}
-        pprint(plot_dict)
-
-        # Plot
-        for legend, stat_list in plot_dict.items():
-            tputs = [stat.mean_tput for stat in stat_list]
-            latencies = [stat.mean_latency for stat in stat_list]
-            plt.plot(tputs, latencies, label=legend)
-
-        plt.xlabel("Throughput (tx/s)")
-        plt.ylabel("Latency (us)")
-        plt.grid()
-        plt.legend()
-        plt.savefig(output)   
+        output = self.kwargs.get('output', None)
+        self.tput_latency_sweep_plot(plot_dict, output)
 
 
     def __init__(self, name, workdir, fn_name, experiments, kwargs):

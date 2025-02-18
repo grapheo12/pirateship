@@ -223,7 +223,7 @@ def all(config, workdir):
 
     script_lines = []
     for experiment in experiments:
-        _lines = experiment.run_plan()
+        _lines, _ = experiment.run_plan()
         script_lines.extend(_lines)
 
     if len(script_lines) > 0:
@@ -437,7 +437,7 @@ def run_experiments(config, workdir, name):
 
     script_lines = []
     for experiment in experiments:
-        _script = experiment.run_plan()
+        _script, _ = experiment.run_plan()
         script_lines.extend(_script)
 
     if len(script_lines) > 0:
@@ -562,17 +562,26 @@ def results(config, workdir):
                     experiments.append(experiment)
 
     script_lines = []
+    force_redo_results = False
     for experiment in experiments:
-        _script = experiment.run_plan()
+        _script, available_remotely = experiment.run_plan()
         script_lines.extend(_script)
+        force_redo_results = force_redo_results or (available_remotely > 0)
+
+    force_redo_results = force_redo_results or (len(script_lines) > 0)
 
     if len(script_lines) > 0:
         deployment.run_job_in_dev_vm(script_lines)
 
     deployment.sync_local_to_dev_vm()
 
+
     _, _, results = parse_config(config, workdir=workdir, existing_experiments=experiments)
     for result in results:
+        if force_redo_results:
+            result.kwargs["force_parse"] = True
+            print("Forcing parse")
+            
         result.output()
 
 if __name__ == "__main__":

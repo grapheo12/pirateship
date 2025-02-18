@@ -10,6 +10,7 @@ Deprecated==1.2.18
 fabric==3.2.2
 fonttools==4.56.0
 invoke==2.2.0
+joblib==1.4.2
 kiwisolver==1.4.8
 matplotlib==3.10.0
 numpy==2.2.3
@@ -24,6 +25,7 @@ python-dateutil==2.9.0.post0
 pytz==2025.1
 scipy==1.15.1
 six==1.17.0
+threadpoolctl==3.5.0
 tomli==2.2.1
 tqdm==4.67.1
 tzdata==2025.1
