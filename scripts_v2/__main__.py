@@ -26,6 +26,8 @@ from results import *
 import pickle
 import re
 
+from shutil import copytree
+
 
 """
 Each experiment goes through 7 phases:
@@ -130,6 +132,18 @@ def parse_config(path, workdir=None, existing_experiments=None):
             flats = flatten_sweeping_params(e["sweeping_parameters"])
             for i, params in enumerate(flats):
                 _e = nested_override(e, params)
+                if "node_config" in _e:
+                    _node_config = nested_override(
+                        node_config, _e["node_config"])
+                else:
+                    _node_config = node_config
+                
+                if "client_config" in _e:
+                    _client_config = nested_override(
+                        client_config, _e["client_config"])
+                else:
+                    _client_config = client_config
+
                 experiments.append(Experiment(
                     os.path.join(_e['name'], str(i)),
                     _e['name'], # Group name
@@ -138,8 +152,8 @@ def parse_config(path, workdir=None, existing_experiments=None):
                     int(_e["duration"]),
                     int(_e["num_nodes"]),
                     int(_e["num_clients"]),
-                    node_config,
-                    client_config,
+                    _node_config,
+                    _client_config,
                     _e.get("node_distribution", "uniform"),
                     _e.get("build_command", "make"),
                     git_hash_override,
@@ -592,6 +606,38 @@ def results(config, workdir):
             print("Forcing parse")
             
         result.output()
+
+
+@main.command()
+@click.option(
+    "-c", "--config", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
+    "-d", "--workdir", required=True,
+    type=click.Path(file_okay=False, resolve_path=True)
+)
+def reuse_deployment(config, workdir):
+    deployment, _, _ = parse_config(config, workdir=None) # Force create a new directory
+
+    # Copy over the deployment directory from workdir to the new directory
+    new_workdir = deployment.workdir
+    copytree(
+        os.path.join(workdir, "deployment"),
+        os.path.join(new_workdir, "deployment"),
+        dirs_exist_ok=True
+    )
+
+    # Remove the deployment.pkl and txt file
+    os.remove(os.path.join(new_workdir, "deployment", "deployment.pkl"))
+    os.remove(os.path.join(new_workdir, "deployment", "deployment.txt"))
+
+    # Deploy the deployment; this should not trigger anything new if the same deployment config is reused.
+    # Since the state in deployment should tell that the deployment is already done.
+
+    deployment.deploy()
+
+    print("New Working Directory", new_workdir)
 
 if __name__ == "__main__":
     main()
