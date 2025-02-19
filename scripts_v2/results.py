@@ -1,9 +1,10 @@
 
+import collections
 from copy import deepcopy
 from dataclasses import dataclass
 import os
 import pickle
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, OrderedDict
 
 from experiments import Experiment
 from collections import defaultdict
@@ -686,6 +687,101 @@ class Result:
 
         output = self.kwargs.get('output', None)
         self.tput_latency_sweep_plot(plot_dict, output)
+
+
+    def stacked_bar_graph_parse(self, ramp_up, ramp_down, legends) -> OrderedDict[str, List[Stats]]:
+        return collections.OrderedDict(self.tput_latency_sweep_parse(ramp_up, ramp_down, legends))
+    
+    def stacked_bar_graph_plot(self, plot_dict: OrderedDict[str, List[Stats]], output: str | None, xlabels: List[str]):
+        # Assumption: xlabels are in the same order as the subexperiments in each group
+        plot_matrix = np.zeros((len(xlabels), len(plot_dict))) # Rows are xlabels, columns are legends
+        max_tput = 0
+        
+        for i, xlabel in enumerate(xlabels):
+            for j, (legend, stat_list) in enumerate(plot_dict.items()):
+                for k, stat in enumerate(stat_list):
+                    if i == k:
+                        plot_matrix[i, j] = stat.mean_tput
+                        if stat.mean_tput > max_tput:
+                            max_tput = stat.mean_tput
+
+        ylim = max_tput * 1.1
+
+        bar_width = 0.35
+        gap_between_bars = 0.1
+
+        # Stacked bars and then a gap to the right and left
+        block_size = 2 * gap_between_bars + len(plot_dict) * bar_width
+
+        bar_start_pos = np.array([i * block_size for i in range(len(xlabels))])
+        label_pos = [i * block_size + (len(plot_dict) // 2) * bar_width - gap_between_bars for i in range(len(xlabels))]
+
+        font = self.kwargs.get('font', {
+            'size'   : 40
+        })
+        matplotlib.rc('font', **font)
+        matplotlib.rc("axes.formatter", limits=(-99, 99))
+
+
+        fig, ax = plt.subplots(layout="constrained")
+        for i, (legend, stats) in enumerate(plot_dict.items()):
+            rects = ax.bar(
+                bar_start_pos + (gap_between_bars + i * bar_width),
+                plot_matrix[:, i],
+                width=bar_width, label=legend, zorder=3)
+            ax.bar_label(rects, padding=3)
+
+        ax.set_xticks(label_pos, xlabels)
+        plt.ylim(0, ylim)
+        plt.ylabel("Throughput (k req/s)")
+        plt.legend(loc="upper center", ncols=3, bbox_to_anchor=(0.5, 1.1))
+        plt.grid(zorder=0)
+
+        plt.gcf().set_size_inches(
+            self.kwargs.get("output_width", 30),
+            self.kwargs.get("output_height", 12)
+        )
+
+        if output is not None:
+            output = os.path.join(self.workdir, output)
+            plt.savefig(output, bbox_inches="tight")
+        else:
+            plt.show()
+
+
+
+
+
+    def stacked_bar_graph(self):
+        # Parse args
+        ramp_up = self.kwargs.get('ramp_up', 0)
+        ramp_down = self.kwargs.get('ramp_down', 0)
+        legends = self.kwargs.get('legends', {})
+        force_parse = self.kwargs.get('force_parse', False)
+        xlabels = self.kwargs.get('xlabels', [])
+
+        # Number of xlabels must match number of subexperiments for each group.
+        for group_name, experiments in self.experiment_groups.items():
+            if len(xlabels) != len(experiments):
+                print("\x1b[31;1mNumber of xlabels must match number of subexperiments for each group.\x1b[0m")
+                raise Exception("Number of xlabels must match number of subexperiments for each group.")
+
+        # Try retreive plot dict from cache
+        try:
+            if force_parse:
+                raise Exception("Force parse")
+
+            with open(os.path.join(self.workdir, "plot_dict.pkl"), "rb") as f:
+                plot_dict = pickle.load(f)
+        except:
+            plot_dict = self.stacked_bar_graph_parse(ramp_up, ramp_down, legends)
+
+        # Save plot dict
+        with open(os.path.join(self.workdir, "plot_dict.pkl"), "wb") as f:
+            pickle.dump(plot_dict, f)
+
+        output = self.kwargs.get('output', None)
+        self.stacked_bar_graph_plot(plot_dict, output, xlabels)
 
     def update_experiments(self, experiments):
         self.experiments = experiments[:]

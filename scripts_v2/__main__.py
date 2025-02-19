@@ -596,7 +596,7 @@ def results(config, workdir):
     if len(script_lines) > 0:
         deployment.run_job_in_dev_vm(script_lines)
 
-    deployment.sync_local_to_dev_vm()
+    # deployment.sync_local_to_dev_vm()
 
 
     _, _, results = parse_config(config, workdir=workdir, existing_experiments=experiments)
