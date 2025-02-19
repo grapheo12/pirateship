@@ -59,7 +59,7 @@
         "type": "SystemAssigned"
       },
       "properties": {
-        "sku": "Standard",
+        "sku": "Confidential",
         "restartPolicy": "Never",
         "osType": "Linux",
         "ipAddress": {
@@ -117,8 +117,8 @@
               ],
               "resources": {
                 "requests": {
-                  "memoryInGB": 8,
-                  "cpu": 4
+                  "memoryInGB": 2,
+                  "cpu": 2
                 }
               }
             }

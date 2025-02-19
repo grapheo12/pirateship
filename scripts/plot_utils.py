@@ -189,7 +189,6 @@ def parse_log_dir(dir, repeats, num_clients, leader, ramp_up, ramp_down, byz=Fal
                             captures = client_byz_rgx.findall(line)
                         else:
                             captures = client_rgx.findall(line)
-                        # print(captures)
                         if len(captures) == 1:
                             points.append(captures[0])
             except:

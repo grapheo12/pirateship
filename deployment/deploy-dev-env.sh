@@ -23,9 +23,8 @@ pushd $CWD/deployment
 
 echo $CWD
 
-DEV_VM=$(grep clientpool-vm0 nodelist_public.txt | cut -f2)
-DEV_VM=127.0.0.1
-PORT=2222 # TODO: hard coded in deploy-docker.py right now 2222 when using docker localy, 22 otherwise
+DEV_VM=$(grep clientpool-vm0 nodelist_public.txt | cut -d' ' -f2)
+PORT=22 # TODO: hard coded in deploy-docker.py right now 2222 when using docker localy, 22 otherwise
 echo $DEV_VM
 
 DEV_USER=pftadmin

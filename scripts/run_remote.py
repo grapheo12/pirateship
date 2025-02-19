@@ -243,7 +243,6 @@ def kill_nodes_with_net_perf(node_conns: Dict[str, Connection]):
 
 def copy_log(name: str, conn: Connection, repeat_num: int, wd: str):
 
-    print(conn)
     print("Getting From " + f"pft/{wd}/logs/{repeat_num}/{name}.log" )
     print("Copying to " + f"logs/{wd}/{repeat_num}/")
 
@@ -252,10 +251,8 @@ def copy_log(name: str, conn: Connection, repeat_num: int, wd: str):
 
 def copy_logs(node_conns, client_conns, repeat_num, wd, controller_conn=None, controller_total_logs=0):
     invoke.run(f"mkdir -p logs/{wd}/{repeat_num}", hide=True)
-    print(node_conns)
     for node, conn in node_conns.items():
         copy_log(node, conn, repeat_num, wd)
-    print(client_conns)
     for client, conn in client_conns.items():
         copy_log(client, conn, repeat_num, wd)
 
@@ -276,9 +273,6 @@ def run_remote(node_template, client_template, ip_list, identity_file, repeat, s
     gen_config("configs", "cluster", node_template, client_template, ip_list, -1)
     nodes, clients = tag_all_machines(ip_list)
 
-    print(nodes)
-    print(clients)
-    
     print("Creating SSH connections")
     node_conns = {node: Connection(
         host=ip,
@@ -299,7 +293,6 @@ def run_remote(node_template, client_template, ip_list, identity_file, repeat, s
     ) for client, ip in clients.items()}
 
     curr_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    print("Current working directory", curr_time)
 
     print("Copying files")
     create_dirs_and_copy_files(node_conns, client_conns, curr_time, repeat, git_hash)
@@ -309,13 +302,11 @@ def run_remote(node_template, client_template, ip_list, identity_file, repeat, s
 
         print("Running Nodes")
         promises = []
-        print(node_conns)
         promises.extend(run_nodes(node_conns, i, curr_time))
 
         time.sleep(1)
 
         print("Running clients")
-        print(client_conns)
         promises.extend(run_clients(client_conns, i, curr_time))
 
         print("Running experiments for", seconds, "seconds")

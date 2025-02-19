@@ -59,21 +59,14 @@ def main(docker_ssh, deploy_config, deployment_name, registry_name, resource_gro
    # This code assumes that the nodelist.txt format is: 
    # machine_tag (= deployment_name), ip
    with open("nodelist.txt", "r") as nodelist:
-      line =  nodelist.readline()
-      container_tag = line.split()[0]
-      if not local:
-        cu.deleteDeployment(resource_group,container_tag)
-      else:
-         #TODO(natacha): implement
-         print("Not implemented")
-   with open("nodelist_public.txt", "r") as nodelist:
-      line =  nodelist.readline()
-      container_tag = line.split()[0]
-      if not local:
-         cu.deleteDeployment(resource_group,container_tag)
-      else :
-         # TODO(natacha): Implement
-         print("Not implemented")
+      lines =  nodelist.readlines()
+      for line in lines:
+         container_tag = line.split()[0]
+         if not local:
+           cu.deleteDeployment(resource_group,container_tag)
+         else:
+           executeCommand("docker kill " + container_tag)
+           executeCommand("docker rm " + container_tag)
    #TODO(natacha): this step currently mirrors the steps taken
    # in azure-teardown.sh. Should make this more robust and
    # paramaterise file location.

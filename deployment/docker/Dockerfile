@@ -32,10 +32,6 @@ RUN apt-get update && apt-get install -y \
     libprotobuf-dev \ 
     openssh-server 
 
-# Get Rust
- RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
-# Place Rust in PATH
- ENV PATH="/root/.cargo/bin:${PATH}"
 # Install Azure CLI
 RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
 
@@ -66,7 +62,12 @@ EXPOSE 22
 ## assuming that is enough. 3000 is also currently hardcoded. Will need to fix this. 
 EXPOSE 3000-3050
 
-## Start SSH service
-# RUN service ssh start
+# Get Rust
+RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
+# Place Rust in PATH
+ENV PATH = "/home/${USER}/.cargo/bin:${PATH}"
+
+RUN mkdir -p /home/${USER}/testing2
+
 
 CMD ["/usr/sbin/sshd", "-D"]

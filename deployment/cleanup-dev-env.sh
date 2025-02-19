@@ -8,11 +8,10 @@ set -o xtrace
 CWD=$(pwd)
 pushd $CWD/deployment
 
-DEV_VM=$(grep clientpool_vm0 nodelist_public.txt | cut -f 2)
-DEV_VM = 127.0.0.1
+DEV_VM=$(grep clientpool-vm0 nodelist_public.txt | cut -d' ' -f2)
 DEV_USER=pftadmin
-DEV_SSH_KEY=cluster_key.pem
-PORT=2222 # TODO: hard coded in deploy-docker.py right now 2222 when using docker localy, 22 otherwise
+DEV_SSH_KEY=../cluster_key.pem
+PORT=22 # TODO: hard coded in deploy-docker.py right now 2222 when using docker localy, 22 otherwise
 
 popd
 

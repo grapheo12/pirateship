@@ -109,31 +109,24 @@ def run_with_given_client(node_template, client_template, ip_list, identity_file
         # As before, must be in the same order as the order in which containers were launched
         # Note: in local mode, this has to happen in the same order as the order in which
         # containers were launched. ssh_docker_ports are remapped to be 2222 (+i) where i is the container number
-        # p = 0
         node_conns= {}
         for node, ip in nodes.items():
-          # port = 22 if docker_ssh_port == 22 else docker_ssh_port + p
           node_conns[node] = Connection(
             host=ip,
             user="pftadmin", # This dependency comes from terraform
             connect_kwargs={
                 "key_filename": identity_file
             },
-          #  port = port
           )
-        #  p+= 1
         client_conns = {}
         for client, ip in clients.items():
-          # port = 22 if docker_ssh_port == 22 else docker_ssh_port + p
           client_conns[client] = Connection(
             host=ip,
             user="pftadmin", # This dependency comes from terraform
             connect_kwargs={
                 "key_filename": identity_file
             },
-          #  port = port
           )
-         # p+= 1
         print("Copying logs")
         copy_logs(node_conns, client_conns, i, curr_time)
 

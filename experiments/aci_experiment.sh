@@ -5,7 +5,7 @@
 
 set -o xtrace
 
-ALL_CLIENTS="-c 1 -c 2 -c 5"
+ALL_CLIENTS="-c 1 -c 2 -c 3"
 # ALL_CLIENTS="-c 100 -c 200 -c 300 -c 500 -c 700 -c 900 -c 1000 -c 1200 -c 1500 -c 1800 -c 2000 -c 2500"
 #ALL_CLIENTS="-c 500 -c 700"
 # ALL_CLIENTS="-c 10 -c 20 -c 30 -c 40"
@@ -32,7 +32,7 @@ jq '.consensus_config.max_backlog_batch_size = 1000 | .consensus_config.quorum_d
 
 # # Run pirateship
 #make
-$RUN_CMD
+# $RUN_CMD
 
 # Run chained_pbft
 #make chained_pbft_logger
@@ -53,7 +53,7 @@ end_time=$(date -Ins)
 # Plot together
 python3 scripts/plot_time_range_client_sweep.py \
     --path logs --end $end_time --start $start_time \
-    -r 3 -c 3 -l node1 -up 30 -down 30 -o plot.png \
+    -r 1 -c 1 -c 2 -c 3 -l node1 -up 30 -down 30 -o plot.png \
     --legend "pbft+onlybyz"
     # --legend "signed_raft"
     # --legend "pirateship+byz" \
