@@ -333,6 +333,11 @@ class Deployment:
             vm for vm in self.nodelist if "client" in vm.name
         ]
     
+    def get_all_client_vms_in_region(self, loc: int):
+        return [
+            vm for vm in self.get_all_client_vms() if vm.region_id == loc
+        ]
+    
     def get_nodes_with_tee(self, tee):
         return [
             vm for vm in self.get_all_node_vms() if tee in vm.tee_type

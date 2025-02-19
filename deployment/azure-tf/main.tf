@@ -336,7 +336,7 @@ resource "azurerm_linux_virtual_machine" "tdxpool_vm" {
 
 
 resource "azurerm_linux_virtual_machine" "clientpool_vm" {
-  name                  = "clientpool_vm${count.index}"
+  name                  = "clientpool_vm${count.index}_loc${local.clientpool_ids_flattened_[count.index][0]}_id${local.clientpool_ids_flattened_[count.index][1]}"
   count                 = length(local.clientpool_ids_flattened_)
   location              = var.platform_locations[local.clientpool_ids_flattened_[count.index][0]]
   resource_group_name   = azurerm_resource_group.rg.name

@@ -155,6 +155,7 @@ def parse_config(path, workdir=None, existing_experiments=None):
                     _node_config,
                     _client_config,
                     _e.get("node_distribution", "uniform"),
+                    _e.get("client_region", -1),    # -1 means use all clients
                     _e.get("build_command", "make"),
                     git_hash_override,
                     project_home,
@@ -172,6 +173,7 @@ def parse_config(path, workdir=None, existing_experiments=None):
                 node_config,
                 client_config,
                 e.get("node_distribution", "uniform"),
+                e.get("client_region", -1),    # -1 means use all clients
                 e.get("build_command", "make"),
                 git_hash_override,
                 project_home,

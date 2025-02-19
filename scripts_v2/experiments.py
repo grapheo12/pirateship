@@ -26,6 +26,7 @@ class Experiment:
     base_node_config: dict
     base_client_config: dict
     node_distribution: str
+    client_region: int
     build_command: str
     git_hash_override: str
     project_home: str
@@ -148,7 +149,11 @@ class Experiment:
 
             node_configs[name] = config
 
-        client_vms = deployment.get_all_client_vms()
+        if self.client_region == -1:
+            client_vms = deployment.get_all_client_vms()
+        else:
+            client_vms = deployment.get_all_client_vms_in_region(self.client_region)
+
         crypto_info = self.__gen_crypto(config_dir, node_list_for_crypto, len(client_vms))
         
 
