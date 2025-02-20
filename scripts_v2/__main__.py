@@ -165,7 +165,7 @@ def parse_config(path, workdir=None, existing_experiments=None):
             experiments.append(Experiment(
                 e["name"],
                 e["name"],  # Group name
-                i, # Seq num
+                0, # Seq num
                 int(e["repeats"]),
                 int(e["duration"]),
                 int(e["num_nodes"]),

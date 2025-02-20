@@ -4,7 +4,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 import os
 import pickle
-from typing import Callable, Dict, List, OrderedDict
+from typing import Callable, Dict, List, OrderedDict, Tuple
 
 from experiments import Experiment
 from collections import defaultdict
@@ -28,23 +28,28 @@ client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Client Id\: ([0-9]+), Msg Id\: 
 client_byz_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Client Id\: ([0-9]+), Block num\: ([0-9]+), Tx num\: ([0-9]+), Byz Latency\: ([.0-9]+) us")
 
 
-def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, read_points=[[]]):
+def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, read_points=[[]]) -> List:
+    '''
+    Parses given points for throughput information.
+    Skipping points before ramp_up and after ramp_down.
+    Returns the filtered points.
+    '''
     points = [
         (
-            isoparse(a[0]),    # ISO format is used in run_remote
-            int(a[1]),         # fork.last
-            int(a[2]),         # fork.last_qc
-            int(a[3]),         # commit_index
-            int(a[4]),         # byz_commit_index
-            int(a[5]),         # pending_acks
-            int(a[6]),         # pending_qcs
-            int(a[7]),         # num_crash_txs,
-            int(a[8]),         # num_byz_txs,
-            a[9],              # fork.last_hash,
-            int(a[10]),         # total_client_request
-            int(a[11]),        # view
-            a[12] == "true",   # view_is_stable
-            a[13] == "true"    # i_am_leader
+            isoparse(a[0]),    # 0: ISO format is used in run_remote
+            int(a[1]),         # 1: fork.last
+            int(a[2]),         # 2: fork.last_qc
+            int(a[3]),         # 3: commit_index
+            int(a[4]),         # 4: byz_commit_index
+            int(a[5]),         # 5: pending_acks
+            int(a[6]),         # 6: pending_qcs
+            int(a[7]),         # 7: num_crash_txs,
+            int(a[8]),         # 8: num_byz_txs,
+            a[9],              # 9: fork.last_hash,
+            int(a[10]),        # 10: total_client_request
+            int(a[11]),        # 11: view
+            a[12] == "true",   # 12: view_is_stable
+            a[13] == "true"    # 13: i_am_leader
         )
         for a in points
     ]
@@ -91,6 +96,8 @@ def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, 
 
     tputs.append(total_tx / total_runtime)
     tputs_unbatched.append(total_commit / total_runtime)
+
+    return points
 
 
 def process_latencies(points, ramp_up, ramp_down, latencies):
@@ -163,6 +170,14 @@ class Result:
         print(f"Default output method: {self}")
 
     def parse_node_logs(self, log_dir, node_log_names, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False):
+        '''
+        Parse node logs for throughput information.
+        Only uses the first log to get overall consensus throughput.
+        Should there be read operations, uses all logs to get read throughput.
+
+        tputs and tputs_unbatched will be filled.
+        Side-effect is the timeseries of points which will be returned.
+        '''
         points = []
         read_points = []
         with open(os.path.join(log_dir, node_log_names[0]), "r") as f:
@@ -182,9 +197,11 @@ class Result:
             read_points.append(_rp)
 
         try:
-            process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz, read_points)
+            _points = process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz, read_points)
         except:
-            pass
+            _points = []
+
+        return _points
     
 
     def parse_client_logs(self, log_dir, client_log_names, ramp_up, ramp_down, latencies, byz=False):
@@ -769,6 +786,170 @@ class Result:
         else:
             plt.show()
 
+    def crash_byz_tput_timeseries_plot(self, times, crash_commits, byz_commits, events):
+        assert len(times) == len(crash_commits) == len(byz_commits)
+
+        plt.plot(times, crash_commits, label="Crash Commit Throughput")
+        plt.plot(times, byz_commits, label="Byz Commit Throughput")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Throughput (batch/s)")
+
+        plt.yscale("symlog")
+        plt.legend()
+        plt.grid()
+
+        plt.xlim(times[0], times[-1])
+
+        # How low/high can I go?
+        ylim_min = min(min(crash_commits), min(byz_commits))
+        ylim_max = max(max(crash_commits), max(byz_commits))
+
+        # Will use this range for all text boxes for events
+        text_box_locs = list(np.linspace(ylim_min, ylim_max, len(events) + 2)[1:-1])
+        assert len(text_box_locs) == len(events)
+
+
+        line_colors = ['r', 'g', 'b', 'c', 'm', 'y', 'k']
+        text_props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+
+        for i, (event_time, event_description) in enumerate(events):
+            plt.axvline(x=event_time, color=line_colors.pop(0), linestyle="--")
+            plt.text(
+                event_time, text_box_locs[i],
+                event_description, bbox=text_props,
+                horizontalalignment='center',
+                verticalalignment='center'
+            )
+
+        plt.gcf().set_size_inches(
+            self.kwargs.get("output_width", 30),
+            self.kwargs.get("output_height", 12)
+        )
+        
+
+        output = self.kwargs.get('output', None)
+        if output is not None:
+            output = os.path.join(self.workdir, output)
+            plt.savefig(output, bbox_inches="tight")
+        else:
+            plt.show()
+
+
+    def parse_event(self, event) -> Tuple[float, str]:
+        """
+        Use the given pattern in the target node to find the event.
+        Takes the first capture group (assumed timestamp) and finds the seconds elapsed since start.
+        Since there can be clock skew between nodes, it is better to use time relative to start of experiment.
+        with the text description.
+        """
+        description = event.get("description", event.get("name", "Event"))
+
+
+        experiment_start_pattern = re.compile(r"\[INFO\]\[.*\]\[(.*)\]")
+
+        pattern = event.get("pattern", None)
+        if pattern is None:
+            patterns = [re.compile(p) for p in event["patterns"]]
+        else:
+            patterns = [re.compile(pattern)]
+
+        target_node = event["target"]
+        log_path = os.path.join(self.experiments[0].local_workdir, "logs", "0", f"{target_node}.log")
+
+        target_occurrence_num = event.get("occurrence_num", 1)
+        occurrence_num = 0
+        start_time = None
+        with open(log_path, "r") as f:
+            for line in f.readlines():
+                if start_time is None:
+                    # Is this the line with start time?
+                    captures = experiment_start_pattern.findall(line)
+                    if len(captures) > 0:
+                        start_time = isoparse(captures[0])
+
+                for pattern in patterns:
+                    captures = pattern.findall(line)
+                    if len(captures) > 0:
+                        occurrence_num += 1
+                        if occurrence_num == target_occurrence_num:
+                            assert start_time is not None
+                            return ((isoparse(captures[0]) - start_time).total_seconds(), description)
+
+
+    def crash_byz_tput_timeseries(self):
+        # Parse args
+        ramp_up = self.kwargs.get('ramp_up', 0)
+        ramp_down = self.kwargs.get('ramp_down', 0)
+        force_parse = self.kwargs.get('force_parse', False)
+        target_node = self.kwargs.get('target_node', "node1")
+
+        
+
+        # Try to fetch points from cache
+        try:
+            if force_parse:
+                raise Exception("Force parse")
+
+            with open(os.path.join(self.workdir, "points.pkl"), "rb") as f:
+                sampled_points, events = pickle.load(f)
+        except:
+            # Have to parse the logs
+            assert len(self.experiment_groups) == 1, "Only one group is allowed for this plotter"
+            assert len(self.experiment_groups) == 1, "Only one group is allowed for this plotter"
+            events = self.kwargs.get('events', [])
+            events = [
+                self.parse_event(event)
+                for event in events
+            ]
+
+            expr = list(self.experiment_groups.values())[0]
+
+            tputs = []
+            tputs_unbatched = []
+            log_dir = f"{expr[0].local_workdir}/logs/0"
+            points = self.parse_node_logs(
+                log_dir, [f"{target_node}.log"],
+                ramp_up, ramp_down, tputs, tputs_unbatched
+            )
+
+
+            # Change absolute time to time relative to start
+            start_time = points[0][0]
+
+            sample_rate = self.kwargs.get('sample_rate', 10)
+
+            for i in range(len(points)):
+                points[i] = list(points[i])
+                points[i][0] -= start_time
+                points[i][0] = points[i][0].total_seconds()
+
+            sampled_points = []
+            for i in range(sample_rate, len(points), sample_rate):
+                # Instantaneous throughput calculation
+                ci_tput = (points[i][3] - points[i-sample_rate][3]) / (points[i][0] - points[i-sample_rate][0])
+                bci_tput = (points[i][4] - points[i-sample_rate][4]) / (points[i][0] - points[i-sample_rate][0])
+                time_instant = points[i][0] + ramp_up
+                sampled_points.append((time_instant, ci_tput, bci_tput))
+
+            
+
+        # Save the points
+        with open(os.path.join(self.workdir, "points.pkl"), "wb") as f:
+            pickle.dump((sampled_points, events), f)
+
+        times = [p[0] for p in sampled_points]
+        crash_commits = [p[1] for p in sampled_points]
+        byz_commits = [p[2] for p in sampled_points]
+
+        print(times)
+        print(crash_commits)
+        print(byz_commits)
+        print(events)
+
+        self.crash_byz_tput_timeseries_plot(times, crash_commits, byz_commits, events)
+
+
+        
 
 
 
