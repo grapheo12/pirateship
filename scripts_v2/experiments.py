@@ -113,10 +113,8 @@ class Experiment:
             vms = deployment.get_nodes_with_tee("tdx")
         elif self.node_distribution == "nontee_only":
             vms = deployment.get_nodes_with_tee("nontee")
-        elif "wan" in self.node_distribution:
-            vms = deployment.get_wan_setup(self.node_distribution)
         else:
-            raise ValueError(f"Unknown node distribution: {self.node_distribution}")
+            vms = deployment.get_wan_setup(self.node_distribution)
         
         self.binary_mapping = defaultdict(list)
 

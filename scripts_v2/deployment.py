@@ -20,6 +20,37 @@ class Deployment:
     This deployment is specific to "SSH-able" deployments.
     Not suited for Docker/K8s deployments.
     '''
+    def parse_custom_layouts(self):
+        """
+        Custom layout toml format:
+
+        [[deployment_config.custom_layout]]
+        name = "layout1"
+
+        # Order of regions will come from terraform
+        nodes_per_region = [1, 0, 0, 1]
+        """
+        self.custom_layouts = {}
+        if not("custom_layout" in self.raw_config):
+            return
+        
+        custom_layouts = self.raw_config["custom_layout"]
+        assert isinstance(custom_layouts, list)
+
+
+        for layout in custom_layouts:
+            name = layout["name"]
+            nodes_per_region = layout["nodes_per_region"]
+            # clients_per_region = layout["clients_per_region"]
+            assert isinstance(nodes_per_region, list)
+            # assert isinstance(clients_per_region, list)
+
+            self.custom_layouts[name] = {
+                "nodes_per_region": nodes_per_region,
+                # "clients_per_region": clients_per_region
+            }
+
+
     def __init__(self, config, workdir):
         self.mode = config["mode"]
         self.nodelist = []
@@ -36,6 +67,8 @@ class Deployment:
         else:
             self.ssh_key = os.path.join(workdir, "deployment", config["ssh_key"])
         self.node_port_base = int(config["node_port_base"])
+
+        self.parse_custom_layouts()
 
     def find_azure_tf_dir(self):
         search_paths = [
@@ -321,6 +354,10 @@ class Deployment:
         for node in self.nodelist:
             s += f"{node}\n"
 
+        s += "++++ Custom layouts +++++\n"
+        for name, layout in self.custom_layouts.items():
+            s += f"{name}: {layout}\n"
+
         return s
     
     def get_all_node_vms(self):
@@ -343,8 +380,18 @@ class Deployment:
             vm for vm in self.get_all_node_vms() if tee in vm.tee_type
         ]
     
-    def get_wan_setup(self, setup):
-        raise NotImplementedError("WAN setup not implemented yet")
+    def get_wan_setup(self, layout):
+        layout = self.custom_layouts[layout]
+        nodes_per_region = layout["nodes_per_region"]
+        curr_vms_per_region = [0] * len(nodes_per_region)
+        vms = []
+        for node in self.get_all_node_vms():
+            if curr_vms_per_region[node.region_id] < nodes_per_region[node.region_id]:
+                vms.append(node)
+                curr_vms_per_region[node.region_id] += 1
+
+        return vms
+
     
     def wait_till_end(self, num_cmds: int):
         status = ""

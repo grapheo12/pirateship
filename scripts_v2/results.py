@@ -340,136 +340,9 @@ class Result:
 
         pprint(plot_dict)
         return plot_dict
-
-
-    def tput_latency_sweep_plot(self, plot_dict: Dict[str, List[Stats]], output: str | None):
-        # Find how many subfigures we need.
-
-        bounding_boxes = {
-            k: [
-                min([stat.mean_tput for stat in v]),    # Xmin
-                max([stat.mean_tput for stat in v]),    # Xmax
-                min([stat.mean_latency for stat in v]), # Ymin
-                max([stat.mean_latency for stat in v]), # Ymax
-            ]
-            for k, v in plot_dict.items()
-        }
-
-
-        # Leave padding around bounding boxes
-        for k, v in bounding_boxes.items():
-            v[0] -= 0.1 * v[0]
-            v[1] += 0.1 * v[1]
-            v[2] -= 0.1 * v[2]
-            v[3] += 0.1 * v[3]
-            bounding_boxes[k] = v
-
-        num_x_axis_breaks = 0
-        num_y_axis_breaks = 0
-
-        x_sorted_box = list(bounding_boxes.items())
-        x_sorted_box.sort(key=lambda x: x[1][0])
-        curr_x_cluster = [x_sorted_box[0]]
-        x_clusters = []
-        for i in range(1, len(x_sorted_box)):
-            last_x_start = x_sorted_box[i-1][1][0]
-            last_x_end = x_sorted_box[i-1][1][1]
-            this_x_start = x_sorted_box[i][1][0]
-            this_x_end = x_sorted_box[i][1][1]
-
-            total_x_range = this_x_end - last_x_start
-            gap = this_x_start - last_x_end
-
-            if this_x_start > last_x_end and gap > 0.2 * total_x_range:
-                # This is a heuristic to determine if we need to break the x-axis
-                num_x_axis_breaks += 1
-                x_clusters.append(deepcopy(curr_x_cluster))
-                curr_x_cluster = [x_sorted_box[i]]
-            else:
-                curr_x_cluster.append(x_sorted_box[i])
-        
-        if len(curr_x_cluster) > 0:
-            x_clusters.append(deepcopy(curr_x_cluster))
-
-        x_ranges = [
-            (min([v[1][0] for v in cluster]), max([v[1][1] for v in cluster]))
-            for cluster in x_clusters
-        ]
-
-
-        y_sorted_box = list(bounding_boxes.items())
-        y_sorted_box.sort(key=lambda x: x[1][2])
-        curr_y_cluster = [y_sorted_box[0]]
-        y_clusters = []
-        for i in range(1, len(y_sorted_box)):
-            last_y_start = y_sorted_box[i-1][1][2]
-            last_y_end = y_sorted_box[i-1][1][3]
-            this_y_start = y_sorted_box[i][1][2]
-            this_y_end = y_sorted_box[i][1][3]
-
-            total_y_range = this_y_end - last_y_start
-            gap = this_y_start - last_y_end
-
-            if this_y_start > last_y_end and gap > 0.2 * total_y_range:
-                # This is a heuristic to determine if we need to break the y-axis
-                num_y_axis_breaks += 1
-                y_clusters.append(deepcopy(curr_y_cluster))
-                curr_y_cluster = [y_sorted_box[i]]
-            else:
-                curr_y_cluster.append(y_sorted_box[i])
-        if len(curr_y_cluster) > 0:
-            y_clusters.append(deepcopy(curr_y_cluster))
-
-        y_ranges = [
-            (min([v[1][2] for v in cluster]), max([v[1][3] for v in cluster]))
-            for cluster in y_clusters
-        ]
-
-        total_x_axes = num_x_axis_breaks + 1
-        total_y_axes = num_y_axis_breaks + 1
-        print(total_x_axes, total_y_axes, x_clusters, y_clusters)
-
-        assert(total_x_axes == len(x_ranges))
-        assert(total_y_axes == len(y_ranges))
-
-        is_1d = total_x_axes == 1 or total_y_axes == 1
-
-        font = self.kwargs.get('font', {
-            'size'   : 65
-        })
-        matplotlib.rc('font', **font)
-        matplotlib.rc("axes.formatter", limits=(-99, 99))
-
-        fig, axes = plt.subplots(
-            total_y_axes, total_x_axes,
-            figsize=(10 * total_x_axes, 6 * total_y_axes),
-            sharex='col', sharey='row',
-        )
-
-
-        fig.subplots_adjust(hspace=0.1, wspace=0.1)
-
-        num_lines = len(plot_dict)
-        colors = self.kwargs.get('colors', ['b', 'g', 'r', 'c', 'm', 'y', 'k'])
-        markers = self.kwargs.get('markers', ['o', 's', 'D', '^', 'v', 'p', 'P', '*', 'X', 'H'])
-        while len(colors) < num_lines:
-            colors += colors
-        while len(markers) < num_lines:
-            markers += markers
-
-        
-        legends_ncols = self.kwargs.get('legends_ncols', len(plot_dict))
-        if legends_ncols > 5:
-            legends_ncols = 5
-
     
-        for ax in axes:
-            ax.grid()
-            for i, (legend, stat_list) in enumerate(plot_dict.items()):
-                tputs = [stat.mean_tput for stat in stat_list]
-                latencies = [stat.mean_latency for stat in stat_list]
-                ax.plot(tputs, latencies, label=legend, color=colors[i], marker=markers[i], mew=6, ms=12, linewidth=6)
 
+    def tput_latency_prepare_plot(self, fig, axes, x_ranges, y_ranges, is_1d, legends_ncols, total_x_axes, total_y_axes):
         if is_1d:
             axes[0].set_xlabel("Throughput (k req/s)")
             axes[0].set_ylabel("Latency (ms)")
@@ -637,6 +510,154 @@ class Result:
                     axes[ycoord, xcoord].set_ylim(ylim)
 
 
+    def tput_latency_sweep_plot(self, plot_dict: Dict[str, List[Stats]], output: str | None):
+        # Find how many subfigures we need.
+
+        bounding_boxes = {
+            k: [
+                min([stat.mean_tput for stat in v]),    # Xmin
+                max([stat.mean_tput for stat in v]),    # Xmax
+                min([stat.mean_latency for stat in v]), # Ymin
+                max([stat.mean_latency for stat in v]), # Ymax
+            ]
+            for k, v in plot_dict.items()
+        }
+
+
+        # Leave padding around bounding boxes
+        for k, v in bounding_boxes.items():
+            v[0] -= 0.1 * v[0]
+            v[1] += 0.1 * v[1]
+            v[2] -= 0.1 * v[2]
+            v[3] += 0.1 * v[3]
+            bounding_boxes[k] = v
+
+        num_x_axis_breaks = 0
+        num_y_axis_breaks = 0
+
+        GAP_THRESH = 0.05
+
+        x_sorted_box = list(bounding_boxes.items())
+        x_sorted_box.sort(key=lambda x: x[1][0])
+        curr_x_cluster = [x_sorted_box[0]]
+        x_clusters = []
+        for i in range(1, len(x_sorted_box)):
+            last_x_start = x_sorted_box[i-1][1][0]
+            last_x_end = x_sorted_box[i-1][1][1]
+            this_x_start = x_sorted_box[i][1][0]
+            this_x_end = x_sorted_box[i][1][1]
+
+            total_x_range = this_x_end - last_x_start
+            gap = this_x_start - last_x_end
+
+            if this_x_start > last_x_end and gap > GAP_THRESH * total_x_range:
+                # This is a heuristic to determine if we need to break the x-axis
+                num_x_axis_breaks += 1
+                x_clusters.append(deepcopy(curr_x_cluster))
+                curr_x_cluster = [x_sorted_box[i]]
+            else:
+                curr_x_cluster.append(x_sorted_box[i])
+        
+        if len(curr_x_cluster) > 0:
+            x_clusters.append(deepcopy(curr_x_cluster))
+
+        x_ranges = [
+            (min([v[1][0] for v in cluster]), max([v[1][1] for v in cluster]))
+            for cluster in x_clusters
+        ]
+
+
+        y_sorted_box = list(bounding_boxes.items())
+        y_sorted_box.sort(key=lambda x: x[1][2])
+        curr_y_cluster = [y_sorted_box[0]]
+        y_clusters = []
+        for i in range(1, len(y_sorted_box)):
+            last_y_start = y_sorted_box[i-1][1][2]
+            last_y_end = y_sorted_box[i-1][1][3]
+            this_y_start = y_sorted_box[i][1][2]
+            this_y_end = y_sorted_box[i][1][3]
+
+            total_y_range = this_y_end - last_y_start
+            gap = this_y_start - last_y_end
+
+            if this_y_start > last_y_end and gap > GAP_THRESH * total_y_range:
+                # This is a heuristic to determine if we need to break the y-axis
+                num_y_axis_breaks += 1
+                y_clusters.append(deepcopy(curr_y_cluster))
+                curr_y_cluster = [y_sorted_box[i]]
+            else:
+                curr_y_cluster.append(y_sorted_box[i])
+        if len(curr_y_cluster) > 0:
+            y_clusters.append(deepcopy(curr_y_cluster))
+
+        y_ranges = [
+            (min([v[1][2] for v in cluster]), max([v[1][3] for v in cluster]))
+            for cluster in y_clusters
+        ]
+
+        total_x_axes = num_x_axis_breaks + 1
+        total_y_axes = num_y_axis_breaks + 1
+        print(total_x_axes, total_y_axes, x_clusters, y_clusters)
+
+        assert(total_x_axes == len(x_ranges))
+        assert(total_y_axes == len(y_ranges))
+
+        is_1d = total_x_axes == 1 or total_y_axes == 1
+
+        font = self.kwargs.get('font', {
+            'size'   : 65
+        })
+        matplotlib.rc('font', **font)
+        matplotlib.rc("axes.formatter", limits=(-99, 99))
+
+        fig, axes = plt.subplots(
+            total_y_axes, total_x_axes,
+            figsize=(10 * total_x_axes, 6 * total_y_axes),
+            sharex='col', sharey='row',
+        )
+
+        print(total_y_axes, total_x_axes)
+
+
+
+        num_lines = len(plot_dict)
+        colors = self.kwargs.get('colors', ['b', 'g', 'r', 'c', 'm', 'y', 'k'])
+        markers = self.kwargs.get('markers', ['o', 's', 'D', '^', 'v', 'p', 'P', '*', 'X', 'H'])
+        while len(colors) < num_lines:
+            colors += colors
+        while len(markers) < num_lines:
+            markers += markers
+
+        
+        legends_ncols = self.kwargs.get('legends_ncols', len(plot_dict))
+        if legends_ncols > 3:
+            legends_ncols = 3
+
+    
+        try:
+            fig.subplots_adjust(hspace=0.1, wspace=0.1)
+            for ax in axes:
+                ax.grid()
+                for i, (legend, stat_list) in enumerate(plot_dict.items()):
+                    tputs = [stat.mean_tput for stat in stat_list]
+                    latencies = [stat.mean_latency for stat in stat_list]
+                    ax.plot(tputs, latencies, label=legend, color=colors[i], marker=markers[i], mew=6, ms=12, linewidth=6)
+
+            
+            self.tput_latency_prepare_plot(fig, axes, x_ranges, y_ranges, is_1d, legends_ncols, total_x_axes, total_y_axes)
+        except Exception as e:
+            print("Defaulting to normal plot")
+            axes.grid()
+            for i, (legend, stat_list) in enumerate(plot_dict.items()):
+                tputs = [stat.mean_tput for stat in stat_list]
+                latencies = [stat.mean_latency for stat in stat_list]
+                axes.plot(tputs, latencies, label=legend, color=colors[i], marker=markers[i], mew=6, ms=12, linewidth=6)
+
+            plt.xlabel("Throughput (k req/s)")
+            plt.ylabel("Latency (ms)")
+            plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.45), ncol=legends_ncols, fontsize=55, columnspacing=1)
+
+
         plt.gcf().set_size_inches(
             self.kwargs.get("output_width", 30),
             self.kwargs.get("output_height", 12)
@@ -726,8 +747,8 @@ class Result:
         fig, ax = plt.subplots(layout="constrained")
         for i, (legend, stats) in enumerate(plot_dict.items()):
             rects = ax.bar(
-                bar_start_pos + (gap_between_bars + i * bar_width),
-                plot_matrix[:, i],
+                bar_start_pos + (gap_between_bars + i * bar_width), # Where to start the bar
+                plot_matrix[:, i], # Heights of the bars
                 width=bar_width, label=legend, zorder=3)
             ax.bar_label(rects, padding=3)
 
