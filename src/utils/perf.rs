@@ -51,14 +51,23 @@ impl<K: Eq + Hash> PerfCounter<K> {
     }
 
     pub fn register_new_entry(&mut self, entry: K) {
+        #[cfg(feature = "perf")]
         self.entry_starts.insert(entry, Instant::now());
     }
 
     pub fn deregister_entry(&mut self, entry: &K) {
+        #[cfg(feature = "perf")]
         self.entry_starts.remove(entry);
     }
 
+    pub fn deregister_all(&mut self) {
+        #[cfg(feature = "perf")]
+        self.entry_starts.clear();
+    }
+
+
     pub fn new_event(&mut self, event: &str, entry: &K) {
+        #[cfg(feature = "perf")]
         if let Some(entry) = self.entry_starts.get(entry) {
             let elapsed = entry.elapsed();
             let event_stats = self.event_stats.get_mut(event);
@@ -68,18 +77,32 @@ impl<K: Eq + Hash> PerfCounter<K> {
         }
     }
 
+    pub fn new_event_for_all(&mut self, event: &str) {
+        #[cfg(feature = "perf")]
+        for (_entry, start) in self.entry_starts.iter() {
+            let elapsed = start.elapsed();
+            let event_stats = self.event_stats.get_mut(event);
+            if let Some(event_stats) = event_stats {
+                event_stats.add_time(elapsed);
+            }
+        }
+    }
+
     pub fn log_aggregate(&self) {
-        let mut last_event_time = Duration::new(0, 0);
-        for (event, stats) in self.event_stats.iter() {
-            let avg_time = stats.avg_time();
-            
-            info!("[Perf:{}] Event: {}, Avg time: {} us, Avg cumulative time: {} us",
-                self.name,
-                event,
-                avg_time.as_micros() - last_event_time.as_micros(),
-                avg_time.as_micros()
-            );
-            last_event_time = stats.avg_time();
+        #[cfg(feature = "perf")]
+        {
+            let mut last_event_time = Duration::new(0, 0);
+            for (event, stats) in self.event_stats.iter() {
+                let avg_time = stats.avg_time();
+                
+                info!("[Perf:{}] Event: {}, Avg time: {} us, Avg cumulative time: {} us",
+                    self.name,
+                    event,
+                    avg_time.as_micros() - last_event_time.as_micros(),
+                    avg_time.as_micros()
+                );
+                last_event_time = stats.avg_time();
+            }
         }
     }
 }

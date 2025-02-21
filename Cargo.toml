@@ -76,6 +76,8 @@ harness = false
 
 
 [features]
+# Perf counters
+perf = []
 # Protocol specifics
 # Leader change
 round_robin_leader = []
@@ -107,7 +109,7 @@ jolteon = ["round_robin_leader", "always_sign", "view_change", "no_pipeline"]
 chained_pbft = ["round_robin_leader", "always_sign", "view_change"]
 pirateship = ["round_robin_leader", "dynamic_sign", "quorum_diversity", "view_change"]
 
-default = ["pirateship", "app_logger", "storage", "fast_path", "platforms"]
+default = ["pirateship", "app_logger", "storage", "fast_path", "platforms", "perf"]
 # default = ["signed_raft", "app_logger", "storage"]
 # default = ["pirateship", "app_logger", "storage", "evil", "fast_path", "platforms"]
 

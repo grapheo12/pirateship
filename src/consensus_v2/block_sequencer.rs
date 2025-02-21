@@ -1,13 +1,14 @@
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::{pin::Pin, sync::Arc, time::Duration};
 
-use log::{debug, trace, warn};
-use lz4_flex::block;
+use log::{debug, info};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{oneshot, Mutex};
 use crate::crypto::FutureHash;
 use crate::utils::channel::{Sender, Receiver};
 
+use crate::utils::PerfCounter;
 use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{hash, CachedBlock, CryptoServiceConnector, HashType}, proto::consensus::{DefferedSignature, ProtoBlock, ProtoForkValidation, ProtoQuorumCertificate, ProtoTransactionList}};
 
 use super::batch_proposal::{MsgAckChanWithTag, RawBatch};
@@ -43,6 +44,9 @@ pub struct BlockSequencer {
     last_signed_seq_num: u64,
 
     send_buffer: VecDeque<(u64, oneshot::Receiver<CachedBlock>)>,
+
+    perf_counter_signed: RefCell<PerfCounter<u64>>,
+    perf_counter_unsigned: RefCell<PerfCounter<u64>>,
 }
 
 impl BlockSequencer {
@@ -59,6 +63,16 @@ impl BlockSequencer {
         let signature_timer = ResettableTimer::new(
             Duration::from_millis(config.get().consensus_config.signature_max_delay_ms)
         );
+
+        let event_order = vec![
+            "Add QCs",
+            "Create Block",
+            "Send to Client Reply",
+            "Send to Block Broadcaster",
+        ];
+
+        let perf_counter_signed = RefCell::new(PerfCounter::new("BlockSequencerSigned", &event_order));
+        let perf_counter_unsigned = RefCell::new(PerfCounter::new("BlockSequencerUnsigned", &event_order));
 
         Self {
             config,
@@ -78,7 +92,8 @@ impl BlockSequencer {
             force_sign_next_batch: false,
             last_signed_seq_num: 0,
             send_buffer: VecDeque::new(),
-
+            perf_counter_signed,
+            perf_counter_unsigned,
         }
     }
 
@@ -87,9 +102,15 @@ impl BlockSequencer {
         let signature_timer_handle = block_maker.signature_timer.run().await;
         let chan_depth = block_maker.config.get().rpc_config.channel_depth;
 
+
         loop {
             if let Err(_) = block_maker.worker(chan_depth as usize).await {
                 break;
+            }
+
+            if block_maker.seq_num % 1000 == 0 {
+                block_maker.perf_counter_signed.borrow().log_aggregate();
+                block_maker.perf_counter_unsigned.borrow().log_aggregate();
             }
         }
 
@@ -100,6 +121,32 @@ impl BlockSequencer {
         let config = self.config.get();
         let leader = config.consensus_config.get_leader_for_view(self.view);
         leader == config.net_config.name
+    }
+
+    fn perf_register(&mut self, entry: u64) {
+        self.perf_counter_signed.borrow_mut().register_new_entry(entry);
+        self.perf_counter_unsigned.borrow_mut().register_new_entry(entry);
+    }
+
+    fn perf_fix_signature(&mut self, entry: u64, signed: bool) {
+        if signed {
+            self.perf_counter_unsigned.borrow_mut().deregister_entry(&entry);
+        } else {
+            self.perf_counter_signed.borrow_mut().deregister_entry(&entry);
+        }
+    }
+
+    fn perf_add_event(&mut self, entry: u64, event: &str, signed: bool) {
+        if signed {
+            self.perf_counter_signed.borrow_mut().new_event(event, &entry);
+        } else {
+            self.perf_counter_unsigned.borrow_mut().new_event(event, &entry);
+        }
+    }
+
+    fn perf_deregister(&mut self, entry: u64) {
+        self.perf_counter_unsigned.borrow_mut().deregister_entry(&entry);
+        self.perf_counter_signed.borrow_mut().deregister_entry(&entry);
     }
 
     async fn worker(&mut self, chan_depth: usize) -> Result<(), ()> {
@@ -118,7 +165,8 @@ impl BlockSequencer {
                 _batch_and_client_reply = self.batch_rx.recv() => {
                     if let Some(_) = _batch_and_client_reply {
                         let (batch, client_reply) = _batch_and_client_reply.unwrap();
-                        self.handle_new_batch(batch, client_reply, vec![]).await;
+                        self.perf_register(self.seq_num + 1); // Projected seq num is used as entry id for perf
+                        self.handle_new_batch(batch, client_reply, vec![], self.seq_num + 1).await;
                     }
                 },
                 _tick = self.signature_timer.wait() => {
@@ -143,9 +191,10 @@ impl BlockSequencer {
         Ok(())
     }
 
-    async fn handle_new_batch(&mut self, batch: RawBatch, replies: Vec<MsgAckChanWithTag>, fork_validation: Vec<ProtoForkValidation>) {
+    async fn handle_new_batch(&mut self, batch: RawBatch, replies: Vec<MsgAckChanWithTag>, fork_validation: Vec<ProtoForkValidation>, perf_entry_id: u64) {
         let n = self.seq_num;
         self.seq_num += 1;
+
         let config = self.config.get();
         
         let must_sign = self.force_sign_next_batch ||
@@ -156,12 +205,16 @@ impl BlockSequencer {
             self.force_sign_next_batch = false;
         }
 
+        self.perf_fix_signature(perf_entry_id, must_sign);
+
         // Invariant: Only signed blocks get QCs.
         let qc_list = if must_sign {
             self.current_qc_list.drain(..).collect()
         } else {
             Vec::new()
         };
+
+        self.perf_add_event(perf_entry_id, "Add QCs", must_sign);
 
         let block = ProtoBlock {
             n,
@@ -176,15 +229,20 @@ impl BlockSequencer {
         };
 
         let parent_hash_rx = self.parent_hash_rx.take();
+        self.perf_add_event(perf_entry_id, "Create Block", must_sign);
 
         let (block_rx, hash_rx, hash_rx2) = self.crypto.prepare_block(block, must_sign, parent_hash_rx).await;
         self.parent_hash_rx = FutureHash::Future(hash_rx);
 
         self.client_reply_tx.send((hash_rx2, replies)).await
             .expect("Should be able to send client_reply_tx");
+        self.perf_add_event(perf_entry_id, "Send to Client Reply", must_sign);
 
         self.block_broadcaster_tx.send((n, block_rx)).await
             .expect("Should be able to send block_broadcaster_tx");
+        self.perf_add_event(perf_entry_id, "Send to Block Broadcaster", must_sign);
+
+        self.perf_deregister(perf_entry_id);
         debug!("Sequenced: {}", n);
     }
 
@@ -233,7 +291,7 @@ impl BlockSequencer {
                 self.parent_hash_rx = FutureHash::Immediate(new_parent_hash);
 
                 // Now the NEXT block (ie new_seq_num + 1) is going to be for NewView.
-                self.handle_new_batch(RawBatch::new(), vec![], fork_validation).await;
+                self.handle_new_batch(RawBatch::new(), vec![], fork_validation, 0).await;
             },
         }
     }

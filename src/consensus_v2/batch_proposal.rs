@@ -1,8 +1,10 @@
+use std::cell::RefCell;
 use std::{io::Error, pin::Pin, sync::Arc, time::Duration};
 
 use std::io::ErrorKind;
 use log::warn;
 use crate::utils::channel::{Sender, Receiver};
+use crate::utils::PerfCounter;
 use tokio::sync::Mutex;
 
 use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, proto::execution::ProtoTransaction, rpc::server::MsgAckChan};
@@ -25,6 +27,8 @@ pub struct BatchProposer {
     current_raw_batch: Option<RawBatch>, // So that I can take()
     current_reply_vec: Vec<MsgAckChanWithTag>,
     batch_timer: Arc<Pin<Box<ResettableTimer>>>,
+
+    perf_counter: RefCell<PerfCounter<usize>>,
 }
 
 impl BatchProposer {
@@ -40,6 +44,13 @@ impl BatchProposer {
 
         let max_batch_size = config.get().consensus_config.max_backlog_batch_size;
 
+        let event_order = vec![
+            "Add request to batch",
+            "Propose batch"
+        ];
+
+        let perf_counter = RefCell::new(PerfCounter::new("BatchProposer", &event_order));
+
         Self {
             config,
             batch_proposer_rx, block_maker_tx,
@@ -47,6 +58,7 @@ impl BatchProposer {
             batch_timer,
             current_reply_vec: Vec::with_capacity(max_batch_size),
             app_tx,
+            perf_counter,
         }
     }
 
@@ -54,16 +66,53 @@ impl BatchProposer {
         let mut batch_proposer = batch_proposer.lock().await;
         let batch_timer_handle = batch_proposer.batch_timer.run().await;
 
+        let batch_size = batch_proposer.config.get().consensus_config.max_backlog_batch_size;
+        let mut total_work = 0;
         loop {
-            if let Err(_) = batch_proposer.worker().await {
+            if let Err(_) = batch_proposer.worker(total_work).await {
                 break;
             }
+
+            total_work += 1;
+            if total_work % (1000 * batch_size) == 0 {
+                batch_proposer.perf_counter.borrow().log_aggregate();
+            }
+
         }
 
         batch_timer_handle.abort();
     }
 
-    pub async fn worker(&mut self) -> Result<(), Error> {
+    fn perf_register_random(&mut self, entry: usize) {
+        let mut batch_size = self.config.get().consensus_config.max_backlog_batch_size;
+        // Randomly decide whether to register the new entry with probability 1/batch_size (approx)
+        // A random sample gives `true` with prob 1/2.
+        // So for n tries 1/2^n <= 1/batch_size or n >= log2(batch_size)
+        // log2(batch_size) is the number of bits needed to express batch_size.
+        // So an approx way to calculate log2(batch_size) is to keep shifting right until batch_size is 0.
+        let mut should_register = true;
+        while batch_size > 0 {
+            batch_size >>= 1;
+            
+            should_register = should_register && rand::random::<bool>();
+        }
+
+        if !should_register {
+            return;
+        }
+        self.perf_counter.borrow_mut().register_new_entry(entry);
+    }
+
+    fn perf_add_event(&mut self, entry: usize, event: &str) {
+        self.perf_counter.borrow_mut().new_event(event, &entry);
+    }
+
+    fn perf_event_and_deregister_all(&mut self, event: &str) {
+        self.perf_counter.borrow_mut().new_event_for_all(event);
+        self.perf_counter.borrow_mut().deregister_all();
+    }
+
+    async fn worker(&mut self, work_counter: usize) -> Result<(), Error> {
         let mut new_tx = None;
         let mut batch_timer_tick = false;
         
@@ -85,6 +134,7 @@ impl BatchProposer {
 
         
         if new_tx.is_some() {
+            self.perf_register_random(work_counter);
             // TODO: Filter read-only transactions that do not need to go through consensus.
             // Forward them directly to execution.
 
@@ -100,6 +150,7 @@ impl BatchProposer {
 
             self.current_raw_batch.as_mut().unwrap().push(new_tx);
             self.current_reply_vec.push(ack_chan);
+            self.perf_add_event(work_counter, "Add request to batch");
         }
 
         let max_batch_size = self.config.get().consensus_config.max_backlog_batch_size;
@@ -111,17 +162,18 @@ impl BatchProposer {
         Ok(())
     }
 
-    pub async fn register_reply_malformed(&self, ack_chan: MsgAckChanWithTag) {
+    async fn register_reply_malformed(&mut self, ack_chan: MsgAckChanWithTag) {
         // TODO
     }
 
-    pub async fn propose_new_batch(&mut self) {
+    async fn propose_new_batch(&mut self) {
         let batch = self.current_raw_batch.take().unwrap();
         self.current_raw_batch = Some(RawBatch::with_capacity(
             self.config.get().consensus_config.max_backlog_batch_size
         ));
         let reply_chans = self.current_reply_vec.drain(..).collect();
         let _ = self.block_maker_tx.send((batch, reply_chans)).await;
+        self.perf_event_and_deregister_all("Propose batch");
         self.batch_timer.reset();
     }
 

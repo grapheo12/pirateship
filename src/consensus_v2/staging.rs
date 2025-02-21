@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet, VecDeque}, pin::Pin, sync::Arc, time::Duration};
+use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, pin::Pin, sync::Arc, time::Duration};
 
 use async_recursion::async_recursion;
 use futures::future::try_join_all;
@@ -6,7 +6,7 @@ use log::{debug, error, warn};
 use prost::Message;
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
-use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{CachedBlock, CryptoServiceConnector}, proto::{consensus::{proto_block::Sig, ProtoNameWithSignature, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, execution::ProtoTransactionResult, rpc::ProtoPayload}, rpc::{client::PinnedClient, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck}};
+use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{CachedBlock, CryptoServiceConnector}, proto::{consensus::{proto_block::Sig, ProtoNameWithSignature, ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoViewChange, ProtoVote}, execution::ProtoTransactionResult, rpc::ProtoPayload}, rpc::{client::PinnedClient, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, PerfCounter, StorageAck}};
 
 use super::{app::AppCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}};
 
@@ -57,6 +57,9 @@ pub struct Staging {
     block_sequencer_command_tx: Sender<BlockSequencerControlCommand>,
     fork_receiver_command_tx: Sender<ForkReceiverCommand>,
     qc_tx: UnboundedSender<ProtoQuorumCertificate>,
+
+    leader_perf_counter_unsigned: RefCell<PerfCounter<u64>>,
+    leader_perf_counter_signed: RefCell<PerfCounter<u64>>,
 }
 
 
@@ -75,6 +78,18 @@ impl Staging {
         let _chan_depth = _config.rpc_config.channel_depth as usize;
         let view_timeout = Duration::from_millis(_config.consensus_config.view_timeout_ms);
         let view_change_timer = ResettableTimer::new(view_timeout);
+        let leader_staging_event_order = vec![
+            "Push to Pending",
+            "Storage",
+            "Vote to Self",
+            "Crash Commit",
+            "Send Crash Commit to App",
+            "Byz Commit",
+        ];
+        let leader_perf_counter_signed = RefCell::new(
+            PerfCounter::<u64>::new("LeaderStagingSigned", &leader_staging_event_order));
+        let leader_perf_counter_unsigned = RefCell::new(
+            PerfCounter::<u64>::new("LeaderStagingUnsigned", &leader_staging_event_order));
         
         Self {
             config,
@@ -96,16 +111,27 @@ impl Staging {
             block_broadcaster_command_tx,
             block_sequencer_command_tx,
             fork_receiver_command_tx,
-            qc_tx
+            qc_tx,
+            leader_perf_counter_signed,
+            leader_perf_counter_unsigned,
         }
     }
 
     pub async fn run(staging: Arc<Mutex<Self>>) {
         let mut staging = staging.lock().await;
         let view_timer_handle = staging.view_change_timer.run().await;
+
+        let mut total_work = 0;
+
         loop {
             if let Err(_) = staging.worker().await {
                 break;
+            }
+
+            total_work += 1;
+            if total_work % 1000 == 0 {
+                staging.leader_perf_counter_signed.borrow().log_aggregate();
+                staging.leader_perf_counter_unsigned.borrow().log_aggregate();
             }
         }
 
@@ -116,6 +142,40 @@ impl Staging {
         let config = self.config.get();
         let leader = config.consensus_config.get_leader_for_view(self.view);
         leader == config.net_config.name
+    }
+
+    fn perf_register_block(&self, block: &CachedBlock) {
+        if let Some(Sig::ProposerSig(_)) = block.block.sig {
+            self.leader_perf_counter_signed.borrow_mut().register_new_entry(block.block.n);
+        } else {
+            self.leader_perf_counter_unsigned.borrow_mut().register_new_entry(block.block.n);
+        }
+    }
+
+    fn perf_deregister_block(&self, block: &CachedBlock) {
+        if let Some(Sig::ProposerSig(_)) = block.block.sig {
+            self.leader_perf_counter_signed.borrow_mut().deregister_entry(&block.block.n);
+        } else {
+            self.leader_perf_counter_unsigned.borrow_mut().deregister_entry(&block.block.n);
+        }
+    }
+
+    fn perf_add_event(&self, block: &CachedBlock, event: &str) -> (bool /* signed */, u64 /* block_n */) {
+        if let Some(Sig::ProposerSig(_)) = block.block.sig {
+            self.leader_perf_counter_signed.borrow_mut().new_event(event, &block.block.n);
+            (true, block.block.n)
+        } else {
+            self.leader_perf_counter_unsigned.borrow_mut().new_event(event, &block.block.n);
+            (false, block.block.n)
+        }
+    }
+
+    fn perf_add_event_from_perf_stats(&self, signed: bool, block_n: u64, event: &str) {
+        if signed {
+            self.leader_perf_counter_signed.borrow_mut().new_event(event, &block_n);
+        } else {
+            self.leader_perf_counter_unsigned.borrow_mut().new_event(event, &block_n);
+        }
     }
 
     async fn worker(&mut self) -> Result<(), ()> {
@@ -220,6 +280,8 @@ impl Staging {
         // Invariant: I vote => I stored
         let _ = storage_ack.await.unwrap();
 
+        self.perf_add_event(&last_block.block, "Storage");
+
 
         let mut vote = ProtoVote { 
             sig_array: Vec::with_capacity(1),
@@ -238,6 +300,8 @@ impl Staging {
                 sig: vote_sig.to_vec(),
             });
         }
+
+        self.perf_add_event(&last_block.block, "Vote to Self");
 
         self.process_vote(name, vote).await
     }
@@ -350,6 +414,8 @@ impl Staging {
             }
         }
 
+        self.perf_register_block(&block);
+
         // Postcondition here: block.view == self.view && check_continuity() == true && i_am_leader
         let block_with_votes = CachedBlockWithVotes {
             block,
@@ -358,6 +424,9 @@ impl Staging {
         };
 
         self.pending_blocks.push_back(block_with_votes);
+
+        self.perf_add_event(&self.pending_blocks.iter().last().unwrap().block, "Push to Pending");
+
 
         // Now vote for self
         
@@ -534,8 +603,19 @@ impl Staging {
         let blocks = self.pending_blocks.iter()
             .filter(|e| e.block.block.n > old_ci && e.block.block.n <= new_ci)
             .map(|e| e.block.clone())
-            .collect();
+            .collect::<Vec<_>>();
+
+        let mut block_perf_stats = Vec::new();
+        for b in &blocks {
+            block_perf_stats.push(
+                self.perf_add_event(&b, "Crash Commit")
+            );
+        }
         self.app_tx.send(AppCommand::CrashCommit(blocks)).await.unwrap();
+
+        for (signed, block_n) in block_perf_stats {
+            self.perf_add_event_from_perf_stats(signed, block_n, "Send Crash Commit to App");
+        }
     }
 
 
@@ -641,7 +721,12 @@ impl Staging {
             if block.block.block.n > new_bci {
                 break;
             }
-            byz_blocks.push(self.pending_blocks.pop_front().unwrap().block);
+
+            let block = self.pending_blocks.pop_front().unwrap().block;
+            self.perf_add_event(&block, "Byz Commit");
+
+            self.perf_deregister_block(&block);
+            byz_blocks.push(block);
         }
 
         let _ = self.app_tx.send(AppCommand::ByzCommit(byz_blocks)).await;
