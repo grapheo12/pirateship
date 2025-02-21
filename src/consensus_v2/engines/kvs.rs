@@ -66,15 +66,15 @@ impl AppEngine for KVSAppEngine {
             let proto_block = &block.block;
             let mut block_result: Vec<crate::proto::execution::ProtoTransactionResult> = Vec::new(); 
             for tx in proto_block.tx_list.iter() {
+                let ops = match &tx.on_crash_commit {
+                    Some(ops) => &ops.ops,
+                    None => continue,
+                };
 
                 let mut txn_result = ProtoTransactionResult {
                     result: Vec::new(),
                 };
 
-                let ops = match &tx.on_crash_commit {
-                    Some(ops) => &ops.ops,
-                    None => continue,
-                };
                 for op in ops.iter() {
                     
                     if op.operands.len() != 2 {
