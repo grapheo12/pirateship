@@ -15,10 +15,15 @@ class Deployment:
     By default it is assumed that the deployment is done using Azure Terraform.
     Nodes are named as follows:
         nodepool_vmX_{tdx|sev|nontee}_locY_idZ
-        clientpool_vmX
+        clientpool_vmX_locY_idZ
     Override in a subclass the deployment-specific methods to change how nodes/containers are deployed.
     This deployment is specific to "SSH-able" deployments.
     Not suited for Docker/K8s deployments.
+
+    For other SSH-able deployments, override the following methods:
+        - deploy
+        - teardown
+        - __init__
     '''
     def parse_custom_layouts(self):
         """
@@ -71,6 +76,10 @@ class Deployment:
         self.parse_custom_layouts()
 
     def find_azure_tf_dir(self):
+        '''
+        Find where the terraform files are located.
+        The search paths are hardcoded and are relative to the root of the repo.
+        '''
         search_paths = [
             os.path.join("deployment", "azure-tf"),
             os.path.join("scripts_v2", "deployment", "azure-tf"),
@@ -90,6 +99,11 @@ class Deployment:
         return found_path
     
     def prepare_dev_vm(self):
+        '''
+        Find where __prepare-dev-env.sh and ideal_bashrc are located.
+        Copy them to the dev VM and run __prepare-dev-env.sh
+        Search paths are hardcoded and are relative to the root of the repo.
+        '''
         if self.dev_vm is None:
             raise ValueError("No dev VM found")
         
@@ -142,6 +156,8 @@ class Deployment:
             pprint(self, f)
 
         if self.mode == "manual":
+            # Manual must mean there is a nodelist specified in the toml file.
+            # There is no need to deploy.
             return
         
         # Terraform deploy

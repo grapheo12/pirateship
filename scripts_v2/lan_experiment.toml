@@ -25,7 +25,7 @@ signature_max_delay_blocks = 50
 signature_max_delay_ms = 10000
 vote_processing_workers = 5
 view_timeout_ms = 4000
-batch_max_delay_ms = 20
+batch_max_delay_ms = 5
 
 [node_config.consensus_config.log_storage_config.RocksDB]
 write_buffer_size = 2147483648
@@ -58,7 +58,7 @@ build_command = "make"
 duration = 120
 
 [experiments.sweeping_parameters]
-num_clients = [100, 200, 300, 500, 700, 1000]
+num_clients = [100, 200, 300, 500, 700, 1000, 2000]
 
 
 [[experiments]]
@@ -70,7 +70,7 @@ build_command = "make chained_pbft_logger"
 duration = 120
 
 [experiments.sweeping_parameters]
-num_clients = [100, 200, 300, 500, 700, 1000]
+num_clients = [100, 200, 300, 500, 700, 1000, 2000]
 
 [[experiments]]
 name = "signed_raft"
@@ -81,7 +81,7 @@ build_command = "make signed_raft_logger"
 duration = 120
 
 [experiments.sweeping_parameters]
-num_clients = [100, 200, 300, 500, 700, 1000]
+num_clients = [100, 200, 300, 500, 700, 1000, 2000]
 
 
 
