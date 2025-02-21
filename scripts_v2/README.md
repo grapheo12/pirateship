@@ -10,7 +10,7 @@ to build binaries and run as coordinator to collect logs as experiments finish.
 # System requirements
 
 The local machine can be anything. However, it is not tested for Windows.
-Works for Unix based systems. Windows may have issues with path names (/ vs \).
+Works for Unix based systems. Windows may have issues with path names (`/` vs `\`).
 Required system packages: `OpenSSH`, `rsync`, `tmux`.
 These must be available in BOTH locally and in VMs.
 VMs must be running SSH on port 22.
