@@ -18,6 +18,9 @@ pub mod workload_generators;
 mod serialize;
 pub use serialize::*;
 
+mod perf;
+pub use perf::*;
+
 
 pub mod channel {
     mod channel_tokio {
