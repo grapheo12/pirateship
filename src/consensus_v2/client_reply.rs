@@ -1,6 +1,5 @@
 use std::{collections::HashMap, sync::Arc};
 
-use log::error;
 use prost::Message as _;
 use tokio::{sync::{oneshot, Mutex}, task::JoinSet};
 

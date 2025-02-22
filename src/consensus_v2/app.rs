@@ -1,11 +1,11 @@
-use std::{collections::{HashMap, VecDeque}, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
+use std::{cell::RefCell, collections::{HashMap, VecDeque}, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
 use hex::ToHex;
 use log::{info, warn};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{CachedBlock, HashType, DIGEST_LENGTH}, proto::{client::ProtoByzResponse, execution::{ProtoTransaction, ProtoTransactionResult}}, utils::channel::{Receiver, Sender}};
+use crate::{config::AtomicConfig, crypto::{CachedBlock, HashType, DIGEST_LENGTH}, proto::{client::ProtoByzResponse, execution::{ProtoTransaction, ProtoTransactionResult}}, utils::{channel::{Receiver, Sender}, PerfCounter}};
 
 use super::{client_reply::ClientReplyCommand, timer::ResettableTimer};
 
@@ -94,6 +94,8 @@ pub struct Application<'a, E: AppEngine + Send + Sync + 'a> {
     checkpoint_timer: Arc<Pin<Box<ResettableTimer>>>,
     log_timer: Arc<Pin<Box<ResettableTimer>>>,
 
+    perf_counter: RefCell<PerfCounter<u64>>,
+
     phantom: PhantomData<&'a E>,
 }
 
@@ -106,6 +108,12 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
         let checkpoint_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.checkpoint_interval_ms));
         let log_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.logger_stats_report_ms));
         let engine = E::new(config.clone());
+
+        let event_order = vec![
+            "Process Crash Committed Block",
+            "Send Reply",
+        ];
+        let perf_counter = RefCell::new(PerfCounter::new("Application", &event_order));
         Self {
             config,
             engine,
@@ -115,6 +123,7 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
             client_reply_tx,
             checkpoint_timer,
             log_timer,
+            perf_counter,
 
             phantom: PhantomData
         }
@@ -126,8 +135,12 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
         let log_timer_handle = application.log_timer.run().await;
         let checkpoint_timer_handle = application.checkpoint_timer.run().await;
 
+        let mut last_perf_logged_ci = 0;
         while let Ok(_) = application.worker().await {
-
+            if (application.stats.ci - last_perf_logged_ci) > 1000 {
+                application.perf_counter.borrow().log_aggregate();
+                last_perf_logged_ci = application.stats.ci;
+            }
         }
 
         log_timer_handle.abort();
@@ -182,6 +195,20 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
         reply_tx.send(result).unwrap();
     }
 
+    fn perf_register(&mut self, entry: u64) {
+        self.perf_counter.borrow_mut().register_new_entry(entry);
+    }
+
+    fn perf_deregister(&mut self, entry: u64) {
+        self.perf_counter.borrow_mut().deregister_entry(&entry);
+    }
+
+    fn perf_add_event(&mut self, entry: u64, event: &str) {
+        self.perf_counter.borrow_mut().new_event(event, &entry);
+    }
+
+
+
 
     async fn handle_staging_command(&mut self, cmd: AppCommand) {
         match cmd {
@@ -193,6 +220,8 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
                 self.stats.last_hash = last_hash;
 
                 self.stats.total_requests += length as u64;
+
+                self.perf_register(n);
             },
             AppCommand::CrashCommit(blocks) => {
                 let mut new_ci = self.stats.ci;
@@ -210,17 +239,25 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
                     (block.block_hash.clone(), block.block.n)
                 }).collect::<(Vec<_>, Vec<_>)>();
                 let results = self.engine.handle_crash_commit(blocks);
+                
+                for n in &block_ns {
+                    self.perf_add_event(*n, "Process Crash Committed Block");
+                }
+
                 self.stats.total_crash_committed_txs += results.iter().map(|e| e.len() as u64).sum::<u64>();
                 self.stats.ci = new_ci;
                 self.stats.last_qc = new_last_qc;
 
                 assert_eq!(block_hashes.len(), results.len());
 
+                let block_ns_cp = block_ns.clone();
                 let result_map = block_hashes.into_iter().zip( // (HashType, (u64, Vec<ProtoTransactionResult>)) ---> HashMap<HashType, (u64, Vec<ProtoTransactionResult>)>
                     block_ns.into_iter().zip(results.into_iter()) // (u64, Vec<ProtoTransactionResult>)
                 ).collect();
                 self.client_reply_tx.send(ClientReplyCommand::CrashCommitAck(result_map)).await.unwrap();
-
+                for n in block_ns_cp {
+                    self.perf_add_event(n, "Send Reply");
+                }
             },
             AppCommand::ByzCommit(blocks) => {
                 let mut new_bci = self.stats.bci;
@@ -236,10 +273,15 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
 
                 assert_eq!(block_hashes.len(), results.len());
 
+                let block_ns_cp = block_ns.clone();
                 let result_map = block_hashes.into_iter().zip( // (HashType, (u64, Vec<ProtoTransactionResult>)) ---> HashMap<HashType, (u64, Vec<ProtoTransactionResult>)>
                     block_ns.into_iter().zip(results.into_iter()) // (u64, Vec<ProtoTransactionResult>)
                 ).collect();
                 self.client_reply_tx.send(ClientReplyCommand::ByzCommitAck(result_map)).await.unwrap();
+                
+                for n in block_ns_cp {
+                    self.perf_deregister(n);
+                }
             },
             AppCommand::Rollback(new_last_block) => {               
                 assert!(new_last_block >= self.stats.bci);

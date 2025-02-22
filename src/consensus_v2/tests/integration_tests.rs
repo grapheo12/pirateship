@@ -338,4 +338,6 @@ async fn _test_client_reply(config: Config, batch_proposer_rx: Receiver<TxWithAc
 
     println!("Errors appearing after this are inconsequential");
     std::fs::remove_dir_all(&storage_path).unwrap();
+
+    exit(0);
 }
