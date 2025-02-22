@@ -55,6 +55,7 @@ impl AppEngine for KVSAppEngine {
         //     iterate through all ops in order, see ops in protobuf
         //     for every op you have a result
         //     each txn gives a txn result. Transaction has many ops, prototransaction has many op results
+            //if op type is write --> add to ci_state, if read dont add to ci_state
 
         //the return value is a list of lists containing transaction results for each block
         let mut block_count = 0;
@@ -63,10 +64,10 @@ impl AppEngine for KVSAppEngine {
         let mut final_result: Vec<Vec<crate::proto::execution::ProtoTransactionResult>> = Vec::new();
 
         for block in blocks.iter() {
-            let proto_block = &block.block;
+            let proto_block: &ProtoBlock = &block.block;
             let mut block_result: Vec<crate::proto::execution::ProtoTransactionResult> = Vec::new(); 
             for tx in proto_block.tx_list.iter() {
-                let ops = match &tx.on_crash_commit {
+                let ops: &_ = match &tx.on_crash_commit {
                     Some(ops) => &ops.ops,
                     None => continue,
                 };
@@ -76,19 +77,25 @@ impl AppEngine for KVSAppEngine {
                 };
 
                 for op in ops.iter() {
-                    
                     if op.operands.len() != 2 {
                         continue;
                     }
-
                     let key = &op.operands[0];
                     let val = &op.operands[1];
-
-                    if self.state.ci_state.contains_key(key) {
-                        self.state.ci_state.get_mut(key).unwrap().push((0, val.clone()));  //DUMMY POSITION
+                    
+                    if let Some(op_type) = ProtoTransactionOpType::from_i32(op.op_type) {
+                        if op_type == ProtoTransactionOpType::Write {
+                            if self.state.ci_state.contains_key(key) {
+                                self.state.ci_state.get_mut(key).unwrap().push((proto_block.n, val.clone()));
+                            } else {
+                                self.state.ci_state.insert(key.clone(), vec![(proto_block.n, val.clone())]);
+                            }
+                        }
                     } else {
-                        self.state.ci_state.insert(key.clone(), vec![(0, val.clone())]); //DUMMY POSITION
+                        println!("Invalid operation type: {}", op.op_type);
+                        continue;
                     }
+
                     txn_result.result.push(ProtoTransactionOpResult {
                         success: true,
                         values: vec![],
@@ -156,6 +163,8 @@ mod tests {
         dbg!(&result);
         println!("{}", engine.last_ci)
     }
+
+    
 
     fn setup_engine() -> KVSAppEngine {
         let mut net_config = NetConfig {
