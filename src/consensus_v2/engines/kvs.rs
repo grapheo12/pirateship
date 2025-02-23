@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use gluesql::sled_storage::sled::transaction::TransactionResult;
 use nix::libc::qos_class_t;
 use serde::{Serialize, Deserialize};
+use sha2::digest::consts::True;
 
 use crate::proto;
 use crate::{config::AtomicConfig, consensus_v2::app::AppEngine};
@@ -197,14 +198,61 @@ impl AppEngine for KVSAppEngine {
         //read requests
         //see how to handle crash commits + read requests
         //and then byz commit and rollback
-        todo!();
-        
+        let mut txn_result = ProtoTransactionResult {
+            result: Vec::new(),
+        };
+
+        let ops: &_ = match &request.on_receive {
+            Some(ops) => &ops.ops,
+            None => return txn_result, //Not sure how to handle this case
+        };
+
+        for op in ops {
+            if op.operands.len() != 1 {
+                continue;
+            }
+            let mut op_result = ProtoTransactionOpResult {
+                success: false, 
+                values: vec![],
+            };
+            let key = &op.operands[0];
+            
+            //same search logic from old kvs.rs
+            let ci_res = self.state.ci_state.get(key);
+            match ci_res {
+                Some(v) => {
+                    // Invariant: v is sorted by ci
+                    // Invariant: v.len() > 0
+                    let res = &v.last().unwrap().1;
+                    op_result.success = true;
+                    op_result.values = vec![res.clone()];
+                },
+                None => {
+                    // Need to check in bci_state.
+                },
+            };
+            let bci_res = self.state.bci_state.get(key);
+            match bci_res {
+                Some(v) => {
+                    op_result.success = true;
+                    op_result.values = vec![v.clone()];
+                },
+                None =>  {
+                    //result should be false by default
+                },
+            }
+            txn_result.result.push(op_result);
+        }
+        return txn_result;
     }
 
     fn get_current_state(&self) -> Self::State {
         return self.state.clone();
     }
+
+    
 }
+
 
 #[cfg(test)]
 mod tests {
