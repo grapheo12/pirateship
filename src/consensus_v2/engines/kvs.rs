@@ -4,6 +4,7 @@ use gluesql::sled_storage::sled::transaction::TransactionResult;
 use nix::libc::qos_class_t;
 use serde::{Serialize, Deserialize};
 
+use crate::proto;
 use crate::{config::AtomicConfig, consensus_v2::app::AppEngine};
 use crate::config::{AppConfig, ClientConfig, ClientNetConfig, ClientRpcConfig, Config, ConsensusConfig, EvilConfig, KVReadWriteUniform, NetConfig, NodeNetInfo, RocksDBConfig, RpcConfig, WorkloadConfig};
 
@@ -12,6 +13,8 @@ use crate::proto::execution::{
     ProtoTransaction, ProtoTransactionPhase, ProtoTransactionOp, ProtoTransactionOpType,
     ProtoTransactionResult, ProtoTransactionOpResult,
 };
+
+use crate::proto::client::{ProtoByzResponse,};
 
 use crate::proto::consensus::{
     ProtoBlock, ProtoQuorumCertificate, ProtoForkValidation, ProtoVote, ProtoSignatureArrayEntry,
@@ -61,11 +64,12 @@ impl AppEngine for KVSAppEngine {
         let mut block_count = 0;
         let mut txn_count = 0;
 
-        let mut final_result: Vec<Vec<crate::proto::execution::ProtoTransactionResult>> = Vec::new();
+        let mut final_result: Vec<Vec<ProtoTransactionResult>> = Vec::new();
 
         for block in blocks.iter() {
             let proto_block: &ProtoBlock = &block.block;
-            let mut block_result: Vec<crate::proto::execution::ProtoTransactionResult> = Vec::new(); 
+            self.last_ci = proto_block.n;
+            let mut block_result: Vec<ProtoTransactionResult> = Vec::new();
             for tx in proto_block.tx_list.iter() {
                 let ops: &_ = match &tx.on_crash_commit {
                     Some(ops) => &ops.ops,
@@ -77,14 +81,17 @@ impl AppEngine for KVSAppEngine {
                 };
 
                 for op in ops.iter() {
+                    let ops: &_ = match &tx.on_crash_commit {
+                        Some(ops) => &ops.ops,
+                        None => continue,
+                    };
                     if op.operands.len() != 2 {
                         continue;
                     }
-                    let key = &op.operands[0];
-                    let val = &op.operands[1];
-                    
                     if let Some(op_type) = ProtoTransactionOpType::from_i32(op.op_type) {
                         if op_type == ProtoTransactionOpType::Write {
+                            let key = &op.operands[0];
+                            let val: &Vec<u8> = &op.operands[1];
                             if self.state.ci_state.contains_key(key) {
                                 self.state.ci_state.get_mut(key).unwrap().push((proto_block.n, val.clone()));
                             } else {
@@ -115,9 +122,74 @@ impl AppEngine for KVSAppEngine {
         return final_result;
     }
 
-    fn handle_byz_commit(&mut self, blocks: Vec<crate::crypto::CachedBlock>) -> Vec<Vec<crate::proto::client::ProtoByzResponse>> {
-        
-        todo!()
+
+                
+
+    fn handle_byz_commit(&mut self, blocks: Vec<crate::crypto::CachedBlock>) -> Vec<Vec<ProtoByzResponse>> {
+        let mut block_count = 0;
+        let mut txn_count: i32 = 0;
+
+        let mut final_result: Vec<Vec<ProtoByzResponse>> = Vec::new();
+
+        for block in blocks.iter() {
+            let proto_block: &ProtoBlock = &block.block;
+            self.last_bci = proto_block.n;
+            let mut block_result: Vec<ProtoByzResponse> = Vec::new(); 
+
+            for (tx_n, tx) in proto_block.tx_list.iter().enumerate() {
+                let ops: &_ = match &tx.on_byzantine_commit{
+                    Some(ops) => &ops.ops,
+                    None => continue,
+                };
+
+                let mut byz_result = ProtoByzResponse {
+                    block_n: proto_block.n,
+                    tx_n: tx_n as u64,
+                    client_tag: 0,
+                };
+
+                for op in ops.iter() {
+                    let ops: &_ = match &tx.on_byzantine_commit {
+                        Some(ops) => &ops.ops,
+                        None => continue,
+                    };
+                    if op.operands.len() != 2 {
+                        continue;
+                    }
+                    if let Some(op_type) = ProtoTransactionOpType::from_i32(op.op_type) {
+                        if op_type == ProtoTransactionOpType::Write {
+                            let key = &op.operands[0];
+                            let val: &_ = &op.operands[1];
+                            self.state.bci_state.insert(key.clone(), val.clone());
+                        }
+                    } else {
+                        println!("Invalid operation type: {}", op.op_type);
+                        continue;
+                    }
+                }
+                block_result.push(byz_result);
+                //test
+                txn_count += 1;
+            }
+            final_result.push(block_result);
+            //test
+            block_count += 1;
+        }
+
+        // Then move all Byz committed entries from ci_state to bci_state.
+        for (key, val_versions) in self.state.ci_state.iter_mut() {
+            for (pos, val) in &(*val_versions) {
+                if *pos <= self.last_bci {
+                    self.state.bci_state.insert(key.clone(), val.clone());
+                }
+            }
+
+            val_versions.retain(|v| v.0 > self.last_bci);
+        }
+        self.state.ci_state.retain(|_, v| v.len() > 0);
+        println!("block count:{}", block_count);
+        println!("transaction count{}", txn_count);
+        return final_result;
     }
 
     fn handle_rollback(&mut self, rolled_back_blocks: u64) {
@@ -132,8 +204,7 @@ impl AppEngine for KVSAppEngine {
     }
 
     fn get_current_state(&self) -> Self::State {
-        //clone of state
-        todo!()
+        return self.state.clone();
     }
 }
 
@@ -164,7 +235,21 @@ mod tests {
         println!("{}", engine.last_ci)
     }
 
-    
+    #[test]
+    fn test_byz_commit() {
+        let mut engine: KVSAppEngine = setup_engine();
+        let blocks = vec![
+            create_dummy_cached_block(),
+            create_dummy_cached_block(), // Add multiple blocks for testing
+        ];
+
+        let result: Vec<Vec<crate::proto::client::ProtoByzResponse>> = engine.handle_byz_commit(blocks);
+        dbg!(&engine.state.bci_state);
+        dbg!(&result);
+        println!("potsto{}", engine.last_ci)
+    }
+
+
 
     fn setup_engine() -> KVSAppEngine {
         let mut net_config = NetConfig {
@@ -228,75 +313,67 @@ mod tests {
         KVSAppEngine::new(atomic_config)
     }
 
-// Function to generate a dummy CachedBlock
 fn create_dummy_cached_block() -> CachedBlock {
-    // Create a dummy transaction operation
     let dummy_op = ProtoTransactionOp {
-        op_type: ProtoTransactionOpType::Write as i32, // Example transaction type
-        operands: vec![vec![1], vec![4]] // Example byte operands
+        op_type: ProtoTransactionOpType::Write as i32, 
+        operands: vec![vec![1], vec![4]]
     };
 
-    // Create a dummy transaction phase
     let dummy_phase = ProtoTransactionPhase {
         ops: vec![dummy_op.clone()],
     };
 
-    // Create a dummy transaction
     let dummy_transaction = ProtoTransaction {
-        on_receive: Some(dummy_phase.clone()),
-        on_crash_commit: Some(dummy_phase.clone()),
-        on_byzantine_commit: None, // Example: No Byzantine commit
+        on_receive:None,
+        on_crash_commit: None,
+        on_byzantine_commit: Some(dummy_phase.clone()),
         is_reconfiguration: false,
     };
 
-    // Create a dummy quorum certificate
     let dummy_qc = ProtoQuorumCertificate {
-        digest: vec![0xaa, 0xbb, 0xcc], // Example block hash
+        digest: vec![0xaa, 0xbb, 0xcc],
         n: 1,
         sig: vec![ProtoNameWithSignature {
             name: "Validator1".to_string(),
-            sig: vec![0xde, 0xad, 0xbe, 0xef], // Example signature
+            sig: vec![0xde, 0xad, 0xbe, 0xef],
         }],
         view: 1,
     };
 
-    // Create a dummy fork validation entry
     let dummy_fork_validation = ProtoForkValidation {
         view: 3,
-        fork_hash: vec![0xba, 0xad, 0xf0, 0x0d], // Example fork hash
-        fork_sig: vec![0xca, 0xfe, 0xba, 0xbe], // Example fork signature
+        fork_hash: vec![0xba, 0xad, 0xf0, 0x0d], 
+        fork_sig: vec![0xca, 0xfe, 0xba, 0xbe],
         fork_len: 2,
         fork_last_qc: Some(dummy_qc.clone()),
         name: "ForkValidator".to_string(),
     };
 
-    // Create a dummy vote
     let dummy_vote = ProtoVote {
         sig_array: vec![ProtoSignatureArrayEntry {
             n: 10,
-            sig: vec![0xbe, 0xef, 0xfa, 0xce], // Example signature bytes
+            sig: vec![0xbe, 0xef, 0xfa, 0xce], 
         }],
-        fork_digest: vec![0x12, 0x34, 0x56, 0x78], // Example fork digest
+        fork_digest: vec![0x12, 0x34, 0x56, 0x78], 
         n: 10,
         view: 4,
         config_num: 1,
     };
 
-    // Create a dummy ProtoBlock with transactions
     let dummy_proto_block = ProtoBlock {
-        tx_list: vec![dummy_transaction.clone(), dummy_transaction.clone()], // Transactions
-        n: 42, // Example sequence number
-        parent: vec![0xde, 0xad, 0xbe, 0xef], // Example parent hash
+        tx_list: vec![dummy_transaction.clone(), dummy_transaction.clone()], 
+        n: 42, 
+        parent: vec![0xde, 0xad, 0xbe, 0xef],
         view: 2,
-        qc: vec![dummy_qc], // Quorum certificates
-        fork_validation: vec![dummy_fork_validation], // Fork validation
+        qc: vec![dummy_qc],
+        fork_validation: vec![dummy_fork_validation],
         view_is_stable: true,
         config_num: 1,
-        sig: Some(Sig::NoSig(DefferedSignature {})), // Example: No proposer signature
+        sig: Some(Sig::NoSig(DefferedSignature {})),
     };
 
-    let block_ser = vec![0; 100]; // Dummy serialized block (100 bytes of zeroes)
-    let block_hash = vec![0xaa; 32]; // Dummy hash (32 bytes of `0xaa`)
+    let block_ser = vec![0; 100]; 
+    let block_hash = vec![0xaa; 32];
 
     return CachedBlock::new(dummy_proto_block, block_ser, block_hash);
     }
