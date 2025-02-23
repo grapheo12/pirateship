@@ -81,10 +81,6 @@ impl AppEngine for KVSAppEngine {
                 };
 
                 for op in ops.iter() {
-                    let ops: &_ = match &tx.on_crash_commit {
-                        Some(ops) => &ops.ops,
-                        None => continue,
-                    };
                     if op.operands.len() != 2 {
                         continue;
                     }
@@ -149,10 +145,6 @@ impl AppEngine for KVSAppEngine {
                 };
 
                 for op in ops.iter() {
-                    let ops: &_ = match &tx.on_byzantine_commit {
-                        Some(ops) => &ops.ops,
-                        None => continue,
-                    };
                     if op.operands.len() != 2 {
                         continue;
                     }
@@ -205,7 +197,8 @@ impl AppEngine for KVSAppEngine {
         //read requests
         //see how to handle crash commits + read requests
         //and then byz commit and rollback
-        todo!()
+        todo!();
+        
     }
 
     fn get_current_state(&self) -> Self::State {
