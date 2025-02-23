@@ -193,7 +193,12 @@ impl AppEngine for KVSAppEngine {
     }
 
     fn handle_rollback(&mut self, rolled_back_blocks: u64) {
-        todo!()
+        //roll back ci_state to rolled_back_blocks (block.n)
+        for (_k, v) in self.state.ci_state.iter_mut() {
+            v.retain(|(pos, _)| *pos <= rolled_back_blocks);
+        }
+
+        self.state.ci_state.retain(|_, v| v.len() > 0);
     }
 
     fn handle_unlogged_request(&mut self, request: crate::proto::execution::ProtoTransaction) -> crate::proto::execution::ProtoTransactionResult {
