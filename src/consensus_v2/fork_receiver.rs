@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, io::Error, sync::Arc};
 
-use log::warn;
+use log::{info, warn};
 use tokio::sync::{Mutex, oneshot};
 
 use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries}, utils::channel::{Receiver, Sender}};
@@ -111,6 +111,7 @@ impl ForkReceiver {
             tokio::select! {
                 ae_sender = self.fork_rx.recv() => {
                     if let Some((ae, sender)) = ae_sender {
+                        info!("Received AppendEntries({}) from {}", ae.fork.as_ref().unwrap().serialized_blocks.last().unwrap().n, sender);
                         self.process_fork(ae, sender).await;
                     }
                 },

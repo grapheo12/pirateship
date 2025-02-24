@@ -73,7 +73,7 @@ pub fn deserialize_proto_block(bytes: &[u8]) -> Result<ProtoBlock, DecodeError> 
     // let mut block = ProtoBlock::default();
 
     // block.merge(&bytes[DIGEST_LENGTH+SIGNATURE_LENGTH..])?;
-    let mut block: ProtoBlock = bitcode::decode(&bytes[DIGEST_LENGTH+SIGNATURE_LENGTH..]).unwrap();
+    let mut block = ProtoBlock::decode(&bytes[DIGEST_LENGTH+SIGNATURE_LENGTH..]).unwrap();
 
     block.parent = bytes[SIGNATURE_LENGTH..SIGNATURE_LENGTH+DIGEST_LENGTH].to_vec();
 

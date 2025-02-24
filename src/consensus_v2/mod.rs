@@ -19,7 +19,7 @@ use block_broadcaster::BlockBroadcaster;
 use block_sequencer::BlockSequencer;
 use client_reply::ClientReplyHandler;
 use fork_receiver::ForkReceiver;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use prost::Message;
 use staging::{Staging, VoteWithSender};
 use tokio::{sync::{mpsc::unbounded_channel, Mutex}, task::JoinSet};
@@ -88,6 +88,10 @@ impl ServerContextType for PinnedConsensusServerContext {
                 return Err(Error::new(ErrorKind::InvalidData, e));
             }
         };
+
+        if sender.contains("client") {
+            info!("Got client msg");
+        }
 
     
         let msg = match body.message {
@@ -194,7 +198,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let (client_reply_command_tx, client_reply_command_rx) = make_channel(_chan_depth);
         let (broadcaster_control_command_tx, broadcaster_control_command_rx) = make_channel(_chan_depth);
         let (staging_tx, staging_rx) = make_channel(_chan_depth);
-        let (logserver_tx, mut logserver_rx) = make_channel(_chan_depth);
+        let (logserver_tx, logserver_rx) = make_channel(_chan_depth);
         let (vote_tx, vote_rx) = make_channel(_chan_depth);
         let (view_change_tx, view_change_rx) = make_channel(_chan_depth);
         let (app_tx, app_rx) = make_channel(_chan_depth);
@@ -218,36 +222,14 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let client_reply = ClientReplyHandler::new(config.clone(), client_reply_rx, client_reply_command_rx);
         let mut handles = JoinSet::new();
         
-        // handles.spawn(async move {
-        //     while let Some(_) = client_reply_rx.recv().await {
-        //         // Sink
-        //     }
-        // });
-    
-        // handles.spawn(async move {
-        //     while let Some(_) = client_reply_command_rx.recv().await {
-        //         // Sink
-        //     }
-        // });
     
         handles.spawn(async move {
+            let _tx = unlogged_tx.clone();
+
             while let Some(_) = logserver_rx.recv().await {
                 // Sink
             }
         });
-
-        // handles.spawn(async move {
-        //     while let Some(_) = app_rx.recv().await {
-        //         // Sink
-        //     }
-        // });
-
-        // handles.spawn(async move {
-        //     while let Some(_) = block_acceptor_rx.recv().await {
-        //         // Sink
-        //     }
-        // });
-
 
 
 
@@ -280,6 +262,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let staging = self.staging.clone();
         let app = self.app.clone();
         let client_reply = self.client_reply.clone();
+        let fork_receiver = self.fork_receiver.clone();
 
         let mut handles = JoinSet::new();
 
@@ -309,11 +292,16 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         });
 
         handles.spawn(async move {
+            info!("Booting up application");
             Application::run(app).await;
         });
 
         handles.spawn(async move {
             ClientReplyHandler::run(client_reply).await;
+        });
+
+        handles.spawn(async move {
+            ForkReceiver::run(fork_receiver).await;
         });
     
         handles

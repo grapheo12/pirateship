@@ -246,7 +246,7 @@ async fn propose_new_request(
 
     let mut buf = Vec::new();
     rpc_msg_body.encode(&mut buf).expect("Protobuf error");
-    info!("msg size: {}", buf.len());
+    info!("msg size: {} leader: {}", buf.len(), curr_leader);
 
     let start = Instant::now();
     loop {

@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, pin::Pin, sy
 
 use async_recursion::async_recursion;
 use futures::future::try_join_all;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use prost::Message;
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
@@ -145,6 +145,7 @@ impl Staging {
     }
 
     fn perf_register_block(&self, block: &CachedBlock) {
+        #[cfg(feature = "perf")]
         if let Some(Sig::ProposerSig(_)) = block.block.sig {
             self.leader_perf_counter_signed.borrow_mut().register_new_entry(block.block.n);
         } else {
@@ -153,6 +154,7 @@ impl Staging {
     }
 
     fn perf_deregister_block(&self, block: &CachedBlock) {
+        #[cfg(feature = "perf")]
         if let Some(Sig::ProposerSig(_)) = block.block.sig {
             self.leader_perf_counter_signed.borrow_mut().deregister_entry(&block.block.n);
         } else {
@@ -160,6 +162,7 @@ impl Staging {
         }
     }
 
+    #[cfg(feature = "perf")]
     fn perf_add_event(&self, block: &CachedBlock, event: &str) -> (bool /* signed */, u64 /* block_n */) {
         if let Some(Sig::ProposerSig(_)) = block.block.sig {
             self.leader_perf_counter_signed.borrow_mut().new_event(event, &block.block.n);
@@ -170,7 +173,13 @@ impl Staging {
         }
     }
 
+    #[cfg(not(feature = "perf"))]
+    fn perf_add_event(&self, _block: &CachedBlock, _event: &str) {
+
+    }
+
     fn perf_add_event_from_perf_stats(&self, signed: bool, block_n: u64, event: &str) {
+        #[cfg(feature = "perf")]
         if signed {
             self.leader_perf_counter_signed.borrow_mut().new_event(event, &block_n);
         } else {
@@ -359,6 +368,8 @@ impl Staging {
         PinnedClient::send(&self.client, &leader, data.as_ref())
             .await.unwrap();
 
+        error!("Sent vote to {} for {}", leader, last_block.block.block.n);
+
 
         Ok(())
     }
@@ -510,6 +521,7 @@ impl Staging {
     }
 
     async fn verify_and_process_vote(&mut self, sender: String, vote: ProtoVote) -> Result<(), ()> {
+        info!("Got vote on {} from {}", vote.n, sender);
         let mut verify_futs = Vec::new();
         for sig in &vote.sig_array {
             let found_block = self.pending_blocks.binary_search_by(|b| {
@@ -605,7 +617,9 @@ impl Staging {
             .map(|e| e.block.clone())
             .collect::<Vec<_>>();
 
+        #[cfg(feature = "perf")]
         let mut block_perf_stats = Vec::new();
+        #[cfg(feature = "perf")]
         for b in &blocks {
             block_perf_stats.push(
                 self.perf_add_event(&b, "Crash Commit")
@@ -613,6 +627,7 @@ impl Staging {
         }
         self.app_tx.send(AppCommand::CrashCommit(blocks)).await.unwrap();
 
+        #[cfg(feature = "perf")]
         for (signed, block_n) in block_perf_stats {
             self.perf_add_event_from_perf_stats(signed, block_n, "Send Crash Commit to App");
         }
@@ -621,6 +636,9 @@ impl Staging {
 
     async fn maybe_crash_commit(&mut self) -> Result<(), ()> {
         let old_ci = self.ci;
+
+        let n_num_tx = self.pending_blocks.iter().map(|e| (e.block.block.n, e.block.block.tx_list.len())).collect::<Vec<_>>();
+        error!("Pending blocks: {:?}", n_num_tx);
         for block in self.pending_blocks.iter() {
             if block.block.block.n <= self.ci {
                 continue;

@@ -689,7 +689,7 @@ impl PinnedClient {
                     }
                     
                     // let flush_time = Instant::now();
-                    // let _ = sock.0.lock().await.flush_write_buffer().await;
+                    let _ = sock.0.lock().await.flush_write_buffer().await;
 
                     // if should_print_flush_time {
                     //     trace!("[{}] Flush time: {} us", combined_prefix, flush_time.elapsed().as_micros());

@@ -43,8 +43,13 @@ impl<S: StorageEngine> StorageService<S> {
         while let Some(cmd) = self.cmd_rx.recv().await {
             match cmd {
                 StorageServiceCommand::Put(key, val, ok_chan) => {
-                    //let res = self.db.put_block(&val, &key);
-                    //let _ = ok_chan.send(res);
+                    #[cfg(feature = "storage")]
+                    {
+                        let res = self.db.put_block(&val, &key);
+                        let _ = ok_chan.send(res);
+                    }
+
+                    #[cfg(not(feature = "storage"))]
                     let _ = ok_chan.send(Ok(()));
                 },
                 StorageServiceCommand::Get(key, val_chan) => {

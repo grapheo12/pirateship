@@ -95,14 +95,17 @@ impl BlockBroadcaster {
     }
 
     fn perf_register(&mut self, entry: u64) {
+        #[cfg(feature = "perf")]
         self.my_block_perf_counter.borrow_mut().register_new_entry(entry);
     }
 
     fn perf_add_event(&mut self, entry: u64, event: &str) {
+        #[cfg(feature = "perf")]
         self.my_block_perf_counter.borrow_mut().new_event(event, &entry);
     }
 
     fn perf_deregister(&mut self, entry: u64) {
+        #[cfg(feature = "perf")]
         self.my_block_perf_counter.borrow_mut().deregister_entry(&entry);
     }
 

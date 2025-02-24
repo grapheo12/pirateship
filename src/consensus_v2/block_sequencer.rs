@@ -124,11 +124,15 @@ impl BlockSequencer {
     }
 
     fn perf_register(&mut self, entry: u64) {
-        self.perf_counter_signed.borrow_mut().register_new_entry(entry);
-        self.perf_counter_unsigned.borrow_mut().register_new_entry(entry);
+        #[cfg(feature = "perf")]
+        {
+            self.perf_counter_signed.borrow_mut().register_new_entry(entry);
+            self.perf_counter_unsigned.borrow_mut().register_new_entry(entry);
+        }
     }
 
     fn perf_fix_signature(&mut self, entry: u64, signed: bool) {
+        #[cfg(feature = "perf")]
         if signed {
             self.perf_counter_unsigned.borrow_mut().deregister_entry(&entry);
         } else {
@@ -137,6 +141,7 @@ impl BlockSequencer {
     }
 
     fn perf_add_event(&mut self, entry: u64, event: &str, signed: bool) {
+        #[cfg(feature = "perf")]
         if signed {
             self.perf_counter_signed.borrow_mut().new_event(event, &entry);
         } else {
@@ -145,8 +150,11 @@ impl BlockSequencer {
     }
 
     fn perf_deregister(&mut self, entry: u64) {
-        self.perf_counter_unsigned.borrow_mut().deregister_entry(&entry);
-        self.perf_counter_signed.borrow_mut().deregister_entry(&entry);
+        #[cfg(feature = "perf")]
+        {
+            self.perf_counter_unsigned.borrow_mut().deregister_entry(&entry);
+            self.perf_counter_signed.borrow_mut().deregister_entry(&entry);
+        }
     }
 
     async fn worker(&mut self, chan_depth: usize) -> Result<(), ()> {

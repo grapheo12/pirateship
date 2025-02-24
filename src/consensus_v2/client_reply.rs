@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use log::{info, warn};
 use prost::Message as _;
 use tokio::{sync::{oneshot, Mutex}, task::JoinSet};
 
@@ -64,6 +65,7 @@ impl ClientReplyHandler {
                 while let Ok(cmd) = rx.recv().await {
                     match cmd {
                         ReplyProcessorCommand::CrashCommit(block_n, tx_n, hsh, reply, (reply_chan, client_tag, _), byz_responses) => {
+                            warn!("Got reply!");
                             let reply = ProtoClientReply {
                                 reply: Some(
                                     crate::proto::client::proto_client_reply::Reply::Receipt(
