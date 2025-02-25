@@ -34,6 +34,7 @@ max_write_buffers_to_merge = 1
 
 [node_config.app_config]
 logger_stats_report_ms = 100
+checkpoint_interval_ms = 60000
 
 [node_config.evil_config]
 simulate_byzantine_behavior = false
@@ -51,37 +52,38 @@ request_config = "Blanks"
 
 [[experiments]]
 name = "pirateship"
-repeats = 3
+repeats = 2
 num_nodes = 7
 node_distribution = "uniform"
 build_command = "make"
-duration = 120
+duration = 60
 
 [experiments.sweeping_parameters]
-num_clients = [100, 200, 300, 500, 700, 1000, 2000]
+# num_clients = [100, 200, 300, 500, 700, 1000, 2000]
+num_clients = [100, 700, 2000]
 
 
-[[experiments]]
-name = "pbft"
-repeats = 3
-num_nodes = 7
-node_distribution = "uniform"
-build_command = "make chained_pbft_logger"
-duration = 120
+# [[experiments]]
+# name = "pbft"
+# repeats = 3
+# num_nodes = 7
+# node_distribution = "uniform"
+# build_command = "make chained_pbft_logger"
+# duration = 120
 
-[experiments.sweeping_parameters]
-num_clients = [100, 200, 300, 500, 700, 1000, 2000]
+# [experiments.sweeping_parameters]
+# num_clients = [100, 200, 300, 500, 700, 1000, 2000]
 
-[[experiments]]
-name = "signed_raft"
-repeats = 3
-num_nodes = 5
-node_distribution = "uniform"
-build_command = "make signed_raft_logger"
-duration = 120
+# [[experiments]]
+# name = "signed_raft"
+# repeats = 3
+# num_nodes = 5
+# node_distribution = "uniform"
+# build_command = "make signed_raft_logger"
+# duration = 120
 
-[experiments.sweeping_parameters]
-num_clients = [100, 200, 300, 500, 700, 1000, 2000]
+# [experiments.sweeping_parameters]
+# num_clients = [100, 200, 300, 500, 700, 1000, 2000]
 
 
 
@@ -89,15 +91,15 @@ num_clients = [100, 200, 300, 500, 700, 1000, 2000]
 [[results]]
 name = "tput_latency_client_sweep"
 plotter = "tput_latency_sweep"
-ramp_up = 30
-ramp_down = 30
+ramp_up = 10
+ramp_down = 10
 output = "lan_experiment.pdf"
 
 [results.legends]
 # Experiment group to legend mapping
 pirateship = "pirateship+byz"
-pbft = "pbft+onlybyz"
-signed_raft = "signed_raft"
+# pbft = "pbft+onlybyz"
+# signed_raft = "signed_raft"
 
 [results.font]
 size = 55
