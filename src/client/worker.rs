@@ -1,7 +1,8 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Instant};
 
+use gluesql::json_storage::error;
 use indexmap::IndexMap;
-use log::{info, warn};
+use log::{info, warn, error};
 use prost::Message as _;
 use tokio::{sync::Mutex, task::{JoinHandle, JoinSet}};
 
@@ -17,6 +18,7 @@ pub struct ClientWorker<Gen: PerWorkerWorkloadGenerator> {
     stat_tx: Sender<ClientWorkerStat>,
 }
 
+#[derive(Debug, Clone)]
 struct CheckerTask {
     start_time: Instant,
     wait_from: String,
@@ -58,7 +60,7 @@ impl OutstandingRequest {
 }
 
 
-const MAX_OUTSTANDING_REQUESTS: usize = 1000;
+const MAX_OUTSTANDING_REQUESTS: usize = 10;
 
 impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> {
     pub fn new(
@@ -89,6 +91,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
 
         let _client = worker.client.clone();
         let _stat_tx = worker.stat_tx.clone();
+        let _backpressure_tx = backpressure_tx.clone();
 
         js.spawn(async move {
             // Fill the backpressure channel with `Success` messages.
@@ -102,18 +105,20 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         });
 
         js.spawn(async move {
-            worker.generator_task(generator_tx, backpressure_rx).await;
+            worker.generator_task(generator_tx, backpressure_rx, _backpressure_tx).await;
         });
 
     }
 
     async fn checker_task(backpressure_tx: Sender<CheckerResponse>, generator_rx: Receiver<CheckerTask>, client: PinnedClient, stat_tx: Sender<ClientWorkerStat>) {
+        let mut waiting_for_byz_response = HashMap::<u64, CheckerTask>::new();
+        
         loop {
             match generator_rx.recv().await {
                 Some(req) => {
                     // This is a new request.
-                    // We can process it.
-                    // So, we send a `Success` message to the generator task.
+                    
+                    waiting_for_byz_response.insert(req.id, req.clone());
                     
                     // We will wait for the response.
                     let res = PinnedClient::await_reply(&client, &req.wait_from).await;
@@ -125,7 +130,6 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                     let msg = res.unwrap();
                     let sz = msg.as_ref().1;
                     let resp = ProtoClientReply::decode(&msg.as_ref().0.as_slice()[..sz]);
-
                     if resp.is_err() {
                         // We need to try again.
                         let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, None, None)).await;
@@ -138,6 +142,12 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                         Some(client::proto_client_reply::Reply::Receipt(receipt)) => {
                             let _ = backpressure_tx.send(CheckerResponse::Success(req.id)).await;
                             let _ = stat_tx.send(ClientWorkerStat::CrashCommitLatency(req.start_time.elapsed())).await;
+
+                            for byz_resp in receipt.byz_responses.iter() {
+                                if let Some(task) = waiting_for_byz_response.remove(&byz_resp.client_tag) {
+                                    let _ = stat_tx.send(ClientWorkerStat::ByzCommitLatency(task.start_time.elapsed())).await;
+                                }
+                            }
                         },
                         Some(client::proto_client_reply::Reply::TryAgain(try_again)) => {
                             let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, None, None)).await;
@@ -146,9 +156,10 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             // We treat tentative receipt as a success.
                             let _ = backpressure_tx.send(CheckerResponse::Success(req.id)).await;
                             let _ = stat_tx.send(ClientWorkerStat::CrashCommitLatency(req.start_time.elapsed())).await;
+
                         },
                         Some(client::proto_client_reply::Reply::Leader(leader)) => {
-                            // We need to try again.
+                            // We need to try again but with the leader reset.
                             let curr_leader = leader.name;
                             let node_list = crate::config::NodeInfo::deserialize(&leader.serialized_node_infos);
                             let new_leader_id = node_list.nodes.iter().position(|e| e.0.eq(&curr_leader));
@@ -164,6 +175,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             }
                             client.0.config.set(config.clone()); 
                             
+                            info!("Leader changed to {}", curr_leader);
 
                             let node_list = node_list.nodes.keys().map(|e| e.clone()).collect::<Vec<_>>();
                             let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, Some(node_list), new_leader_id)).await;
@@ -186,7 +198,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         }
     }
 
-    async fn generator_task(&mut self, generator_tx: Sender<CheckerTask>, backpressure_rx: Receiver<CheckerResponse>) {
+    async fn generator_task(&mut self, generator_tx: Sender<CheckerTask>, backpressure_rx: Receiver<CheckerResponse>, backpressure_tx: Sender<CheckerResponse>) {
         let mut outstanding_requests = HashMap::<u64, OutstandingRequest>::new();
 
         let mut total_requests = 0;
@@ -236,8 +248,14 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                         node_list = _node_list;
                     }
 
-                    let mut req = outstanding_requests.remove(&task.id).unwrap();
-                    // Todo: Actually fire the request.
+                    let req = outstanding_requests.remove(&task.id);
+                    if req.is_none() {
+                        // Skip silently; try to create a new request for this
+                        info!("YOYOOYOY");
+                        backpressure_tx.send(CheckerResponse::Success(0)).await.unwrap();
+                        continue;
+                    }
+                    let mut req = req.unwrap();
                     self.send_request(&mut req, &node_list, &mut curr_leader_id, &mut curr_round_robin_id, &mut outstanding_requests).await;
                     generator_tx.send(req.get_checker_task()).await.unwrap();
                 },
@@ -262,7 +280,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                     req.last_sent_to = curr_leader.clone();
 
                     
-                    PinnedClient::send_buffered(
+                    PinnedClient::send(
                         &self.client,
                         &curr_leader,
                         MessageRef(buf, sz, &crate::rpc::SenderType::Anon),
@@ -282,6 +300,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
             };
 
             if res.is_err() {
+                error!("Error: {:?}", res);
                 *curr_leader_id = (*curr_leader_id + 1) % node_list.len();
                 outstanding_requests.clear(); // Clear it out because I am not going to listen on that socket again
                 // info!("Retrying with leader {} Backoff: {} ms: Error: {:?}", curr_leader, current_backoff_ms, res);

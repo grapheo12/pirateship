@@ -80,19 +80,22 @@ impl ClientStatLogger {
         let crash_commit_avg = if self.crash_commit_latency_window.len() > 0 {
             self.crash_commit_latency_window.iter()
                 .fold(Duration::from_secs(0), |acc, (_, latency)| acc + *latency)
-                .div_f64(self.crash_commit_latency_window.len() as f64)
+                .as_secs_f64() / self.crash_commit_latency_window.len() as f64
         } else {
-            Duration::from_secs(0)
+            0.0
         };
         let byz_commit_avg = if self.byz_commit_latency_window.len() > 0 {
             self.byz_commit_latency_window.iter()
                 .fold(Duration::from_secs(0), |acc, (_, latency)| acc + *latency)
-                .div_f64(self.byz_commit_latency_window.len() as f64)
+                .as_secs_f64() / self.byz_commit_latency_window.len() as f64
         } else {
-            Duration::from_secs(0)
+            0.0
         };
 
-        info!("Average Crash commit latency: {:?}, Average Byz commit latency: {:?}", crash_commit_avg, byz_commit_avg);
+        info!("Average Crash commit latency: {} us, Average Byz commit latency: {} us",
+            (crash_commit_avg * 1.0e+6) as u64,
+            (byz_commit_avg * 1.0e+6) as u64
+        );
     }
 }
 

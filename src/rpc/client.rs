@@ -54,7 +54,7 @@ impl BufferedTlsStream {
             stream_tx, // : BufWriter::with_capacity(16 * 1024, stream),
             stream_rx,
             buffer: vec![0u8; 8192],
-            write_buffer: vec![0u8; 65536],
+            write_buffer: vec![0u8; 8192],
             bound: 0,
             offset: 0,
             write_offset: 0
@@ -655,7 +655,7 @@ impl PinnedClient {
                     break s
                 };
                 
-                while rx.recv_many(&mut msgs, 1).await > 0 {
+                while rx.recv_many(&mut msgs, 10).await > 0 {
                     let mut should_print_flush_time = false;
                     let mut combined_prefix = String::from("");
                     let mut should_die = false;
