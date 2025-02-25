@@ -155,10 +155,8 @@ impl BatchProposer {
             self.perf_register_random(work_counter);
             // TODO: Filter read-only transactions that do not need to go through consensus.
             // Forward them directly to execution.
-            info!("New transaction!");
 
             if !self.i_am_leader() {
-                warn!("Not the leader. Dropping transaction");
                 self.reply_leader(new_tx.unwrap()).await;
                 return Ok(());
             }

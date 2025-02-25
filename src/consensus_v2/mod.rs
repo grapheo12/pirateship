@@ -87,11 +87,6 @@ impl ServerContextType for PinnedConsensusServerContext {
                 return Err(Error::new(ErrorKind::InvalidData, e));
             }
         };
-
-        if sender.contains("client") {
-            info!("Got client msg");
-        }
-
     
         let msg = match body.message {
             Some(m) => m,

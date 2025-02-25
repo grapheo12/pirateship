@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, pin::Pin, sy
 
 use async_recursion::async_recursion;
 use futures::future::try_join_all;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use prost::Message;
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
@@ -368,7 +368,7 @@ impl Staging {
         PinnedClient::send(&self.client, &leader, data.as_ref())
             .await.unwrap();
 
-        error!("Sent vote to {} for {}", leader, last_block.block.block.n);
+        trace!("Sent vote to {} for {}", leader, last_block.block.block.n);
 
 
         Ok(())
@@ -521,7 +521,7 @@ impl Staging {
     }
 
     async fn verify_and_process_vote(&mut self, sender: String, vote: ProtoVote) -> Result<(), ()> {
-        info!("Got vote on {} from {}", vote.n, sender);
+        debug!("Got vote on {} from {}", vote.n, sender);
         let mut verify_futs = Vec::new();
         for sig in &vote.sig_array {
             let found_block = self.pending_blocks.binary_search_by(|b| {
@@ -638,7 +638,7 @@ impl Staging {
         let old_ci = self.ci;
 
         let n_num_tx = self.pending_blocks.iter().map(|e| (e.block.block.n, e.block.block.tx_list.len())).collect::<Vec<_>>();
-        error!("Pending blocks: {:?}", n_num_tx);
+        trace!("Pending blocks: {:?}", n_num_tx);
         for block in self.pending_blocks.iter() {
             if block.block.block.n <= self.ci {
                 continue;

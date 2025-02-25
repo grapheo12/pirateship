@@ -65,7 +65,6 @@ impl ClientReplyHandler {
                 while let Ok(cmd) = rx.recv().await {
                     match cmd {
                         ReplyProcessorCommand::CrashCommit(block_n, tx_n, hsh, reply, (reply_chan, client_tag, _), byz_responses) => {
-                            warn!("Got reply!");
                             let reply = ProtoClientReply {
                                 reply: Some(
                                     crate::proto::client::proto_client_reply::Reply::Receipt(
