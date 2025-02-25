@@ -1,10 +1,8 @@
-use std::{collections::HashMap, pin::Pin, sync::Arc, time::Instant};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use gluesql::json_storage::error;
-use indexmap::IndexMap;
-use log::{info, warn, error};
+use log::{debug, error, info};
 use prost::Message as _;
-use tokio::{sync::Mutex, task::{JoinHandle, JoinSet}};
+use tokio::task::JoinSet;
 
 use crate::{config::ClientConfig, proto::{client::{self, ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::channel::{make_channel, Receiver, Sender}};
 use crate::rpc::MessageRef;
@@ -251,7 +249,6 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                     let req = outstanding_requests.remove(&task.id);
                     if req.is_none() {
                         // Skip silently; try to create a new request for this
-                        info!("YOYOOYOY");
                         backpressure_tx.send(CheckerResponse::Success(0)).await.unwrap();
                         continue;
                     }
@@ -300,7 +297,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
             };
 
             if res.is_err() {
-                error!("Error: {:?}", res);
+                debug!("Error: {:?}", res);
                 *curr_leader_id = (*curr_leader_id + 1) % node_list.len();
                 outstanding_requests.clear(); // Clear it out because I am not going to listen on that socket again
                 // info!("Retrying with leader {} Backoff: {} ms: Error: {:?}", curr_leader, current_backoff_ms, res);

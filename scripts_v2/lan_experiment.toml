@@ -42,6 +42,8 @@ byzantine_start_block = 0
 
 
 [client_config]
+full_duplex = true
+client_sub_id = 0       # This is filled up later by the caller code.
 
 [client_config.net_config]
 client_max_retry = 10
@@ -59,8 +61,7 @@ build_command = "make"
 duration = 60
 
 [experiments.sweeping_parameters]
-# num_clients = [100, 200, 300, 500, 700, 1000, 2000]
-num_clients = [100, 700, 2000]
+num_clients = [100, 200, 300, 500, 700, 1000, 2000]
 
 
 # [[experiments]]
@@ -94,6 +95,7 @@ plotter = "tput_latency_sweep"
 ramp_up = 10
 ramp_down = 10
 output = "lan_experiment.pdf"
+force_parse = true
 
 [results.legends]
 # Experiment group to legend mapping
