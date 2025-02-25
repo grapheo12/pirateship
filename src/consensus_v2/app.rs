@@ -7,7 +7,7 @@ use tokio::sync::{oneshot, Mutex};
 
 use crate::{config::AtomicConfig, crypto::{CachedBlock, HashType, DIGEST_LENGTH}, proto::{client::ProtoByzResponse, execution::{ProtoTransaction, ProtoTransactionResult}}, utils::{channel::{Receiver, Sender}, PerfCounter}};
 
-use super::{client_reply::ClientReplyCommand, timer::ResettableTimer};
+use super::{client_reply::ClientReplyCommand, super::utils::timer::ResettableTimer};
 
 
 pub enum AppCommand {

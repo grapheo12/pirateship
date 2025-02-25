@@ -3,7 +3,6 @@ mod block_sequencer;
 mod block_broadcaster;
 mod staging;
 pub mod fork_receiver;
-mod timer;
 pub mod app;
 pub mod engines;
 pub mod client_reply;

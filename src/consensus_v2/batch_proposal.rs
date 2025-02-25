@@ -13,7 +13,7 @@ use crate::utils::channel::{Sender, Receiver};
 use crate::utils::PerfCounter;
 use tokio::sync::Mutex;
 
-use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, proto::execution::ProtoTransaction, rpc::server::MsgAckChan};
+use crate::{config::AtomicConfig, utils::timer::ResettableTimer, proto::execution::ProtoTransaction, rpc::server::MsgAckChan};
 
 use super::app::AppCommand;
 

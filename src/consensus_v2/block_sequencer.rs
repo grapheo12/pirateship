@@ -9,7 +9,7 @@ use crate::crypto::FutureHash;
 use crate::utils::channel::{Sender, Receiver};
 
 use crate::utils::PerfCounter;
-use crate::{config::AtomicConfig, consensus_v2::timer::ResettableTimer, crypto::{hash, CachedBlock, CryptoServiceConnector, HashType}, proto::consensus::{DefferedSignature, ProtoBlock, ProtoForkValidation, ProtoQuorumCertificate, ProtoTransactionList}};
+use crate::{config::AtomicConfig, utils::timer::ResettableTimer, crypto::{hash, CachedBlock, CryptoServiceConnector, HashType}, proto::consensus::{DefferedSignature, ProtoBlock, ProtoForkValidation, ProtoQuorumCertificate, ProtoTransactionList}};
 
 use super::batch_proposal::{MsgAckChanWithTag, RawBatch};
 

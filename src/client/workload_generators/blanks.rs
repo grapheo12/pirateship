@@ -1,6 +1,6 @@
-use crate::{proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase, ProtoTransactionResult}, utils::workload_generators::Executor};
+use crate::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase, ProtoTransactionResult};
 
-use super::{PerWorkerWorkloadGenerator, WorkloadUnit};
+use super::{PerWorkerWorkloadGenerator, WorkloadUnit, Executor};
 
 pub struct BlankWorkloadGenerator { }
 

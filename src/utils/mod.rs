@@ -13,13 +13,13 @@ pub use file_storage::*;
 mod storage_service;
 pub use storage_service::*;
 
-pub mod workload_generators;
-
 mod serialize;
 pub use serialize::*;
 
 mod perf;
 pub use perf::*;
+
+pub mod timer;
 
 
 pub mod channel {

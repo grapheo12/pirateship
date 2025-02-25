@@ -10,6 +10,8 @@ pub mod rpc;
 // pub mod execution;
 pub mod proto;
 
+pub mod client;
+
 #[macro_export]
 macro_rules! get_tx_list {
     ($block: expr) => {
