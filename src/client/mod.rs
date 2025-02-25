@@ -1,5 +1,5 @@
-mod workload_generators;
+pub mod workload_generators;
 
-mod logger;
+pub mod logger;
 
-mod worker;
+pub mod worker;
