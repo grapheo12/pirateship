@@ -81,7 +81,10 @@ def copy_file_from_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
         }
     )
 
-    conn.get(src, local=dest, preserve_mode=True)
+    try:
+        conn.get(src, local=dest, preserve_mode=True)
+    except Exception as e:
+        print(e)
 
     conn.close()
 

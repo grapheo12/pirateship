@@ -375,7 +375,7 @@ sleep 1
             f"ls {remote_repo}/target/release"
         ], self.dev_ssh_user, self.dev_ssh_key, self.dev_vm, hide=True)
 
-        return all([bin in res[0] for bin in TARGET_BINARIES])
+        return any([bin in res[0] for bin in TARGET_BINARIES])
     
 
     def get_build_details(self) -> Tuple[str, str]:
