@@ -170,15 +170,15 @@ impl BlockSequencer {
                 _ = self.qc_rx.recv_many(&mut qc_buf, chan_depth) => {
                     self.add_qcs(qc_buf).await;
                 }
+                _tick = self.signature_timer.wait() => {
+                    self.force_sign_next_batch = true;
+                },
                 _batch_and_client_reply = self.batch_rx.recv() => {
                     if let Some(_) = _batch_and_client_reply {
                         let (batch, client_reply) = _batch_and_client_reply.unwrap();
                         self.perf_register(self.seq_num + 1); // Projected seq num is used as entry id for perf
                         self.handle_new_batch(batch, client_reply, vec![], self.seq_num + 1).await;
                     }
-                },
-                _tick = self.signature_timer.wait() => {
-                    self.force_sign_next_batch = true;
                 },
                 _cmd = self.control_command_rx.recv() => {
                     self.handle_control_command(_cmd).await;
