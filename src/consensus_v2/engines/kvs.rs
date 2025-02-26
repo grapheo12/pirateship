@@ -182,7 +182,7 @@ impl AppEngine for KVSAppEngine {
         self.state.ci_state.retain(|_, v| v.len() > 0);
         println!("block count:{}", block_count);
         println!("transaction count{}", txn_count);
-        return final_result;
+        final_result
     }
 
     fn handle_rollback(&mut self, rolled_back_blocks: u64) {
@@ -195,9 +195,6 @@ impl AppEngine for KVSAppEngine {
     }
 
     fn handle_unlogged_request(&mut self, request: crate::proto::execution::ProtoTransaction) -> crate::proto::execution::ProtoTransactionResult {
-        //read requests
-        //see how to handle crash commits + read requests
-        //and then byz commit and rollback
         let mut txn_result = ProtoTransactionResult {
             result: Vec::new(),
         };
@@ -253,6 +250,7 @@ impl AppEngine for KVSAppEngine {
     
 }
 
+// impl KVSAppEngine {}
 
 #[cfg(test)]
 mod tests {
@@ -271,8 +269,8 @@ mod tests {
     fn test_crash_commit() {
         let mut engine: KVSAppEngine = setup_engine();
         let blocks = vec![
-            create_dummy_cached_block(),
-            create_dummy_cached_block(), // Add multiple blocks for testing
+            create_dummy_cached_block(false, true, false),
+            create_dummy_cached_block(false, true, false),
         ];
 
         let result: Vec<Vec<crate::proto::execution::ProtoTransactionResult>> = engine.handle_crash_commit(blocks);
@@ -280,20 +278,44 @@ mod tests {
         dbg!(&result);
         println!("{}", engine.last_ci)
     }
-
     #[test]
     fn test_byz_commit() {
         let mut engine: KVSAppEngine = setup_engine();
         let blocks = vec![
-            create_dummy_cached_block(),
-            create_dummy_cached_block(), // Add multiple blocks for testing
+            create_dummy_cached_block(false, false, true),
+            create_dummy_cached_block(false, false, true),
         ];
 
         let result: Vec<Vec<crate::proto::client::ProtoByzResponse>> = engine.handle_byz_commit(blocks);
         dbg!(&engine.state.bci_state);
         dbg!(&result);
-        println!("potsto{}", engine.last_ci)
+        println!("potsto{}", engine.last_bci)
     }
+
+    fn test_rollback() {
+        let mut engine: KVSAppEngine = setup_engine();
+        
+        todo!()
+    }
+    #[test]
+    fn test_reads() {
+        let mut engine = setup_engine();
+
+        let blocks = vec![
+            create_dummy_cached_block(false, true, false),
+            create_dummy_cached_block(false, true, false),
+        ];
+
+        let result: Vec<Vec<crate::proto::execution::ProtoTransactionResult>> = engine.handle_crash_commit(blocks);
+        dbg!(&engine.state.ci_state);
+        dbg!(&result);
+
+        let txn = create_dummy_tx(true, false, false, ProtoTransactionOpType::Read);
+        let result= engine.handle_unlogged_request(txn);
+        dbg!(&engine.state.ci_state);
+        dbg!(&result);
+    }
+
 
 
 
@@ -359,9 +381,9 @@ mod tests {
         KVSAppEngine::new(atomic_config)
     }
 
-fn create_dummy_cached_block() -> CachedBlock {
+fn create_dummy_tx(on_receieve: bool, on_crash_commit: bool, on_byzantine_commit: bool, op_type: ProtoTransactionOpType) -> ProtoTransaction {
     let dummy_op = ProtoTransactionOp {
-        op_type: ProtoTransactionOpType::Write as i32, 
+        op_type: op_type as i32, 
         operands: vec![vec![1], vec![4]]
     };
 
@@ -369,12 +391,52 @@ fn create_dummy_cached_block() -> CachedBlock {
         ops: vec![dummy_op.clone()],
     };
 
-    let dummy_transaction = ProtoTransaction {
+    let mut dummy_transaction = ProtoTransaction {
         on_receive:None,
         on_crash_commit: None,
-        on_byzantine_commit: Some(dummy_phase.clone()),
+        on_byzantine_commit: None,
         is_reconfiguration: false,
     };
+
+    if on_receieve == true {
+        println!("see1");
+        dummy_transaction.on_receive = Some(dummy_phase.clone());
+    }
+    
+    if on_crash_commit == true {
+        println!("see2");
+
+        dummy_transaction.on_crash_commit = Some(dummy_phase.clone());
+    }
+    if on_byzantine_commit == true {
+        println!("see3");
+
+        dummy_transaction.on_byzantine_commit = Some(dummy_phase.clone());
+    }
+    return dummy_transaction;
+}
+
+fn create_dummy_cached_block(on_receieve: bool, on_crash_commit: bool, on_byzantine_commit: bool) -> CachedBlock {
+    
+
+    // let dummy_op = ProtoTransactionOp {
+    //     op_type: ProtoTransactionOpType::Write as i32, 
+    //     operands: vec![vec![1], vec![4]]
+    // };
+
+    // let dummy_phase = ProtoTransactionPhase {
+    //     ops: vec![dummy_op.clone()],
+    // };
+    
+    // let dummy_txn = ProtoTransaction {
+    //     on_receive:None,
+    //     on_crash_commit: None,
+    //     on_byzantine_commit:  Some(dummy_phase.clone()),
+    //     is_reconfiguration: false,
+    // };
+
+    let dummy_txn = create_dummy_tx(on_receieve, on_crash_commit, on_byzantine_commit, ProtoTransactionOpType::Write);
+
 
     let dummy_qc = ProtoQuorumCertificate {
         digest: vec![0xaa, 0xbb, 0xcc],
@@ -395,19 +457,19 @@ fn create_dummy_cached_block() -> CachedBlock {
         name: "ForkValidator".to_string(),
     };
 
-    let dummy_vote = ProtoVote {
-        sig_array: vec![ProtoSignatureArrayEntry {
-            n: 10,
-            sig: vec![0xbe, 0xef, 0xfa, 0xce], 
-        }],
-        fork_digest: vec![0x12, 0x34, 0x56, 0x78], 
-        n: 10,
-        view: 4,
-        config_num: 1,
-    };
+    // let dummy_vote = ProtoVote {
+    //     sig_array: vec![ProtoSignatureArrayEntry {
+    //         n: 10,
+    //         sig: vec![0xbe, 0xef, 0xfa, 0xce], 
+    //     }],
+    //     fork_digest: vec![0x12, 0x34, 0x56, 0x78], 
+    //     n: 10,
+    //     view: 4,
+    //     config_num: 1,
+    // };
 
     let dummy_proto_block = ProtoBlock {
-        tx_list: vec![dummy_transaction.clone(), dummy_transaction.clone()], 
+        tx_list: vec![dummy_txn.clone(), dummy_txn.clone()], 
         n: 42, 
         parent: vec![0xde, 0xad, 0xbe, 0xef],
         view: 2,
