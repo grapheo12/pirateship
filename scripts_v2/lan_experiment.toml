@@ -61,7 +61,7 @@ build_command = "make"
 duration = 60
 
 [experiments.sweeping_parameters]
-num_clients = [100, 200, 300, 500, 700, 1000, 2000]
+num_clients = [100, 120, 150, 200, 250, 300, 350]
 
 
 # [[experiments]]
@@ -94,12 +94,12 @@ name = "tput_latency_client_sweep"
 plotter = "tput_latency_sweep"
 ramp_up = 10
 ramp_down = 10
-output = "lan_experiment.pdf"
+# output = "lan_experiment.pdf"
 force_parse = true
 
 [results.legends]
 # Experiment group to legend mapping
-pirateship = "pirateship+byz"
+pirateship = "pirateship"
 # pbft = "pbft+onlybyz"
 # signed_raft = "signed_raft"
 
