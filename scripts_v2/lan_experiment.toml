@@ -54,14 +54,14 @@ request_config = "Blanks"
 
 [[experiments]]
 name = "pirateship"
-repeats = 2
+repeats = 1
 num_nodes = 7
 node_distribution = "uniform"
-build_command = "make pirateship_logger_nostorage"
+build_command = "make"
 duration = 60
 
 [experiments.sweeping_parameters]
-num_clients = [100, 120, 150, 200, 250, 300, 350]
+num_clients = [10, 20, 30, 50, 70, 100, 120, 150, 200, 250, 300, 350]
 
 
 # [[experiments]]
@@ -100,7 +100,7 @@ force_parse = true
 
 [results.legends]
 # Experiment group to legend mapping
-pirateship = "pirateship+byz"
+pirateship = "pirateship"
 # pbft = "pbft+onlybyz"
 # signed_raft = "signed_raft"
 

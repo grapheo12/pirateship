@@ -142,6 +142,7 @@ pub struct ClientRpcConfig {
 pub struct WorkloadConfig {
     pub num_clients: usize,
     pub num_requests: usize,
+    pub max_concurrent_requests: usize,
     pub request_config: RequestConfig
 }
 

@@ -58,8 +58,6 @@ impl OutstandingRequest {
 }
 
 
-const MAX_OUTSTANDING_REQUESTS: usize = 10;
-
 impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> {
     pub fn new(
         config: ClientConfig,
@@ -82,10 +80,11 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         // Anytime the checker task processes a reply successfully, it sends a `Success` message to the generator task.
         // The generator waits to receive this message before sending the next request.
         // However, if the generator task receives a `TryAgain` message, it will send the same request again. 
-        let (backpressure_tx, backpressure_rx) = make_channel(MAX_OUTSTANDING_REQUESTS);
+        let max_outstanding_requests = worker.config.workload_config.max_concurrent_requests;
+        let (backpressure_tx, backpressure_rx) = make_channel(max_outstanding_requests);
 
         // This is to let the checker task know about new requests.
-        let (generator_tx, generator_rx) = make_channel(MAX_OUTSTANDING_REQUESTS);
+        let (generator_tx, generator_rx) = make_channel(max_outstanding_requests);
 
         let _client = worker.client.clone();
         let _stat_tx = worker.stat_tx.clone();
@@ -94,7 +93,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         js.spawn(async move {
             // Fill the backpressure channel with `Success` messages.
             // So that the generator task can start sending requests.
-            for _ in 0..MAX_OUTSTANDING_REQUESTS {
+            for _ in 0..max_outstanding_requests {
                 backpressure_tx.send(CheckerResponse::Success(0)).await.unwrap();
             }
 
