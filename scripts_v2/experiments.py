@@ -13,7 +13,8 @@ import os
 
 
 DEFAULT_CA_NAME = "Pft"
-MAX_OUTSTANDING_REQUESTS = 256
+MAX_OUTSTANDING_REQUESTS = 128
+MIN_OUTSTANDING_REQUESTS = 16
 
 @dataclass
 class Experiment:
@@ -182,8 +183,8 @@ class Experiment:
 
         # Always makes sure there are enough in-flight requests to keep the batches full
         num_outstanding_requests = self.base_node_config["consensus_config"]["max_backlog_batch_size"] // self.num_clients
-        # But there has to be min of 1 and max of 256 (arbitrary), otherwise the latency would be too high unnecessarily
-        num_outstanding_requests = max(1, min(num_outstanding_requests, MAX_OUTSTANDING_REQUESTS))
+        # But there has to be min of 16 and max of 128 (arbitrary), otherwise the latency would be too high; or load will be low unnecessarily
+        num_outstanding_requests = max(MIN_OUTSTANDING_REQUESTS, min(num_outstanding_requests, MAX_OUTSTANDING_REQUESTS))
 
         for client_num in range(len(client_vms)):
             config = deepcopy(self.base_client_config)
