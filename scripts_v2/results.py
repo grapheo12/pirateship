@@ -281,6 +281,9 @@ class Result:
     def tput_latency_sweep_parse(self, ramp_up, ramp_down, legends) -> Dict[str, List[Stats]]:
         plot_dict = {}
 
+        # Which indices do I skip?
+        skip_indices = self.kwargs.get('skip_indices', [])
+
         # Find parsing log files for each group
         for group_name, experiments in self.experiment_groups.items():
             print("========", group_name, "========")
@@ -314,7 +317,10 @@ class Result:
             if needs_crash:
                 final_stats = []
 
-                for experiment in experiments:
+                for idx, experiment in enumerate(experiments):
+                    if idx in skip_indices:
+                        print("\x1b[31;1mSkipping experiment", experiment.name, "for crash commit\x1b[0m")
+                        continue
                     stats = self.process_experiment(experiment, ramp_up, ramp_down, byz=False)
                     if stats is not None:
                         final_stats.append(stats)
@@ -327,7 +333,10 @@ class Result:
             if needs_byz:
                 final_stats = []
 
-                for experiment in experiments:
+                for idx, experiment in enumerate(experiments):
+                    if idx in skip_indices:
+                        print("\x1b[31;1mSkipping experiment", experiment.name, "for byz commit\x1b[0m")
+                        continue
                     stats = self.process_experiment(experiment, ramp_up, ramp_down, byz=True)
                     if stats is not None:
                         final_stats.append(stats)

@@ -77,11 +77,7 @@ pub struct ConsensusConfig {
     pub view_timeout_ms: u64,
     pub signature_max_delay_blocks: u64,
     pub vote_processing_workers: u16,
-
-    #[cfg(feature="storage")]
     pub log_storage_config: StorageConfig,
-
-    #[cfg(feature = "platforms")]
     pub liveness_u: u64,
 }
 
@@ -207,10 +203,8 @@ impl ClientConfig {
                 view_timeout_ms: 150,
                 vote_processing_workers: 128,
 
-                #[cfg(feature = "platforms")]
                 liveness_u: 1,
 
-                #[cfg(feature = "storage")]
                 log_storage_config: StorageConfig::RocksDB(RocksDBConfig::default()),
             },
             app_config: AppConfig {
