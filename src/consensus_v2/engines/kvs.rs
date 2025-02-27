@@ -82,11 +82,12 @@ impl AppEngine for KVSAppEngine {
                 };
 
                 for op in ops.iter() {
-                    if op.operands.len() != 2 {
-                        continue;
-                    }
+                    
                     if let Some(op_type) = ProtoTransactionOpType::from_i32(op.op_type) {
                         if op_type == ProtoTransactionOpType::Write {
+                            if op.operands.len() != 2 {
+                                continue;
+                            }
                             let key = &op.operands[0];
                             let val: &Vec<u8> = &op.operands[1];
                             if self.state.ci_state.contains_key(key) {
@@ -94,16 +95,29 @@ impl AppEngine for KVSAppEngine {
                             } else {
                                 self.state.ci_state.insert(key.clone(), vec![(proto_block.n, val.clone())]);
                             }
+                            txn_result.result.push(ProtoTransactionOpResult {
+                                success: true,
+                                values: vec![],
+                            });
+                        } else if op_type ==ProtoTransactionOpType::Read {
+                            if op.operands.len() != 1 {
+                                continue;
+                            }
+                            let key: &Vec<u8> = &op.operands[0];
+                            let result = self.read(key);
+                            if let Some(value) = result {
+                                txn_result.result.push(ProtoTransactionOpResult {
+                                    success: true,
+                                    values: vec![value],
+                                });
+                            }
                         }
                     } else {
                         println!("Invalid operation type: {}", op.op_type);
                         continue;
                     }
 
-                    txn_result.result.push(ProtoTransactionOpResult {
-                        success: true,
-                        values: vec![],
-                    });
+                    
                 }
                 block_result.push(txn_result);
                 //test
@@ -213,30 +227,10 @@ impl AppEngine for KVSAppEngine {
                 values: vec![],
             };
             let key = &op.operands[0];
-            
-            //same search logic from old kvs.rs
-            let ci_res = self.state.ci_state.get(key);
-            match ci_res {
-                Some(v) => {
-                    // Invariant: v is sorted by ci
-                    // Invariant: v.len() > 0
-                    let res = &v.last().unwrap().1;
-                    op_result.success = true;
-                    op_result.values = vec![res.clone()];
-                },
-                None => {
-                    // Need to check in bci_state.
-                },
-            };
-            let bci_res = self.state.bci_state.get(key);
-            match bci_res {
-                Some(v) => {
-                    op_result.success = true;
-                    op_result.values = vec![v.clone()];
-                },
-                None =>  {
-                    //result should be false by default
-                },
+            let result = self.read(key);
+            if let Some(value) = result {
+                op_result.success = true;
+                op_result.values = vec![value];
             }
             txn_result.result.push(op_result);
         }
@@ -250,7 +244,27 @@ impl AppEngine for KVSAppEngine {
     
 }
 
-// impl KVSAppEngine {}
+impl KVSAppEngine {
+    fn read(&self, key: &Vec<u8>) -> Option<Vec<u8>> {
+        //same search logic from old kvs.rs
+        let ci_res = self.state.ci_state.get(key);
+        if let Some(v) = ci_res {
+            // Invariant: v is sorted by ci
+            // Invariant: v.len() > 0
+            let res = &v.last().unwrap().1;
+            return Some(res.clone());
+        } else {
+            //check bci_state
+        }
+        
+        let bci_res = self.state.bci_state.get(key);
+        if let Some(v) = bci_res {
+            return Some(v.clone());
+        } else {
+            return None;
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
