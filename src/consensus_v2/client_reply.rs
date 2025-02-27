@@ -164,6 +164,7 @@ impl ClientReplyHandler {
                     if let Some(reply_sender_vec) = self.reply_map.remove(&hash) {
                         self.do_crash_commit_reply(reply_sender_vec, hash, n, reply_vec).await;
                     } else {
+                        // We received the reply before the request. Store it for later.
                         self.crash_commit_reply_buf.insert(hash, (n, reply_vec));
                     }
                 }
@@ -181,17 +182,20 @@ impl ClientReplyHandler {
     }
 
     async fn maybe_clear_reply_buf(&mut self, batch_hash: HashType) {
+        
+        // Byz register must happen first. Otherwise when crash commit piggybacks the byz commit reply, it will be too late.
+        if let Some((n, reply_vec)) = self.byz_commit_reply_buf.remove(&batch_hash) {
+            if let Some(reply_sender_vec) = self.byz_reply_map.remove(&batch_hash) {
+                self.do_byz_commit_reply(reply_sender_vec, batch_hash.clone(), n, reply_vec).await;
+            }
+        }
+
         if let Some((n, reply_vec)) = self.crash_commit_reply_buf.remove(&batch_hash) {
             if let Some(reply_sender_vec) = self.reply_map.remove(&batch_hash) {
                 self.do_crash_commit_reply(reply_sender_vec, batch_hash.clone(), n, reply_vec).await;
             }
         }
 
-        if let Some((n, reply_vec)) = self.byz_commit_reply_buf.remove(&batch_hash) {
-            if let Some(reply_sender_vec) = self.byz_reply_map.remove(&batch_hash) {
-                self.do_byz_commit_reply(reply_sender_vec, batch_hash, n, reply_vec).await;
-            }
-        }
     }
 }
 

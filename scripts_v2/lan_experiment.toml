@@ -62,7 +62,7 @@ build_command = "make"
 duration = 60
 
 [experiments.sweeping_parameters]
-num_clients = [10, 20, 30, 50, 70, 100, 120, 150, 200, 250, 300, 350]
+num_clients = [100, 200, 250, 300, 350, 400, 450]
 
 
 # [[experiments]]
