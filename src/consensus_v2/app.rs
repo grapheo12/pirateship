@@ -274,8 +274,8 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
                 assert_eq!(block_hashes.len(), results.len());
 
                 let block_ns_cp = block_ns.clone();
-                let result_map = block_hashes.into_iter().zip( // (HashType, (u64, Vec<ProtoTransactionResult>)) ---> HashMap<HashType, (u64, Vec<ProtoTransactionResult>)>
-                    block_ns.into_iter().zip(results.into_iter()) // (u64, Vec<ProtoTransactionResult>)
+                let result_map = block_hashes.into_iter().zip( // (HashType, (u64, Vec<ProtoByzResponse>)) ---> HashMap<HashType, (u64, Vec<ProtoTransactionResult>)>
+                    block_ns.into_iter().zip(results.into_iter()) // (u64, Vec<ProtoByzResponse>)
                 ).collect();
                 self.client_reply_tx.send(ClientReplyCommand::ByzCommitAck(result_map)).await.unwrap();
                 

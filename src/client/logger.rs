@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, pin::Pin, sync::Arc, time::{Duration, Instant}};
+use std::{collections::{HashMap, VecDeque}, pin::Pin, sync::Arc, time::{Duration, Instant}};
 
 use log::info;
 
@@ -7,6 +7,7 @@ use crate::utils::{channel::Receiver, timer::ResettableTimer};
 pub enum ClientWorkerStat {
     CrashCommitLatency(Duration),
     ByzCommitLatency(Duration),
+    ByzCommitPending(usize /* client_id */, usize /* pending size */),
 }
 
 pub struct ClientStatLogger {
@@ -17,6 +18,8 @@ pub struct ClientStatLogger {
     crash_commit_latency_window: VecDeque<(Instant /* when it was registered */, Duration /* latency value */)>,
 
     byz_commit_latency_window: VecDeque<(Instant, Duration)>,
+
+    byz_commit_pending_per_worker: HashMap<usize, usize>,
 }
 
 impl ClientStatLogger {
@@ -28,6 +31,7 @@ impl ClientStatLogger {
             average_window,
             crash_commit_latency_window: VecDeque::new(),
             byz_commit_latency_window: VecDeque::new(),
+            byz_commit_pending_per_worker: HashMap::new(),
         }
     }
 
@@ -73,6 +77,9 @@ impl ClientStatLogger {
                 }
                 self.byz_commit_latency_window.push_back((Instant::now(), latency));
             }
+            ClientWorkerStat::ByzCommitPending(id, pending) => {
+                self.byz_commit_pending_per_worker.insert(id, pending);
+            }
         }
     }
 
@@ -96,6 +103,12 @@ impl ClientStatLogger {
             (crash_commit_avg * 1.0e+6) as u64,
             (byz_commit_avg * 1.0e+6) as u64
         );
+
+        let total_pending = self.byz_commit_pending_per_worker.iter().map(|(_, pending)| *pending).sum::<usize>();
+        let max_pending = self.byz_commit_pending_per_worker.iter().map(|(_, pending)| *pending).max().unwrap_or(0);
+        let min_pending = self.byz_commit_pending_per_worker.iter().map(|(_, pending)| *pending).min().unwrap_or(0);
+
+        info!("Total Byz commit pending: {}, Max pending: {}, Min pending: {}", total_pending, max_pending, min_pending);
     }
 }
 

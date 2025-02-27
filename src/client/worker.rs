@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use log::{debug, error, info};
+use nix::libc::stat;
 use prost::Message as _;
 use tokio::task::JoinSet;
 
@@ -90,6 +91,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         let _stat_tx = worker.stat_tx.clone();
         let _backpressure_tx = backpressure_tx.clone();
 
+        let id = worker.id;
         js.spawn(async move {
             // Fill the backpressure channel with `Success` messages.
             // So that the generator task can start sending requests.
@@ -98,7 +100,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
             }
 
             // Can't let the checker_task consume this worker (or lock it for indefinite time).
-            Self::checker_task(backpressure_tx, generator_rx, _client, _stat_tx).await;
+            Self::checker_task(backpressure_tx, generator_rx, _client, _stat_tx, id).await;
         });
 
         js.spawn(async move {
@@ -107,15 +109,25 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
 
     }
 
-    async fn checker_task(backpressure_tx: Sender<CheckerResponse>, generator_rx: Receiver<CheckerTask>, client: PinnedClient, stat_tx: Sender<ClientWorkerStat>) {
+    async fn checker_task(backpressure_tx: Sender<CheckerResponse>, generator_rx: Receiver<CheckerTask>, client: PinnedClient, stat_tx: Sender<ClientWorkerStat>, id: usize) {
         let mut waiting_for_byz_response = HashMap::<u64, CheckerTask>::new();
-        
+        let mut out_of_order_byz_response = HashMap::<u64, Instant>::new();
         loop {
             match generator_rx.recv().await {
                 Some(req) => {
                     // This is a new request.
-                    
-                    waiting_for_byz_response.insert(req.id, req.clone());
+                    if let Some(byz_resp_time) = out_of_order_byz_response.remove(&req.id) {
+                        // Got the response before, Nice!
+                        if byz_resp_time > req.start_time {
+                            let latency = byz_resp_time - req.start_time;
+                            let _ = stat_tx.send(ClientWorkerStat::ByzCommitLatency(latency)).await;
+                        } else {
+                            error!("Byzantine response received before the request was sent. This is a bug.");
+                        }
+                    } else {
+                        waiting_for_byz_response.insert(req.id, req.clone());
+                    }
+                    let _ = stat_tx.send(ClientWorkerStat::ByzCommitPending(id, waiting_for_byz_response.len())).await;
                     
                     // We will wait for the response.
                     let res = PinnedClient::await_reply(&client, &req.wait_from).await;
@@ -143,6 +155,8 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             for byz_resp in receipt.byz_responses.iter() {
                                 if let Some(task) = waiting_for_byz_response.remove(&byz_resp.client_tag) {
                                     let _ = stat_tx.send(ClientWorkerStat::ByzCommitLatency(task.start_time.elapsed())).await;
+                                } else {
+                                    out_of_order_byz_response.insert(byz_resp.client_tag, Instant::now());
                                 }
                             }
                         },
