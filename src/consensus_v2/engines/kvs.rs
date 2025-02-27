@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use gluesql::sled_storage::sled::transaction::TransactionResult;
+use log::info;
 use nix::libc::qos_class_t;
 use serde::{Serialize, Deserialize};
 use sha2::digest::consts::True;
@@ -113,7 +114,7 @@ impl AppEngine for KVSAppEngine {
                             }
                         }
                     } else {
-                        println!("Invalid operation type: {}", op.op_type);
+                        info!("Invalid operation type: {}", op.op_type);
                         continue;
                     }
 
@@ -128,8 +129,8 @@ impl AppEngine for KVSAppEngine {
             //test
             block_count += 1;
         }
-        println!("block count:{}", block_count);
-        println!("transaction count{}", txn_count);
+        info!("block count:{}", block_count);
+        info!("transaction count{}", txn_count);
         return final_result;
     }
 
@@ -170,7 +171,7 @@ impl AppEngine for KVSAppEngine {
                             self.state.bci_state.insert(key.clone(), val.clone());
                         }
                     } else {
-                        println!("Invalid operation type: {}", op.op_type);
+                        info!("Invalid operation type: {}", op.op_type);
                         continue;
                     }
                 }
@@ -194,8 +195,8 @@ impl AppEngine for KVSAppEngine {
             val_versions.retain(|v| v.0 > self.last_bci);
         }
         self.state.ci_state.retain(|_, v| v.len() > 0);
-        println!("block count:{}", block_count);
-        println!("transaction count{}", txn_count);
+        info!("block count:{}", block_count);
+        info!("transaction count{}", txn_count);
         final_result
     }
 
@@ -413,17 +414,14 @@ fn create_dummy_tx(on_receieve: bool, on_crash_commit: bool, on_byzantine_commit
     };
 
     if on_receieve == true {
-        println!("see1");
         dummy_transaction.on_receive = Some(dummy_phase.clone());
     }
     
     if on_crash_commit == true {
-        println!("see2");
 
         dummy_transaction.on_crash_commit = Some(dummy_phase.clone());
     }
     if on_byzantine_commit == true {
-        println!("see3");
 
         dummy_transaction.on_byzantine_commit = Some(dummy_phase.clone());
     }
