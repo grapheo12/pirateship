@@ -23,6 +23,7 @@ use crate::crypto::{AtomicKeyStore, CryptoService, KeyStore};
 use crate::proto::client::proto_client_reply::Reply;
 use crate::proto::client::ProtoClientReply;
 use crate::rpc::client::Client;
+use crate::rpc::SenderType;
 use crate::utils::channel::make_channel;
 use crate::utils::{RocksDBStorageEngine, StorageService};
 use crate::{config::Config, consensus_v2::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}, utils::channel::{Receiver, Sender}};
@@ -69,7 +70,7 @@ async fn load_close_loop(batch_proposer_tx: Sender<TxWithAckChanTag>, client_id:
                 break 'main;
             }
 
-            let ack_chan_with_tag: MsgAckChanWithTag = (tx.clone(), num_tx, client_name.clone());
+            let ack_chan_with_tag: MsgAckChanWithTag = (tx.clone(), num_tx, SenderType::Auth(client_name.clone(), 0));
     
             let res = timeout(tout, batch_proposer_tx.send((Some(transaction.clone()), ack_chan_with_tag))).await;
             match res {

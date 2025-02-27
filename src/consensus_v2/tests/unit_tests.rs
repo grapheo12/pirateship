@@ -1,7 +1,7 @@
 use std::{sync::{atomic::AtomicUsize, Arc}, time::{Duration, Instant}};
 use core_affinity::CoreId;
 use tokio::{sync::{mpsc::unbounded_channel, Mutex}, task::JoinSet};
-use crate::{consensus_v2::{app::Application, block_broadcaster::BlockBroadcaster, engines::null_app::NullApp, staging::Staging}, rpc::client::Client, utils::{channel::{make_channel, Receiver, Sender}, RocksDBStorageEngine, StorageService}};
+use crate::{consensus_v2::{app::Application, block_broadcaster::BlockBroadcaster, engines::null_app::NullApp, staging::Staging}, rpc::{client::Client, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, RocksDBStorageEngine, StorageService}};
 use crate::{config::{AtomicConfig, Config}, consensus_v2::{batch_proposal::BatchProposer, block_sequencer::BlockSequencer}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}};
 
 use super::super::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag};
@@ -79,7 +79,7 @@ async fn load(batch_proposer_tx: Sender<TxWithAckChanTag>, req_per_sec: f64) {
 
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
 
-        let ack_chan_with_tag: MsgAckChanWithTag = (tx, tag as u64, "client".to_string());
+        let ack_chan_with_tag: MsgAckChanWithTag = (tx, tag as u64, SenderType::Auth("client".to_string(), 0));
 
         batch_proposer_tx.send((Some(transaction.clone()), ack_chan_with_tag)).await.unwrap();
 
@@ -102,7 +102,7 @@ async fn client_runner(batch_proposer_tx: Sender<TxWithAckChanTag>, num_clients:
 
     let __tx = batch_proposer_tx.clone();
     tokio::spawn(async move {
-        __tx.send((None, (tokio::sync::mpsc::channel(1).0, 0, "client".to_string()))).await.unwrap();
+        __tx.send((None, (tokio::sync::mpsc::channel(1).0, 0, SenderType::Auth("client".to_string(), 0)))).await.unwrap();
         // This is just so we don't drop the channel prematurely.
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;

@@ -8,7 +8,7 @@ use crate::config::NodeInfo;
 use crate::proto::client::{ProtoClientReply, ProtoCurrentLeader};
 use crate::proto::rpc::ProtoPayload;
 use crate::rpc::server::LatencyProfile;
-use crate::rpc::PinnedMessage;
+use crate::rpc::{PinnedMessage, SenderType};
 use crate::utils::channel::{Sender, Receiver};
 use crate::utils::PerfCounter;
 use tokio::sync::Mutex;
@@ -19,7 +19,7 @@ use super::app::AppCommand;
 
 pub type RawBatch = Vec<ProtoTransaction>;
 
-pub type MsgAckChanWithTag = (MsgAckChan, u64 /* client tag */, String /* client name */);
+pub type MsgAckChanWithTag = (MsgAckChan, u64 /* client tag */, SenderType /* client name */);
 pub type TxWithAckChanTag = (Option<ProtoTransaction>, MsgAckChanWithTag);
 
 pub struct BatchProposer {

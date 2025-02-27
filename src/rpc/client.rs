@@ -508,7 +508,7 @@ impl PinnedClient {
             Ok(PinnedMessage::from(
                 resp_buf,
                 sz as usize,
-                super::SenderType::Auth(name.clone()),
+                super::SenderType::Auth(name.clone(), client.0.client_sub_id),
             ))
         }
     }
@@ -531,7 +531,7 @@ impl PinnedClient {
         Ok(PinnedMessage::from(
             resp_buf,
             sz as usize,
-            super::SenderType::Auth(name.clone()),
+            super::SenderType::Auth(name.clone(), client.0.client_sub_id),
         ))
     }
 

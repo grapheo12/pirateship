@@ -4,7 +4,7 @@ use log::{info, warn};
 use prost::Message as _;
 use tokio::{sync::{oneshot, Mutex}, task::JoinSet};
 
-use crate::{config::AtomicConfig, crypto::HashType, proto::{client::{ProtoByzResponse, ProtoClientReply, ProtoTransactionReceipt}, execution::ProtoTransactionResult, rpc::ProtoPayload}, rpc::{server::LatencyProfile, PinnedMessage}, utils::channel::{Receiver, Sender}};
+use crate::{config::AtomicConfig, crypto::HashType, proto::{client::{ProtoByzResponse, ProtoClientReply, ProtoTransactionReceipt}, execution::ProtoTransactionResult, rpc::ProtoPayload}, rpc::{server::LatencyProfile, PinnedMessage, SenderType}, utils::channel::{Receiver, Sender}};
 
 use super::batch_proposal::MsgAckChanWithTag;
 
@@ -25,12 +25,12 @@ pub struct ClientReplyHandler {
     reply_command_rx: Receiver<ClientReplyCommand>,
 
     reply_map: HashMap<HashType, Vec<MsgAckChanWithTag>>,
-    byz_reply_map: HashMap<HashType, Vec<(u64, String)>>,
+    byz_reply_map: HashMap<HashType, Vec<(u64, SenderType)>>,
 
     crash_commit_reply_buf: HashMap<HashType, (u64, Vec<ProtoTransactionResult>)>,
     byz_commit_reply_buf: HashMap<HashType, (u64, Vec<ProtoByzResponse>)>,
 
-    byz_response_store: HashMap<String /* Sender */, Vec<ProtoByzResponse>>,
+    byz_response_store: HashMap<SenderType /* Sender */, Vec<ProtoByzResponse>>,
 
     reply_processors: JoinSet<()>,
     reply_processor_queue: (async_channel::Sender<ReplyProcessorCommand>, async_channel::Receiver<ReplyProcessorCommand>),
@@ -139,7 +139,7 @@ impl ClientReplyHandler {
         }
     }
 
-    async fn do_byz_commit_reply(&mut self, reply_sender_vec: Vec<(u64, String)>, hash: HashType, n: u64, reply_vec: Vec<ProtoByzResponse>) {
+    async fn do_byz_commit_reply(&mut self, reply_sender_vec: Vec<(u64, SenderType)>, hash: HashType, n: u64, reply_vec: Vec<ProtoByzResponse>) {
         assert_eq!(reply_sender_vec.len(), reply_vec.len());
         for (tx_n, ((client_tag, sender), mut reply)) in reply_sender_vec.into_iter().zip(reply_vec.into_iter()).enumerate() {
             reply.client_tag = client_tag;

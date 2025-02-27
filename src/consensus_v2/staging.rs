@@ -19,7 +19,7 @@ struct CachedBlockWithVotes {
     replication_set: HashSet<String>
 }
 
-pub type VoteWithSender = (String /* Sender */, ProtoVote);
+pub type VoteWithSender = (SenderType /* Sender */, ProtoVote);
 pub type SignatureWithBlockN = (u64 /* Block the QC was attached to */, ProtoSignatureArrayEntry);
 
 /// This is where all the consensus decisions are made.
@@ -49,7 +49,7 @@ pub struct Staging {
 
     block_rx: Receiver<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats)>,
     vote_rx: Receiver<VoteWithSender>,
-    view_change_rx: Receiver<(ProtoViewChange, String /* Sender */)>,
+    view_change_rx: Receiver<(ProtoViewChange, SenderType /* Sender */)>,
 
     client_reply_tx: Sender<ClientReplyCommand>,
     app_tx: Sender<AppCommand>,
@@ -67,7 +67,7 @@ impl Staging {
     pub fn new(
         config: AtomicConfig, client: PinnedClient, crypto: CryptoServiceConnector,
         block_rx: Receiver<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats)>,
-        vote_rx: Receiver<VoteWithSender>, view_change_rx: Receiver<(ProtoViewChange, String)>,
+        vote_rx: Receiver<VoteWithSender>, view_change_rx: Receiver<(ProtoViewChange, SenderType)>,
         client_reply_tx: Sender<ClientReplyCommand>, app_tx: Sender<AppCommand>,
         block_broadcaster_command_tx: Sender<BlockBroadcasterCommand>,
         block_sequencer_command_tx: Sender<BlockSequencerControlCommand>,
@@ -212,7 +212,8 @@ impl Staging {
                 }
                 let vote = vote.unwrap();
                 if i_am_leader {
-                    self.verify_and_process_vote(vote.0, vote.1).await?;
+                    let (sender_name, _) = vote.0.to_name_and_sub_id();
+                    self.verify_and_process_vote(sender_name, vote.1).await?;
                 } else {
                     warn!("Received vote while being a follower");
                 }
@@ -222,6 +223,7 @@ impl Staging {
                     return Err(())
                 }
                 let (vc_msg, sender) = vc_msg.unwrap();
+                let (sender, _) = sender.to_name_and_sub_id();
                 self.process_view_change_message(vc_msg, sender).await?;
             }
         }
