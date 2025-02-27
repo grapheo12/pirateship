@@ -101,7 +101,7 @@ force_parse = true
 
 [results.legends]
 # Experiment group to legend mapping
-pirateship = "pirateship"
+pirateship = "pirateship+byz"
 # pbft = "pbft+onlybyz"
 # signed_raft = "signed_raft"
 

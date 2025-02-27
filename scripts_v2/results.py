@@ -662,6 +662,7 @@ class Result:
 
             plt.xlabel("Throughput (k req/s)")
             plt.ylabel("Latency (ms)")
+            plt.yscale("symlog")
             plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.45), ncol=legends_ncols, fontsize=55, columnspacing=1)
 
 

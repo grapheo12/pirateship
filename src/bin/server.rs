@@ -109,8 +109,9 @@ fn main() {
     let mut num_threads = NUM_THREADS;
     {
         let _num_cores = core_ids.lock().unwrap().len();
-        if _num_cores < num_threads {
-            num_threads = _num_cores;
+        if _num_cores - 1 < num_threads {
+            // Leave one core for the storage compaction thread.
+            num_threads = _num_cores - 1;
         }
     }
 
@@ -124,13 +125,13 @@ fn main() {
             let _cids = core_ids.clone();
             let lcores = _cids.lock().unwrap();
             let id = (start_idx + i.fetch_add(1, std::sync::atomic::Ordering::SeqCst)) % lcores.len();
-            // let res = core_affinity::set_for_current(lcores[id]);
+            let res = core_affinity::set_for_current(lcores[id]);
             
-            // if res {
-            //     debug!("Thread pinned to core {:?}", id);
-            // }else{
-            //     debug!("Thread pinning to core {:?} failed", id);
-            // }
+            if res {
+                debug!("Thread pinned to core {:?}", id);
+            }else{
+                debug!("Thread pinning to core {:?} failed", id);
+            }
 
             std::io::stdout().flush()
                 .unwrap();
