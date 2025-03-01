@@ -3,7 +3,6 @@ mod block_sequencer;
 mod block_broadcaster;
 mod staging;
 pub mod fork_receiver;
-mod timer;
 pub mod app;
 pub mod engines;
 pub mod client_reply;
@@ -19,11 +18,11 @@ use block_broadcaster::BlockBroadcaster;
 use block_sequencer::BlockSequencer;
 use client_reply::ClientReplyHandler;
 use fork_receiver::ForkReceiver;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use prost::Message;
 use staging::{Staging, VoteWithSender};
 use tokio::{sync::{mpsc::unbounded_channel, Mutex}, task::JoinSet};
-use crate::{proto::consensus::{ProtoAppendEntries, ProtoViewChange}, rpc::client::Client, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
+use crate::{proto::consensus::{ProtoAppendEntries, ProtoViewChange}, rpc::{client::Client, SenderType}, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
 
 use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::rpc::ProtoPayload, rpc::{server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef}};
 
@@ -31,9 +30,9 @@ pub struct ConsensusServerContext {
     config: AtomicConfig,
     keystore: AtomicKeyStore,
     batch_proposal_tx: Sender<TxWithAckChanTag>,
-    fork_receiver_tx: Sender<(ProtoAppendEntries, String)>,
+    fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
     vote_receiver_tx: Sender<VoteWithSender>,
-    view_change_receiver_tx: Sender<(ProtoViewChange, String)>,
+    view_change_receiver_tx: Sender<(ProtoViewChange, SenderType)>,
 }
 
 
@@ -44,9 +43,9 @@ impl PinnedConsensusServerContext {
     pub fn new(
         config: AtomicConfig, keystore: AtomicKeyStore,
         batch_proposal_tx: Sender<TxWithAckChanTag>,
-        fork_receiver_tx: Sender<(ProtoAppendEntries, String)>,
+        fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
         vote_receiver_tx: Sender<VoteWithSender>,
-        view_change_receiver_tx: Sender<(ProtoViewChange, String)>,
+        view_change_receiver_tx: Sender<(ProtoViewChange, SenderType)>,
 
     ) -> Self {
         Self(Arc::new(Box::pin(ConsensusServerContext {
@@ -78,7 +77,7 @@ impl ServerContextType for PinnedConsensusServerContext {
                     "unauthenticated message",
                 )); // Anonymous replies shouldn't come here
             }
-            crate::rpc::SenderType::Auth(name) => name.to_string(),
+            _sender @ crate::rpc::SenderType::Auth(_, _) => _sender.clone()
         };
         let body = match ProtoPayload::decode(&m.0.as_slice()[0..m.1]) {
             Ok(b) => b,
@@ -88,7 +87,6 @@ impl ServerContextType for PinnedConsensusServerContext {
                 return Err(Error::new(ErrorKind::InvalidData, e));
             }
         };
-
     
         let msg = match body.message {
             Some(m) => m,
@@ -194,7 +192,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let (client_reply_command_tx, client_reply_command_rx) = make_channel(_chan_depth);
         let (broadcaster_control_command_tx, broadcaster_control_command_rx) = make_channel(_chan_depth);
         let (staging_tx, staging_rx) = make_channel(_chan_depth);
-        let (logserver_tx, mut logserver_rx) = make_channel(_chan_depth);
+        let (logserver_tx, logserver_rx) = make_channel(_chan_depth);
         let (vote_tx, vote_rx) = make_channel(_chan_depth);
         let (view_change_tx, view_change_rx) = make_channel(_chan_depth);
         let (app_tx, app_rx) = make_channel(_chan_depth);
@@ -218,36 +216,14 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let client_reply = ClientReplyHandler::new(config.clone(), client_reply_rx, client_reply_command_rx);
         let mut handles = JoinSet::new();
         
-        // handles.spawn(async move {
-        //     while let Some(_) = client_reply_rx.recv().await {
-        //         // Sink
-        //     }
-        // });
-    
-        // handles.spawn(async move {
-        //     while let Some(_) = client_reply_command_rx.recv().await {
-        //         // Sink
-        //     }
-        // });
     
         handles.spawn(async move {
+            let _tx = unlogged_tx.clone();
+
             while let Some(_) = logserver_rx.recv().await {
                 // Sink
             }
         });
-
-        // handles.spawn(async move {
-        //     while let Some(_) = app_rx.recv().await {
-        //         // Sink
-        //     }
-        // });
-
-        // handles.spawn(async move {
-        //     while let Some(_) = block_acceptor_rx.recv().await {
-        //         // Sink
-        //     }
-        // });
-
 
 
 
@@ -280,6 +256,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let staging = self.staging.clone();
         let app = self.app.clone();
         let client_reply = self.client_reply.clone();
+        let fork_receiver = self.fork_receiver.clone();
 
         let mut handles = JoinSet::new();
 
@@ -309,11 +286,16 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         });
 
         handles.spawn(async move {
+            info!("Booting up application");
             Application::run(app).await;
         });
 
         handles.spawn(async move {
             ClientReplyHandler::run(client_reply).await;
+        });
+
+        handles.spawn(async move {
+            ForkReceiver::run(fork_receiver).await;
         });
     
         handles

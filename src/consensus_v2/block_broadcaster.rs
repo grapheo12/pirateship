@@ -1,10 +1,10 @@
-use std::{io::{Error, ErrorKind}, sync::Arc};
+use std::{cell::RefCell, io::{Error, ErrorKind}, sync::Arc};
 
 use log::debug;
 use prost::Message;
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::{consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, StorageAck, StorageServiceConnector}};
+use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::{consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, PerfCounter, StorageAck, StorageServiceConnector}};
 
 use super::{app::AppCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand, MultipartFork}};
 
@@ -31,6 +31,9 @@ pub struct BlockBroadcaster {
     fork_receiver_command_tx: Sender<ForkReceiverCommand>,
     app_command_tx: Sender<AppCommand>,
 
+    // Perf Counters
+    my_block_perf_counter: RefCell<PerfCounter<u64>>
+
 }
 
 impl BlockBroadcaster {
@@ -46,6 +49,17 @@ impl BlockBroadcaster {
         fork_receiver_command_tx: Sender<ForkReceiverCommand>,
         app_command_tx: Sender<AppCommand>,
     ) -> Self {
+
+        let my_block_event_order = vec![
+            "Retrieve prepared block",
+            "Store block",
+            "Forward block to logserver",
+            "Forward block to staging",
+            "Serialize",
+            "Forward block to other nodes",
+        ];
+
+        let my_block_perf_counter = RefCell::new(PerfCounter::new("BlockBroadcasterMyBlock", &my_block_event_order));
         
         Self {
             config,
@@ -59,21 +73,43 @@ impl BlockBroadcaster {
             logserver_tx,
             fork_receiver_command_tx,
             app_command_tx,
+            my_block_perf_counter,
         }
     }
 
     pub async fn run(block_broadcaster: Arc<Mutex<Self>>) {
         let mut block_broadcaster = block_broadcaster.lock().await;
 
+        let mut total_work = 0;
         loop {
             if let Err(_e) = block_broadcaster.worker().await {
                 break;
             }
 
+            total_work += 1;
+            if total_work % 1000 == 0 {
+                block_broadcaster.my_block_perf_counter.borrow().log_aggregate();
+            }
+
         }
     }
 
-    pub async fn worker(&mut self) -> Result<(), Error> {
+    fn perf_register(&mut self, entry: u64) {
+        #[cfg(feature = "perf")]
+        self.my_block_perf_counter.borrow_mut().register_new_entry(entry);
+    }
+
+    fn perf_add_event(&mut self, entry: u64, event: &str) {
+        #[cfg(feature = "perf")]
+        self.my_block_perf_counter.borrow_mut().new_event(event, &entry);
+    }
+
+    fn perf_deregister(&mut self, entry: u64) {
+        #[cfg(feature = "perf")]
+        self.my_block_perf_counter.borrow_mut().deregister_entry(&entry);
+    }
+
+    async fn worker(&mut self) -> Result<(), Error> {
         // This worker doesn't care about views and configs.
         // Its only job is to store and forward.
         // If it is my block, forward to {all other nodes, logserver and staging}.
@@ -89,7 +125,12 @@ impl BlockBroadcaster {
                 }
                 let block = block.unwrap();
                 debug!("Expecting {}", block.0);
+
+                let perf_entry = block.0;
+                self.perf_register(perf_entry);
                 let block = block.1.await;
+                self.perf_add_event(perf_entry, "Retrieve prepared block");
+
                 self.process_my_block(block.unwrap()).await?;
             },
 
@@ -135,22 +176,29 @@ impl BlockBroadcaster {
     }
 
     async fn store_and_forward_internally(&mut self, block: &CachedBlock, ae_stats: AppendEntriesStats) -> Result<(), Error> {
+        let perf_entry = block.block.n;
+        
         // Store
         let storage_ack = self.storage.put_block(block).await;
+        self.perf_add_event(perf_entry, "Store block");
     
         // Forward
         // Unfortunate cloning.
         // But CachedBlock is Arc<_> so this is just a ref count increment.
         self.logserver_tx.send(block.clone()).await.unwrap();
+        self.perf_add_event(perf_entry, "Forward block to logserver");
 
         debug!("Sending {}", block.block.n);
         self.staging_tx.send((block.clone(), storage_ack, ae_stats)).await.unwrap();
+        self.perf_add_event(perf_entry, "Forward block to staging");
 
         Ok(())
     }
 
     async fn process_my_block(&mut self, block: CachedBlock) -> Result<(), Error> {
         debug!("Processing {}", block.block.n);
+        let perf_entry = block.block.n;
+
         let (view, view_is_stable, config_num) = (block.block.view, block.block.view_is_stable, block.block.config_num);
         self.store_and_forward_internally(&block, AppendEntriesStats {
             view,
@@ -186,10 +234,14 @@ impl BlockBroadcaster {
             message: Some(crate::proto::rpc::proto_payload::Message::AppendEntries(append_entry)),
         };
         let data = rpc.encode_to_vec();
+        self.perf_add_event(perf_entry, "Serialize");
         let sz = data.len();
         let data = PinnedMessage::from(data, sz, SenderType::Anon);
         let mut profile = LatencyProfile::new();
         PinnedClient::broadcast(&self.client, &names, &data, &mut profile).await?;
+        self.perf_add_event(perf_entry, "Forward block to other nodes");
+
+        self.perf_deregister(perf_entry);
 
         Ok(())
 

@@ -1,41 +1,24 @@
-# Local setup
+# WIP: Running Experiments
 
-Install Rust, jq, Python (with pip and virtualenv), clang, llvm, cmake and protoc.
-On an Ubuntu machine you can just run `sudo make install-deps-ubuntu` to install all dependencies.
-
-To build, just run `make`.
-
-To run a setup, you need to have a `nodelist.txt` with a tab separated value of node names and IP addresses as follows:
-```tsv
-clientpool_vm0  10.2.7.5
-clientpool_vm1  10.2.7.4
-nodepool_vm0    10.2.6.7
-nodepool_vm1    10.2.6.4
-nodepool_vm2    10.2.6.5
-nodepool_vm3    10.2.6.6
-```
-
-Machines whose name starts with `client` will be used as client machines and nodes whose name starts with `node` will be used a consensus nodes.
-These IP addresses NEED NOT be unique.
-If you want to reuse a machine to simulate more number of nodes (or want to perform local testing),
-feel free to copy the IP addresses of existing machines (or use `127.0.0.1`) and use a new name.
-
-To be compliant with the terraform script that I generally use to create test VMs,
-you need to have an user called `pftadmin` in each of these VMs.
-Further, one must be able to SSH into `pftadmin@ip` using a common SSH key.
-Generate and save this key as `cluster_key.pem`.
-
-Save the `nodelist.txt` and `cluster_key.pem` and copy the path onto `scripts/run_all_protocols.sh`.
-
-Now you can an experiment with all protocols using:
+## Setup script environment
 
 ```bash
-virtualenv scripts/venv
-source scripts/venv/bin/activate
-pip install -r scripts/requirements.txt
-
-sh scripts/run_all_protocols.sh
+virtualenv .venv
+source .venv/bin/activate
+pip install -r scripts_v2/requirements.txt
 ```
+
+## Running end-to-end experiment flow
+
+(From the virutalenv)
+
+```bash
+python3 scripts_v2/main.py -c scripts_v2/conf.toml
+```
+
+## Running stages separately
+
+Check `python3 scripts_v2/main.py -h` for commands that can be invoked standalone.
 
 # Current status
 

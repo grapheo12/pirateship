@@ -1,9 +1,9 @@
 use std::{collections::VecDeque, io::Error, sync::Arc};
 
-use log::warn;
+use log::{debug, info, warn};
 use tokio::sync::{Mutex, oneshot};
 
-use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries}, utils::channel::{Receiver, Sender}};
+use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries}, rpc::SenderType, utils::channel::{Receiver, Sender}};
 
 
 pub enum ForkReceiverCommand {
@@ -57,7 +57,7 @@ pub struct ForkReceiver {
     view: u64,
     config_num: u64,
 
-    fork_rx: Receiver<(ProtoAppendEntries, String /* Sender */)>,
+    fork_rx: Receiver<(ProtoAppendEntries, SenderType /* Sender */)>,
     command_rx: Receiver<ForkReceiverCommand>,
     broadcaster_tx: Sender<MultipartFork>,
 
@@ -75,7 +75,7 @@ impl ForkReceiver {
     pub fn new(
         config: AtomicConfig,
         crypto: CryptoServiceConnector,
-        fork_rx: Receiver<(ProtoAppendEntries, String)>,
+        fork_rx: Receiver<(ProtoAppendEntries, SenderType)>,
         command_rx: Receiver<ForkReceiverCommand>,
         broadcaster_tx: Sender<MultipartFork>,
     ) -> Self {
@@ -110,7 +110,8 @@ impl ForkReceiver {
         } else {
             tokio::select! {
                 ae_sender = self.fork_rx.recv() => {
-                    if let Some((ae, sender)) = ae_sender {
+                    if let Some((ae, SenderType::Auth(sender, _))) = ae_sender {
+                        debug!("Received AppendEntries({}) from {}", ae.fork.as_ref().unwrap().serialized_blocks.last().unwrap().n, sender);
                         self.process_fork(ae, sender).await;
                     }
                 },

@@ -54,7 +54,7 @@ impl BufferedTlsStream {
             stream_tx, // : BufWriter::with_capacity(16 * 1024, stream),
             stream_rx,
             buffer: vec![0u8; 8192],
-            write_buffer: vec![0u8; 65536],
+            write_buffer: vec![0u8; 8192],
             bound: 0,
             offset: 0,
             write_offset: 0
@@ -508,7 +508,7 @@ impl PinnedClient {
             Ok(PinnedMessage::from(
                 resp_buf,
                 sz as usize,
-                super::SenderType::Auth(name.clone()),
+                super::SenderType::Auth(name.clone(), client.0.client_sub_id),
             ))
         }
     }
@@ -531,7 +531,7 @@ impl PinnedClient {
         Ok(PinnedMessage::from(
             resp_buf,
             sz as usize,
-            super::SenderType::Auth(name.clone()),
+            super::SenderType::Auth(name.clone(), client.0.client_sub_id),
         ))
     }
 
@@ -655,7 +655,7 @@ impl PinnedClient {
                     break s
                 };
                 
-                while rx.recv_many(&mut msgs, 1).await > 0 {
+                while rx.recv_many(&mut msgs, 10).await > 0 {
                     let mut should_print_flush_time = false;
                     let mut combined_prefix = String::from("");
                     let mut should_die = false;
@@ -689,7 +689,7 @@ impl PinnedClient {
                     }
                     
                     // let flush_time = Instant::now();
-                    // let _ = sock.0.lock().await.flush_write_buffer().await;
+                    let _ = sock.0.lock().await.flush_write_buffer().await;
 
                     // if should_print_flush_time {
                     //     trace!("[{}] Flush time: {} us", combined_prefix, flush_time.elapsed().as_micros());

@@ -134,6 +134,7 @@ fn test_clientconfig_serialize() {
         workload_config: WorkloadConfig {
             num_clients: 100,
             num_requests: 100000,
+            max_concurrent_requests: 10,
             request_config: crate::config::RequestConfig::KVReadWriteUniform(KVReadWriteUniform {
                 num_keys: 1000,
                 val_size: 10000,

@@ -9,7 +9,7 @@ use rand::{thread_rng, Rng};
 use sha2::{Digest, Sha256};
 use tokio::{sync::{mpsc::{channel, Receiver, Sender}, oneshot}, task::JoinSet};
 
-use crate::{config::AtomicConfig, consensus_v2::fork_receiver::{AppendEntriesStats, MultipartFork}, crypto::DIGEST_LENGTH, proto::consensus::{HalfSerializedBlock, ProtoBlock, ProtoQuorumCertificate}, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser}};
+use crate::{config::AtomicConfig, consensus_v2::fork_receiver::{AppendEntriesStats, MultipartFork}, crypto::DIGEST_LENGTH, proto::consensus::{HalfSerializedBlock, ProtoBlock, ProtoQuorumCertificate}, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser, PerfCounter}};
 
 use super::{hash, AtomicKeyStore, HashType, KeyStore};
 
@@ -127,6 +127,7 @@ pub struct CryptoServiceConnector {
     num_tasks: usize,
 }
 
+
 impl CryptoService {
     pub fn new(num_tasks: usize, keystore: AtomicKeyStore, config: AtomicConfig) -> Self {
         assert!(num_tasks > 0);
@@ -134,11 +135,40 @@ impl CryptoService {
     }
 
     async fn worker(keystore: AtomicKeyStore, config: AtomicConfig, mut cmd_rx: Receiver<CryptoServiceCommand>, worker_id: usize) {
+        let signed_block_prepare_event_order = vec![
+            "Serialize without parent hash",
+            "Hash Partial",
+            "Add parent hash",
+            "Sign",
+            "Add signature",
+            "Send"
+        ];
+
+        let unsigned_block_prepare_event_order = vec![
+            "Serialize without parent hash",
+            "Hash Partial",
+            "Add parent hash",
+            "Add signature",
+            "Send"
+        ];
+
+        let mut signed_block_prepare_perf_counter = PerfCounter::<u64>::new(
+            &format!("CryptoWorker{}:PrepareBlockSigned", worker_id),
+            &signed_block_prepare_event_order
+        );
+
+        let mut unsigned_block_prepare_perf_counter = PerfCounter::<u64>::new(
+            &format!("CryptoWorker{}:PrepareBlockUnsigned", worker_id),
+            &unsigned_block_prepare_event_order
+        );
+
         let mut total_work = 0;
         while let Some(cmd) = cmd_rx.recv().await {
             total_work += 1usize;
 
             if total_work % 1000 == 0 {
+                signed_block_prepare_perf_counter.log_aggregate();
+                unsigned_block_prepare_perf_counter.log_aggregate();
                 trace!("Crypto service worker {} total work: {}", worker_id, total_work);
             }
             match cmd {
@@ -162,12 +192,33 @@ impl CryptoService {
                     // let mut buf = bincode::serialize(&proto_block).unwrap();
                     // let mut buf = bitcode::encode(&proto_block);
                     // let mut buf = proto_block.encode_to_vec();
+                    let (perf_counter, event_order, mut event_num) = if must_sign {
+                        (&mut signed_block_prepare_perf_counter, &signed_block_prepare_event_order, 0)
+                    } else {
+                        (&mut unsigned_block_prepare_perf_counter, &unsigned_block_prepare_event_order, 0)
+                    };
+
+                    let perf_entry = proto_block.n;
+
+                    macro_rules! perf_event {
+                        () => {
+                            perf_counter.new_event(&event_order[event_num], &perf_entry);
+                            event_num += 1;
+                        };
+                    }
+
+                    perf_counter.register_new_entry(perf_entry);
 
                     let mut buf = serialize_proto_block_nascent(&proto_block).unwrap();
+                    perf_event!();
+
                     let mut hasher = Sha256::new();
                     hasher.update(&buf[DIGEST_LENGTH+SIGNATURE_LENGTH..]);
+                    perf_event!();
+
                     // Memory fence to prevent reordering.
                     fence(std::sync::atomic::Ordering::SeqCst);
+
                     
                     let parent = match parent_hash_rx {
                         FutureHash::None => vec![0u8; DIGEST_LENGTH],
@@ -175,6 +226,8 @@ impl CryptoService {
                         FutureHash::Future(receiver) => receiver.await.unwrap(),
                     };
                     update_parent_hash_in_proto_block_ser(&mut buf, &parent);
+                    perf_event!();
+
                     let mut block = proto_block;
                     block.parent = parent;
                     hasher.update(&buf[SIGNATURE_LENGTH..SIGNATURE_LENGTH+DIGEST_LENGTH]);
@@ -185,15 +238,19 @@ impl CryptoService {
                         let sig = keystore.sign(&partial_hsh);
                         block.sig = Some(crate::proto::consensus::proto_block::Sig::ProposerSig(sig.to_vec()));
                         update_signature_in_proto_block_ser(&mut buf, &sig);
+                        perf_event!();
                     }
 
                     hasher.update(&buf[..SIGNATURE_LENGTH]);
+                    perf_event!();
 
                     let hsh = hasher.finalize().to_vec();
 
                     let _ = hash_tx.send(hsh.clone());
                     let _ = hash_tx2.send(hsh.clone());
                     let _ = block_tx.send(CachedBlock::new(block, buf, hsh));
+                    perf_event!();
+                    perf_counter.deregister_entry(&perf_entry);
                 },
                 CryptoServiceCommand::CheckBlockSer(hsh, ser_rx, block_tx) => {
                     let res = ser_rx.await.unwrap();

@@ -76,6 +76,8 @@ harness = false
 
 
 [features]
+# Perf counters
+perf = []
 # Protocol specifics
 # Leader change
 round_robin_leader = []

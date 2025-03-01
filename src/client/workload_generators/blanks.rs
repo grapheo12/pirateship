@@ -1,6 +1,6 @@
-use crate::{proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase, ProtoTransactionResult}, utils::workload_generators::Executor};
+use crate::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase, ProtoTransactionResult};
 
-use super::{PerWorkerWorkloadGenerator, WorkloadUnit};
+use super::{PerWorkerWorkloadGenerator, WorkloadUnit, Executor};
 
 pub struct BlankWorkloadGenerator { }
 
@@ -13,6 +13,7 @@ impl PerWorkerWorkloadGenerator for BlankWorkloadGenerator {
                     ops: vec![ProtoTransactionOp {
                         op_type: crate::proto::execution::ProtoTransactionOpType::Noop.into(),
                         operands: vec![vec![2u8; 478]],
+                        // operands: vec![vec![2u8; 0]],
                     }; 1],
                 }),
                 on_byzantine_commit: None,

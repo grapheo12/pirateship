@@ -1,10 +1,10 @@
 use std::{collections::HashMap, sync::Arc};
 
-use log::error;
+use log::{info, warn};
 use prost::Message as _;
 use tokio::{sync::{oneshot, Mutex}, task::JoinSet};
 
-use crate::{config::AtomicConfig, crypto::HashType, proto::{client::{ProtoByzResponse, ProtoClientReply, ProtoTransactionReceipt}, execution::ProtoTransactionResult, rpc::ProtoPayload}, rpc::{server::LatencyProfile, PinnedMessage}, utils::channel::{Receiver, Sender}};
+use crate::{config::AtomicConfig, crypto::HashType, proto::{client::{ProtoByzResponse, ProtoClientReply, ProtoTransactionReceipt}, execution::ProtoTransactionResult, rpc::ProtoPayload}, rpc::{server::LatencyProfile, PinnedMessage, SenderType}, utils::channel::{Receiver, Sender}};
 
 use super::batch_proposal::MsgAckChanWithTag;
 
@@ -25,12 +25,12 @@ pub struct ClientReplyHandler {
     reply_command_rx: Receiver<ClientReplyCommand>,
 
     reply_map: HashMap<HashType, Vec<MsgAckChanWithTag>>,
-    byz_reply_map: HashMap<HashType, Vec<(u64, String)>>,
+    byz_reply_map: HashMap<HashType, Vec<(u64, SenderType)>>,
 
     crash_commit_reply_buf: HashMap<HashType, (u64, Vec<ProtoTransactionResult>)>,
     byz_commit_reply_buf: HashMap<HashType, (u64, Vec<ProtoByzResponse>)>,
 
-    byz_response_store: HashMap<String /* Sender */, Vec<ProtoByzResponse>>,
+    byz_response_store: HashMap<SenderType /* Sender */, Vec<ProtoByzResponse>>,
 
     reply_processors: JoinSet<()>,
     reply_processor_queue: (async_channel::Sender<ReplyProcessorCommand>, async_channel::Receiver<ReplyProcessorCommand>),
@@ -139,7 +139,7 @@ impl ClientReplyHandler {
         }
     }
 
-    async fn do_byz_commit_reply(&mut self, reply_sender_vec: Vec<(u64, String)>, hash: HashType, n: u64, reply_vec: Vec<ProtoByzResponse>) {
+    async fn do_byz_commit_reply(&mut self, reply_sender_vec: Vec<(u64, SenderType)>, hash: HashType, n: u64, reply_vec: Vec<ProtoByzResponse>) {
         assert_eq!(reply_sender_vec.len(), reply_vec.len());
         for (tx_n, ((client_tag, sender), mut reply)) in reply_sender_vec.into_iter().zip(reply_vec.into_iter()).enumerate() {
             reply.client_tag = client_tag;
@@ -164,6 +164,7 @@ impl ClientReplyHandler {
                     if let Some(reply_sender_vec) = self.reply_map.remove(&hash) {
                         self.do_crash_commit_reply(reply_sender_vec, hash, n, reply_vec).await;
                     } else {
+                        // We received the reply before the request. Store it for later.
                         self.crash_commit_reply_buf.insert(hash, (n, reply_vec));
                     }
                 }
@@ -181,17 +182,20 @@ impl ClientReplyHandler {
     }
 
     async fn maybe_clear_reply_buf(&mut self, batch_hash: HashType) {
+        
+        // Byz register must happen first. Otherwise when crash commit piggybacks the byz commit reply, it will be too late.
+        if let Some((n, reply_vec)) = self.byz_commit_reply_buf.remove(&batch_hash) {
+            if let Some(reply_sender_vec) = self.byz_reply_map.remove(&batch_hash) {
+                self.do_byz_commit_reply(reply_sender_vec, batch_hash.clone(), n, reply_vec).await;
+            }
+        }
+
         if let Some((n, reply_vec)) = self.crash_commit_reply_buf.remove(&batch_hash) {
             if let Some(reply_sender_vec) = self.reply_map.remove(&batch_hash) {
                 self.do_crash_commit_reply(reply_sender_vec, batch_hash.clone(), n, reply_vec).await;
             }
         }
 
-        if let Some((n, reply_vec)) = self.byz_commit_reply_buf.remove(&batch_hash) {
-            if let Some(reply_sender_vec) = self.byz_reply_map.remove(&batch_hash) {
-                self.do_byz_commit_reply(reply_sender_vec, batch_hash, n, reply_vec).await;
-            }
-        }
     }
 }
 

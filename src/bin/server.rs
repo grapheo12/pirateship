@@ -87,7 +87,7 @@ async fn run_main(cfg: Config) -> io::Result<()> {
     Ok(())
 }
 
-const NUM_THREADS: usize = 6;
+const NUM_THREADS: usize = 32;
 
 fn main() {
     log4rs::init_config(config::default_log4rs_config()).unwrap();
@@ -105,16 +105,17 @@ fn main() {
     let core_ids = 
         Arc::new(Mutex::new(Box::pin(core_affinity::get_core_ids().unwrap())));
 
-    // let start_idx = cfg.consensus_config.node_list.iter().position(|r| r.eq(&cfg.net_config.name)).unwrap();
+    let start_idx = cfg.consensus_config.node_list.iter().position(|r| r.eq(&cfg.net_config.name)).unwrap();
     let mut num_threads = NUM_THREADS;
     {
         let _num_cores = core_ids.lock().unwrap().len();
-        if _num_cores < num_threads {
-            num_threads = _num_cores;
+        if _num_cores - 1 < num_threads {
+            // Leave one core for the storage compaction thread.
+            num_threads = _num_cores - 1;
         }
     }
 
-    let start_idx = 0; // start_idx * num_threads;
+    let start_idx = start_idx * num_threads;
     
     let i = Box::pin(AtomicUsize::new(0));
     let runtime = runtime::Builder::new_multi_thread()
