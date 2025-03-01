@@ -18,8 +18,8 @@ use std::{collections::HashMap, env, fs, io, ops::Deref, path, pin::Pin, sync::{
 use tokio::{task::JoinSet, time::sleep};
 use std::time::Instant;
 
-#[global_allocator]
-static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+// #[global_allocator]
+// static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 
 fn process_args() -> ClientConfig {

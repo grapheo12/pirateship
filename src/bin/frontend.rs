@@ -2,6 +2,8 @@ use actix_web::{put, get, web, App, HttpResponse, HttpServer, Responder};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use pft::consensus_v2::engines::kvs;
+
 type Store = Arc<Mutex<HashMap<String, String>>>;
 
 #[put("/set/{key}")]
@@ -14,6 +16,7 @@ async fn set_key(store: web::Data<Store>, key: web::Path<String>, value: web::Js
         "key": key_str,
         "value": value_str
     }))
+    
 }
 
 #[get("/get/{key}")]
@@ -27,11 +30,10 @@ async fn get_key(store: web::Data<Store>, key: web::Path<String>) -> impl Respon
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let store: Store = Arc::new(Mutex::new(HashMap::new()));
+
 
     HttpServer::new(move || {
         App::new()
-            .app_data(web::Data::new(store.clone()))
             .service(set_key)
             .service(get_key)
     })
