@@ -6,6 +6,7 @@ pub mod fork_receiver;
 pub mod app;
 pub mod engines;
 pub mod client_reply;
+mod logserver;
 
 #[cfg(test)]
 mod tests;
@@ -22,7 +23,7 @@ use log::{debug, info, warn};
 use prost::Message;
 use staging::{Staging, VoteWithSender};
 use tokio::{sync::{mpsc::unbounded_channel, Mutex}, task::JoinSet};
-use crate::{proto::consensus::{ProtoAppendEntries, ProtoViewChange}, rpc::{client::Client, SenderType}, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
+use crate::{proto::{checkpoint::ProtoBackfillNack, consensus::{ProtoAppendEntries, ProtoViewChange}}, rpc::{client::Client, SenderType}, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
 
 use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::rpc::ProtoPayload, rpc::{server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef}};
 
@@ -33,6 +34,7 @@ pub struct ConsensusServerContext {
     fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
     vote_receiver_tx: Sender<VoteWithSender>,
     view_change_receiver_tx: Sender<(ProtoViewChange, SenderType)>,
+    backfill_request_tx: Sender<ProtoBackfillNack>,
 }
 
 
@@ -46,11 +48,13 @@ impl PinnedConsensusServerContext {
         fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
         vote_receiver_tx: Sender<VoteWithSender>,
         view_change_receiver_tx: Sender<(ProtoViewChange, SenderType)>,
+        backfill_request_tx: Sender<ProtoBackfillNack>,
 
     ) -> Self {
         Self(Arc::new(Box::pin(ConsensusServerContext {
             config, keystore, batch_proposal_tx,
             fork_receiver_tx, vote_receiver_tx, view_change_receiver_tx,
+            backfill_request_tx,
         })))
     }
 }
@@ -98,29 +102,34 @@ impl ServerContextType for PinnedConsensusServerContext {
 
         match msg {
             crate::proto::rpc::proto_payload::Message::ViewChange(proto_view_change) => {
-                self.view_change_receiver_tx.send((proto_view_change, sender)).await
-                    .expect("Channel send error");
-                return Ok(RespType::NoResp);
-            },
+                        self.view_change_receiver_tx.send((proto_view_change, sender)).await
+                            .expect("Channel send error");
+                        return Ok(RespType::NoResp);
+                    },
             crate::proto::rpc::proto_payload::Message::AppendEntries(proto_append_entries) => {
-                self.fork_receiver_tx.send((proto_append_entries, sender)).await
-                    .expect("Channel send error");
-                return Ok(RespType::NoResp);
-            },
+                        self.fork_receiver_tx.send((proto_append_entries, sender)).await
+                            .expect("Channel send error");
+                        return Ok(RespType::NoResp);
+                    },
             crate::proto::rpc::proto_payload::Message::Vote(proto_vote) => {
-                self.vote_receiver_tx.send((sender, proto_vote)).await
-                    .expect("Channel send error");
-                return Ok(RespType::NoResp);
-            },
+                        self.vote_receiver_tx.send((sender, proto_vote)).await
+                            .expect("Channel send error");
+                        return Ok(RespType::NoResp);
+                    },
             crate::proto::rpc::proto_payload::Message::ClientRequest(proto_client_request) => {
-                let client_tag = proto_client_request.client_tag;
-                self.batch_proposal_tx.send((proto_client_request.tx, (ack_chan, client_tag, sender))).await
-                    .expect("Channel send error");
+                        let client_tag = proto_client_request.client_tag;
+                        self.batch_proposal_tx.send((proto_client_request.tx, (ack_chan, client_tag, sender))).await
+                            .expect("Channel send error");
 
-                return Ok(RespType::Resp);
-            },
+                        return Ok(RespType::Resp);
+                    },
             crate::proto::rpc::proto_payload::Message::BackfillRequest(proto_back_fill_request) => {},
             crate::proto::rpc::proto_payload::Message::BackfillResponse(proto_back_fill_response) => {},
+            crate::proto::rpc::proto_payload::Message::BackfillNack(proto_backfill_nack) => {
+                        self.backfill_request_tx.send(proto_backfill_nack).await
+                            .expect("Channel send error");
+                        return Ok(RespType::NoResp);
+            },
         }
 
 
@@ -198,6 +207,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let (fork_receiver_command_tx, fork_receiver_command_rx) = make_channel(_chan_depth);
         let (fork_tx, fork_rx) = make_channel(_chan_depth);
         let (unlogged_tx, unlogged_rx) = make_channel(_chan_depth);
+        let (backfill_request_tx, backfill_request_rx) = make_channel(_chan_depth);
 
         let block_maker_crypto = crypto.get_connector();
         let block_broadcaster_crypto = crypto.get_connector();
@@ -205,7 +215,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let staging_crypto = crypto.get_connector();
         let fork_receiver_crypto = crypto.get_connector();
 
-        let ctx = PinnedConsensusServerContext::new(config.clone(), keystore.clone(), batch_proposer_tx, fork_tx, vote_tx, view_change_tx);
+        let ctx = PinnedConsensusServerContext::new(config.clone(), keystore.clone(), batch_proposer_tx, fork_tx, vote_tx, view_change_tx, backfill_request_tx);
         let batch_proposer = BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, app_tx.clone());
         let block_sequencer = BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto);
         let block_broadcaster = BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx.clone(), app_tx.clone());
