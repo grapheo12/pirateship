@@ -76,7 +76,7 @@ pub struct ConsensusConfig {
     pub signature_max_delay_ms: u64,
     pub view_timeout_ms: u64,
     pub signature_max_delay_blocks: u64,
-    pub vote_processing_workers: u16,
+    pub num_crypto_workers: usize,
     pub log_storage_config: StorageConfig,
     pub liveness_u: u64,
 }
@@ -202,7 +202,7 @@ impl ClientConfig {
                 signature_max_delay_blocks: 128,
                 signature_max_delay_ms: 100,
                 view_timeout_ms: 150,
-                vote_processing_workers: 128,
+                num_crypto_workers: 128,
 
                 liveness_u: 1,
 

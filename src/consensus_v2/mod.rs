@@ -153,11 +153,10 @@ pub struct ConsensusNode<E: AppEngine + Send + Sync + 'static> {
     __sink_handles: JoinSet<()>,
 }
 
-const CRYPTO_NUM_TASKS: usize = 4;
-
 impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
     pub fn new(config: Config) -> Self {
         let _chan_depth = config.rpc_config.channel_depth as usize;
+        let _num_crypto_tasks = config.consensus_config.num_crypto_workers;
 
         let key_store = KeyStore::new(
             &config.rpc_config.allowed_keylist_path,
@@ -165,10 +164,10 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         );
         let config = AtomicConfig::new(config);
         let keystore = AtomicKeyStore::new(key_store);
-        let mut crypto = CryptoService::new(CRYPTO_NUM_TASKS, keystore.clone(), config.clone());
+        let mut crypto = CryptoService::new(_num_crypto_tasks, keystore.clone(), config.clone());
         crypto.run();
         let storage_config = &config.get().consensus_config.log_storage_config;
-        let mut storage = match storage_config {
+        let storage = match storage_config {
             rocksdb_config @ crate::config::StorageConfig::RocksDB(_) => {
                 let _db = RocksDBStorageEngine::new(rocksdb_config.clone());
                 StorageService::new(_db, _chan_depth)
