@@ -20,6 +20,7 @@ use block_sequencer::BlockSequencer;
 use client_reply::ClientReplyHandler;
 use fork_receiver::ForkReceiver;
 use log::{debug, info, warn};
+use logserver::LogServer;
 use prost::Message;
 use staging::{Staging, VoteWithSender};
 use tokio::{sync::{mpsc::unbounded_channel, Mutex}, task::JoinSet};
@@ -156,6 +157,7 @@ pub struct ConsensusNode<E: AppEngine + Send + Sync + 'static> {
     fork_receiver: Arc<Mutex<ForkReceiver>>,
     app: Arc<Mutex<Application<'static, E>>>,
     client_reply: Arc<Mutex<ClientReplyHandler>>,
+    logserver: Arc<Mutex<LogServer>>,
 
 
     /// TODO: When all wiring is done, this will be empty.
@@ -188,6 +190,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
 
         let client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
         let staging_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
+        let logserver_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
 
         let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
 
@@ -208,10 +211,13 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let (fork_tx, fork_rx) = make_channel(_chan_depth);
         let (unlogged_tx, unlogged_rx) = make_channel(_chan_depth);
         let (backfill_request_tx, backfill_request_rx) = make_channel(_chan_depth);
+        let (gc_tx, gc_rx) = make_channel(_chan_depth);
 
         let block_maker_crypto = crypto.get_connector();
         let block_broadcaster_crypto = crypto.get_connector();
         let block_broadcaster_storage = storage.get_connector(block_broadcaster_crypto);
+        let logserver_crypto = crypto.get_connector();
+        let logserver_storage = storage.get_connector(logserver_crypto);
         let staging_crypto = crypto.get_connector();
         let fork_receiver_crypto = crypto.get_connector();
 
@@ -223,14 +229,16 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let fork_receiver = ForkReceiver::new(config.clone(), fork_receiver_crypto, fork_rx, fork_receiver_command_rx, other_block_tx);
         let app = Application::new(config.clone(), app_rx, unlogged_rx, client_reply_command_tx);
         let client_reply = ClientReplyHandler::new(config.clone(), client_reply_rx, client_reply_command_rx);
+        let logserver = LogServer::new(config.clone(), logserver_client.into(), logserver_rx, backfill_request_rx, gc_rx, logserver_storage);
         let mut handles = JoinSet::new();
         
     
         handles.spawn(async move {
             let _tx = unlogged_tx.clone();
+            let _tx2 = gc_tx.clone();
 
-            while let Some(_) = logserver_rx.recv().await {
-                // Sink
+            loop {
+
             }
         });
 
@@ -247,6 +255,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
             staging: Arc::new(Mutex::new(staging)),
             fork_receiver: Arc::new(Mutex::new(fork_receiver)),
             client_reply: Arc::new(Mutex::new(client_reply)),
+            logserver: Arc::new(Mutex::new(logserver)),
 
             crypto,
             storage: Arc::new(Mutex::new(storage)),
@@ -266,6 +275,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let app = self.app.clone();
         let client_reply = self.client_reply.clone();
         let fork_receiver = self.fork_receiver.clone();
+        let logserver = self.logserver.clone();
 
         let mut handles = JoinSet::new();
 
@@ -305,6 +315,10 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
 
         handles.spawn(async move {
             ForkReceiver::run(fork_receiver).await;
+        });
+
+        handles.spawn(async move {
+            LogServer::run(logserver).await;
         });
     
         handles
