@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, io::Error, sync::Arc};
 
-use log::{debug, info, warn};
+use log::{debug, warn};
 use tokio::sync::{Mutex, oneshot};
 
 use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries}, rpc::SenderType, utils::channel::{Receiver, Sender}};
@@ -82,8 +82,8 @@ impl ForkReceiver {
         Self {
             config,
             crypto,
-            view: 1,
-            config_num: 1,
+            view: 0,
+            config_num: 0,
             fork_rx,
             command_rx,
             broadcaster_tx,

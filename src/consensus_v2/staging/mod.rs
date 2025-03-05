@@ -35,6 +35,8 @@ pub struct Staging {
     view: u64,
     view_is_stable: bool,
     config_num: u64,
+    last_qc: Option<ProtoQuorumCertificate>,
+    curr_parent_for_pending: Option<CachedBlock>,
     
 
     /// Invariant: pending_blocks.len() == 0 || bci == pending_blocks.front().n - 1
@@ -110,6 +112,8 @@ impl Staging {
             bci: 0,
             view: 0,
             view_is_stable: false,
+            last_qc: None,
+            curr_parent_for_pending: None,
             config_num: 1,
             pending_blocks: VecDeque::with_capacity(_chan_depth),
             pending_signatures: VecDeque::with_capacity(_chan_depth),

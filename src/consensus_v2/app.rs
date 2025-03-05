@@ -5,7 +5,7 @@ use log::{error, info, warn};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{CachedBlock, HashType, DIGEST_LENGTH}, proto::{client::ProtoByzResponse, execution::{ProtoTransaction, ProtoTransactionResult}}, utils::{channel::{Receiver, Sender}, PerfCounter}};
+use crate::{config::AtomicConfig, crypto::{default_hash, CachedBlock, HashType, DIGEST_LENGTH}, proto::{client::ProtoByzResponse, execution::{ProtoTransaction, ProtoTransactionResult}}, utils::{channel::{Receiver, Sender}, PerfCounter}};
 
 use super::{client_reply::ClientReplyCommand, super::utils::timer::ResettableTimer};
 
@@ -53,7 +53,7 @@ impl LogStats {
             view_is_stable: false,
             last_n: 0,
             last_qc: 0,
-            last_hash: vec![0u8; DIGEST_LENGTH],
+            last_hash: default_hash(),
             total_requests: 0,
             total_crash_committed_txs: 0,
             total_byz_committed_txs: 0,

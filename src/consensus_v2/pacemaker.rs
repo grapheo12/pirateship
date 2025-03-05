@@ -9,10 +9,11 @@ use super::logserver::LogServerQuery;
 
 
 pub enum PacemakerCommand {
-    /// This is bidirectional.
-    /// Pacemaker usese it to poke the staging to change views,
-    /// and the staging uses it to inform the pacemaker about new views.
+    /// Pacemaker usese it to poke the staging to change views.
     UpdateView(u64 /* new view num */, u64 /* config num */),
+
+    /// Staging uses it to notify when it jumps to new view.
+    MyViewJumped(u64 /* new view num */, u64 /* config num */, ProtoViewChange),
 
     /// Only for pacemaker use.
     NewViewForks(u64 /* new view num */, u64 /* config num */, HashMap<SenderType, ProtoViewChange> /* View change messages */),
@@ -92,8 +93,7 @@ impl Pacemaker {
         let u = config.consensus_config.liveness_u as usize;
 
         // If I am the leader, New view after (N - u) view change messages.
-        // But this includes my own message, which I will not send to myself.
-        n - u - 1
+        n - u
     }
 
     pub async fn run(pacemaker: Arc<Mutex<Self>>) {
@@ -114,12 +114,11 @@ impl Pacemaker {
                 }
             },
             cmd = self.staging_rx.recv() => {
-                if let Some(PacemakerCommand::UpdateView(view_num, config_num)) = cmd {
-                    self.view_num = view_num;
-                    self.config_num = config_num;
+                if let Some(PacemakerCommand::MyViewJumped(view_num, config_num, vc)) = cmd {
+                    self.handle_my_view_jump(view_num, config_num, vc).await?;
                 }
 
-                if let Some(PacemakerCommand::UpdateBCI(bci)) = cmd {
+                else if let Some(PacemakerCommand::UpdateBCI(bci)) = cmd {
                     self.bci = bci;
                 }
             },
@@ -209,6 +208,19 @@ impl Pacemaker {
         PinnedClient::send(&self.client, &sender,
             MessageRef(&buf, sz, &SenderType::Anon)
         ).await.unwrap();
+        Ok(())
+    }
+
+    async fn handle_my_view_jump(&mut self, view_num: u64, config_num: u64, vc: ProtoViewChange) -> Result<(), ()> {
+        let key = (view_num, config_num);
+        let my_name = self.config.get().net_config.name.clone();
+        let sender = SenderType::Auth(my_name, 0);
+        self.vc_buffer.retain(|(view, config), _| {
+            *view >= view_num && *config >= config_num
+        });
+
+        let vc_buffer = self.vc_buffer.entry(key).or_insert(HashMap::new());
+        vc_buffer.insert(sender, vc);
         Ok(())
     }
 }

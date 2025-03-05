@@ -3,13 +3,11 @@ use std::{io::{BufReader, Error, ErrorKind}, ops::Deref, pin::Pin, sync::{atomic
 use ed25519_dalek::{verify_batch, Signature, SIGNATURE_LENGTH};
 use futures::SinkExt;
 use log::trace;
-use nix::libc::PARENB;
-use prost::Message;
 use rand::{thread_rng, Rng};
 use sha2::{Digest, Sha256};
 use tokio::{sync::{mpsc::{channel, Receiver, Sender}, oneshot}, task::JoinSet};
 
-use crate::{config::AtomicConfig, consensus_v2::fork_receiver::{AppendEntriesStats, MultipartFork}, crypto::DIGEST_LENGTH, proto::consensus::{HalfSerializedBlock, ProtoBlock, ProtoQuorumCertificate}, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser, PerfCounter}};
+use crate::{config::AtomicConfig, consensus_v2::fork_receiver::{AppendEntriesStats, MultipartFork}, crypto::{default_hash, DIGEST_LENGTH}, proto::consensus::{HalfSerializedBlock, ProtoBlock, ProtoQuorumCertificate}, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser, PerfCounter}};
 
 use super::{hash, AtomicKeyStore, HashType, KeyStore};
 
@@ -221,7 +219,7 @@ impl CryptoService {
 
                     
                     let parent = match parent_hash_rx {
-                        FutureHash::None => vec![0u8; DIGEST_LENGTH],
+                        FutureHash::None => default_hash(),
                         FutureHash::Immediate(val) => val,
                         FutureHash::Future(receiver) => receiver.await.unwrap(),
                     };
@@ -441,6 +439,16 @@ impl CryptoServiceConnector {
             remaining_parts,
             ae_stats,
         }
+    }
+
+    pub async fn prepare_for_rebroadcast(&mut self, mut part: Vec<HalfSerializedBlock>) -> Vec<oneshot::Receiver<Result<CachedBlock, Error>>> {
+        let mut fork_future = Vec::with_capacity(part.len());
+        for e in part.drain(..) {
+            let (tx, rx) = oneshot::channel();
+            self.dispatch(CryptoServiceCommand::VerifyBlockSer(e.serialized_body, tx)).await;
+            fork_future.push(rx);
+        }
+        fork_future
     }
 
 

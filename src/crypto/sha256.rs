@@ -24,3 +24,7 @@ pub fn cmp_hash(one: &Vec<u8>, two: &Vec<u8>) -> bool {
 
 
 pub type HashType = Vec<u8>;
+
+pub fn default_hash() -> HashType {
+    vec![0u8; DIGEST_LENGTH]
+}

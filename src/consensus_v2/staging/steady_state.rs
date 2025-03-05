@@ -452,6 +452,11 @@ impl Staging {
             .collect::<Vec<_>>();
 
         for qc in qc_list.drain(..) {
+            if !self.view_is_stable {
+                // Try to see if this QC can stabilize the view.
+                self.maybe_stabilize_view(&qc).await;
+            }
+            
             self.maybe_byzantine_commit(qc).await?;
         }
 
@@ -628,10 +633,16 @@ impl Staging {
                     digest: block.block.block_hash.clone(),
                 };
                 qcs.push(qc);
+
             }
         }
 
         for qc in qcs.drain(..) {
+            if !self.view_is_stable {
+                // Try to see if this QC can stabilize the view.
+                self.maybe_stabilize_view(&qc).await;
+            }
+            
             // This send needs to be non-blocking.
             // Hence can't avoid using an unbounded channel.
             // Otherwise: block_broadcaster_tx -> staging_tx -> qc_tx forms a cycle since BlockSequencer consumes from qc_rx.
@@ -658,6 +669,14 @@ impl Staging {
         &mut self,
         incoming_qc: ProtoQuorumCertificate,
     ) -> Result<(), ()> {
+        // Reset view timer. Getting a QC signals that byzantine progress can still be made.
+        if self.view <= incoming_qc.view /* no old */
+            && self.last_qc.as_ref().map(|e| e.n).unwrap_or(0) < incoming_qc.n /* dedup */
+        {
+            self.view_change_timer.reset();
+            self.maybe_update_last_qc(&incoming_qc);
+        }
+
         // Clean out the pending_signatures
         self.pending_signatures.retain(|(n, _)| *n > incoming_qc.n);
         let old_bci = self.bci;
@@ -705,10 +724,20 @@ impl Staging {
             let block = self.pending_blocks.pop_front().unwrap().block;
             self.perf_add_event(&block, "Byz Commit");
 
+            if block.block.n == new_bci {
+                self.curr_parent_for_pending = Some(block.clone());
+            }
+
             self.perf_deregister_block(&block);
             byz_blocks.push(block);
         }
 
         let _ = self.app_tx.send(AppCommand::ByzCommit(byz_blocks)).await;
+    }
+
+    fn maybe_update_last_qc(&mut self, qc: &ProtoQuorumCertificate) {
+        if qc.n > self.last_qc.as_ref().map(|e| e.n).unwrap_or(0) {
+            self.last_qc = Some(qc.clone());
+        }
     }
 }

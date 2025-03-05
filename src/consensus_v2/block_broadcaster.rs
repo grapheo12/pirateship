@@ -1,6 +1,7 @@
 use std::{cell::RefCell, io::{Error, ErrorKind}, sync::Arc};
 
 use log::debug;
+use lz4_flex::block;
 use prost::Message;
 use tokio::sync::{oneshot, Mutex};
 
@@ -9,12 +10,14 @@ use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::
 use super::{app::AppCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand, MultipartFork}};
 
 pub enum BlockBroadcasterCommand {
-    UpdateCI(u64)
+    UpdateCI(u64),
+    NextAEForkPrefix(Vec<oneshot::Receiver<CachedBlock>>),
 }
 
 pub struct BlockBroadcaster {
     config: AtomicConfig,
     ci: u64,
+    fork_prefix_buffer: Vec<CachedBlock>,
     
     // Input ports
     my_block_rx: Receiver<(u64, oneshot::Receiver<CachedBlock>)>,
@@ -64,6 +67,7 @@ impl BlockBroadcaster {
         Self {
             config,
             ci: 0,
+            fork_prefix_buffer: Vec::new(),
             my_block_rx,
             other_block_rx,
             control_command_rx,
@@ -170,6 +174,12 @@ impl BlockBroadcaster {
     async fn handle_control_command(&mut self, cmd: BlockBroadcasterCommand) -> Result<(), Error> {
         match cmd {
             BlockBroadcasterCommand::UpdateCI(ci) => self.ci = ci,
+            BlockBroadcasterCommand::NextAEForkPrefix(blocks) => {
+                for block in blocks {
+                    let block = block.await.unwrap();
+                    self.fork_prefix_buffer.push(block);
+                }
+            }
         }
 
         Ok(())
@@ -200,12 +210,22 @@ impl BlockBroadcaster {
         let perf_entry = block.block.n;
 
         let (view, view_is_stable, config_num) = (block.block.view, block.block.view_is_stable, block.block.config_num);
-        self.store_and_forward_internally(&block, AppendEntriesStats {
-            view,
-            config_num,
-            sender: self.config.get().net_config.name.clone(),
-            ci: self.ci,
-        }).await?;
+        // First forward all blocks that were in the fork prefix buffer.
+        let mut ae_fork = Vec::new();
+
+        for block in self.fork_prefix_buffer.drain(..) {
+            ae_fork.push(block);
+        }
+        ae_fork.push(block.clone());
+
+        for block in &ae_fork {
+            self.store_and_forward_internally(&block, AppendEntriesStats {
+                view,
+                config_num,
+                sender: self.config.get().net_config.name.clone(),
+                ci: self.ci,
+            }).await?;
+        }
         
         // Forward to app for stats.
         self.app_command_tx.send(AppCommand::NewRequestBatch(block.block.n, view, view_is_stable, true, block.block.tx_list.len(), block.block_hash.clone())).await.unwrap();
@@ -215,13 +235,13 @@ impl BlockBroadcaster {
         let names = self.get_everyone_except_me();
         let append_entry = ProtoAppendEntries {
             fork: Some(ProtoFork {
-                serialized_blocks: vec![HalfSerializedBlock { 
+                serialized_blocks: ae_fork.drain(..).map(|block| HalfSerializedBlock { 
                     n: block.block.n,
                     view: block.block.view,
                     view_is_stable: block.block.view_is_stable,
                     config_num: block.block.config_num,
                     serialized_body: block.block_ser.clone(), 
-                }],
+                }).collect(),
             }),
             commit_index: self.ci,
             view,

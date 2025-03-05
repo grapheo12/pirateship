@@ -1,33 +1,44 @@
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::{pin::Pin, sync::Arc, time::Duration};
 
-use log::{debug, info};
+use crate::crypto::FutureHash;
+use crate::utils::channel::{Receiver, Sender};
+use log::debug;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{oneshot, Mutex};
-use crate::crypto::FutureHash;
-use crate::utils::channel::{Sender, Receiver};
 
 use crate::utils::PerfCounter;
-use crate::{config::AtomicConfig, utils::timer::ResettableTimer, crypto::{hash, CachedBlock, CryptoServiceConnector, HashType}, proto::consensus::{DefferedSignature, ProtoBlock, ProtoForkValidation, ProtoQuorumCertificate, ProtoTransactionList}};
+use crate::{
+    config::AtomicConfig,
+    crypto::{CachedBlock, CryptoServiceConnector, HashType},
+    proto::consensus::{
+        DefferedSignature, ProtoBlock, ProtoForkValidation, ProtoQuorumCertificate,
+    },
+    utils::timer::ResettableTimer,
+};
 
 use super::batch_proposal::{MsgAckChanWithTag, RawBatch};
 
 pub enum BlockSequencerControlCommand {
-    NewUnstableView(u64 /* view num */, u64 /* config num */),       // View changed to a new view, it is not stable, so don't propose new blocks.
-    ViewStabilised(u64 /* view num */, u64 /* config num */),        // View is stable now, if I am the leader in this view, propose new blocks.
-    NewViewMessage(u64 /* view num */, u64 /* config num */, Vec<ProtoForkValidation>, HashType /* new parent hash */, u64 /* new seq num */),  // Change view to unstable, use ProtoForkValidation to propose a new view message.
+    NewUnstableView(u64 /* view num */, u64 /* config num */), // View changed to a new view, it is not stable, so don't propose new blocks.
+    ViewStabilised(u64 /* view num */, u64 /* config num */), // View is stable now, if I am the leader in this view, propose new blocks.
+    NewViewMessage(
+        u64, /* view num */
+        u64, /* config num */
+        Vec<ProtoForkValidation>,
+        HashType, /* new parent hash */
+        u64,      /* new seq num */
+    ), // Change view to unstable, use ProtoForkValidation to propose a new view message.
 }
-
 
 pub struct BlockSequencer {
     config: AtomicConfig,
     control_command_rx: Receiver<BlockSequencerControlCommand>,
-    
+
     batch_rx: Receiver<(RawBatch, Vec<MsgAckChanWithTag>)>,
-    
+
     signature_timer: Arc<Pin<Box<ResettableTimer>>>,
-    
+
     qc_rx: UnboundedReceiver<ProtoQuorumCertificate>,
     current_qc_list: Vec<ProtoQuorumCertificate>,
 
@@ -43,8 +54,6 @@ pub struct BlockSequencer {
     force_sign_next_batch: bool,
     last_signed_seq_num: u64,
 
-    send_buffer: VecDeque<(u64, oneshot::Receiver<CachedBlock>)>,
-
     perf_counter_signed: RefCell<PerfCounter<u64>>,
     perf_counter_unsigned: RefCell<PerfCounter<u64>>,
 }
@@ -59,10 +68,9 @@ impl BlockSequencer {
         client_reply_tx: Sender<(oneshot::Receiver<HashType>, Vec<MsgAckChanWithTag>)>,
         crypto: CryptoServiceConnector,
     ) -> Self {
-
-        let signature_timer = ResettableTimer::new(
-            Duration::from_millis(config.get().consensus_config.signature_max_delay_ms)
-        );
+        let signature_timer = ResettableTimer::new(Duration::from_millis(
+            config.get().consensus_config.signature_max_delay_ms,
+        ));
 
         let event_order = vec![
             "Add QCs",
@@ -71,8 +79,10 @@ impl BlockSequencer {
             "Send to Block Broadcaster",
         ];
 
-        let perf_counter_signed = RefCell::new(PerfCounter::new("BlockSequencerSigned", &event_order));
-        let perf_counter_unsigned = RefCell::new(PerfCounter::new("BlockSequencerUnsigned", &event_order));
+        let perf_counter_signed =
+            RefCell::new(PerfCounter::new("BlockSequencerSigned", &event_order));
+        let perf_counter_unsigned =
+            RefCell::new(PerfCounter::new("BlockSequencerUnsigned", &event_order));
 
         Self {
             config,
@@ -86,12 +96,11 @@ impl BlockSequencer {
             crypto,
             parent_hash_rx: FutureHash::None,
             seq_num: 1,
-            view: 1,
-            config_num: 1,
-            view_is_stable: true,       // TODO: Start with stable for now, we'll change it later.
+            view: 0,
+            config_num: 0,
+            view_is_stable: false,
             force_sign_next_batch: false,
             last_signed_seq_num: 0,
-            send_buffer: VecDeque::new(),
             perf_counter_signed,
             perf_counter_unsigned,
         }
@@ -101,7 +110,6 @@ impl BlockSequencer {
         let mut block_maker = block_maker.lock().await;
         let signature_timer_handle = block_maker.signature_timer.run().await;
         let chan_depth = block_maker.config.get().rpc_config.channel_depth;
-
 
         loop {
             if let Err(_) = block_maker.worker(chan_depth as usize).await {
@@ -126,44 +134,58 @@ impl BlockSequencer {
     fn perf_register(&mut self, entry: u64) {
         #[cfg(feature = "perf")]
         {
-            self.perf_counter_signed.borrow_mut().register_new_entry(entry);
-            self.perf_counter_unsigned.borrow_mut().register_new_entry(entry);
+            self.perf_counter_signed
+                .borrow_mut()
+                .register_new_entry(entry);
+            self.perf_counter_unsigned
+                .borrow_mut()
+                .register_new_entry(entry);
         }
     }
 
     fn perf_fix_signature(&mut self, entry: u64, signed: bool) {
         #[cfg(feature = "perf")]
         if signed {
-            self.perf_counter_unsigned.borrow_mut().deregister_entry(&entry);
+            self.perf_counter_unsigned
+                .borrow_mut()
+                .deregister_entry(&entry);
         } else {
-            self.perf_counter_signed.borrow_mut().deregister_entry(&entry);
+            self.perf_counter_signed
+                .borrow_mut()
+                .deregister_entry(&entry);
         }
     }
 
     fn perf_add_event(&mut self, entry: u64, event: &str, signed: bool) {
         #[cfg(feature = "perf")]
         if signed {
-            self.perf_counter_signed.borrow_mut().new_event(event, &entry);
+            self.perf_counter_signed
+                .borrow_mut()
+                .new_event(event, &entry);
         } else {
-            self.perf_counter_unsigned.borrow_mut().new_event(event, &entry);
+            self.perf_counter_unsigned
+                .borrow_mut()
+                .new_event(event, &entry);
         }
     }
 
     fn perf_deregister(&mut self, entry: u64) {
         #[cfg(feature = "perf")]
         {
-            self.perf_counter_unsigned.borrow_mut().deregister_entry(&entry);
-            self.perf_counter_signed.borrow_mut().deregister_entry(&entry);
+            self.perf_counter_unsigned
+                .borrow_mut()
+                .deregister_entry(&entry);
+            self.perf_counter_signed
+                .borrow_mut()
+                .deregister_entry(&entry);
         }
     }
 
     async fn worker(&mut self, chan_depth: usize) -> Result<(), ()> {
-
-        let listen_for_new_batch = 
-            self.view_is_stable && self.i_am_leader();
+        let listen_for_new_batch = self.view_is_stable && self.i_am_leader();
 
         let mut qc_buf = Vec::new();
-    
+
         if listen_for_new_batch {
             tokio::select! {
                 biased;
@@ -195,18 +217,24 @@ impl BlockSequencer {
                 },
             }
         }
- 
+
         Ok(())
     }
 
-    async fn handle_new_batch(&mut self, batch: RawBatch, replies: Vec<MsgAckChanWithTag>, fork_validation: Vec<ProtoForkValidation>, perf_entry_id: u64) {
+    async fn handle_new_batch(
+        &mut self,
+        batch: RawBatch,
+        replies: Vec<MsgAckChanWithTag>,
+        fork_validation: Vec<ProtoForkValidation>,
+        perf_entry_id: u64,
+    ) {
         let n = self.seq_num;
         self.seq_num += 1;
 
         let config = self.config.get();
-        
-        let must_sign = self.force_sign_next_batch ||
-            (n - self.last_signed_seq_num) > config.consensus_config.signature_max_delay_blocks;
+
+        let must_sign = self.force_sign_next_batch
+            || (n - self.last_signed_seq_num) > config.consensus_config.signature_max_delay_blocks;
 
         if must_sign {
             self.last_signed_seq_num = n;
@@ -233,20 +261,29 @@ impl BlockSequencer {
             view_is_stable: self.view_is_stable,
             config_num: self.config_num,
             tx_list: batch,
-            sig: Some(crate::proto::consensus::proto_block::Sig::NoSig(DefferedSignature{})),
+            sig: Some(crate::proto::consensus::proto_block::Sig::NoSig(
+                DefferedSignature {},
+            )),
         };
 
         let parent_hash_rx = self.parent_hash_rx.take();
         self.perf_add_event(perf_entry_id, "Create Block", must_sign);
 
-        let (block_rx, hash_rx, hash_rx2) = self.crypto.prepare_block(block, must_sign, parent_hash_rx).await;
+        let (block_rx, hash_rx, hash_rx2) = self
+            .crypto
+            .prepare_block(block, must_sign, parent_hash_rx)
+            .await;
         self.parent_hash_rx = FutureHash::Future(hash_rx);
 
-        self.client_reply_tx.send((hash_rx2, replies)).await
+        self.client_reply_tx
+            .send((hash_rx2, replies))
+            .await
             .expect("Should be able to send client_reply_tx");
         self.perf_add_event(perf_entry_id, "Send to Client Reply", must_sign);
 
-        self.block_broadcaster_tx.send((n, block_rx)).await
+        self.block_broadcaster_tx
+            .send((n, block_rx))
+            .await
             .expect("Should be able to send block_broadcaster_tx");
         self.perf_add_event(perf_entry_id, "Send to Block Broadcaster", must_sign);
 
@@ -277,14 +314,20 @@ impl BlockSequencer {
                 self.config_num = c;
                 self.view_is_stable = false;
                 self.current_qc_list.retain(|e| e.view == self.view);
-            },
+            }
             BlockSequencerControlCommand::ViewStabilised(v, c) => {
                 self.view = v;
                 self.config_num = c;
                 self.view_is_stable = true;
                 self.current_qc_list.retain(|e| e.view == self.view);
-            },
-            BlockSequencerControlCommand::NewViewMessage(v, c, fork_validation, new_parent_hash, new_seq_num) => {
+            }
+            BlockSequencerControlCommand::NewViewMessage(
+                v,
+                c,
+                fork_validation,
+                new_parent_hash,
+                new_seq_num,
+            ) => {
                 self.view = v;
                 self.config_num = c;
                 self.view_is_stable = false;
@@ -295,14 +338,13 @@ impl BlockSequencer {
                     return;
                 }
 
-                self.seq_num = new_seq_num;     // This may not be monotonic due to rollbacks.
+                self.seq_num = new_seq_num; // This may not be monotonic due to rollbacks.
                 self.parent_hash_rx = FutureHash::Immediate(new_parent_hash);
 
                 // Now the NEXT block (ie new_seq_num + 1) is going to be for NewView.
-                self.handle_new_batch(RawBatch::new(), vec![], fork_validation, 0).await;
-            },
+                self.handle_new_batch(RawBatch::new(), vec![], fork_validation, 0)
+                    .await;
+            }
         }
     }
-
-
 }
