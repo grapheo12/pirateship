@@ -7,6 +7,7 @@ pub mod app;
 pub mod engines;
 pub mod client_reply;
 mod logserver;
+mod pacemaker;
 
 #[cfg(test)]
 mod tests;
@@ -21,6 +22,7 @@ use client_reply::ClientReplyHandler;
 use fork_receiver::ForkReceiver;
 use log::{debug, info, warn};
 use logserver::LogServer;
+use pacemaker::Pacemaker;
 use prost::Message;
 use staging::{Staging, VoteWithSender};
 use tokio::{sync::{mpsc::unbounded_channel, Mutex}, task::JoinSet};
@@ -158,6 +160,7 @@ pub struct ConsensusNode<E: AppEngine + Send + Sync + 'static> {
     app: Arc<Mutex<Application<'static, E>>>,
     client_reply: Arc<Mutex<ClientReplyHandler>>,
     logserver: Arc<Mutex<LogServer>>,
+    pacemaker: Arc<Mutex<Pacemaker>>,
 
 
     /// TODO: When all wiring is done, this will be empty.
@@ -191,6 +194,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
         let staging_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
         let logserver_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
+        let pacemaker_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
 
         let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
 
@@ -206,12 +210,17 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let (logserver_tx, logserver_rx) = make_channel(_chan_depth);
         let (vote_tx, vote_rx) = make_channel(_chan_depth);
         let (view_change_tx, view_change_rx) = make_channel(_chan_depth);
+        let (pacemaker_cmd_tx, pacemaker_cmd_rx) = make_channel(_chan_depth);
+        let (pacemaker_cmd_tx2, pacemaker_cmd_rx2) = make_channel(_chan_depth);
+
+
         let (app_tx, app_rx) = make_channel(_chan_depth);
         let (fork_receiver_command_tx, fork_receiver_command_rx) = make_channel(_chan_depth);
         let (fork_tx, fork_rx) = make_channel(_chan_depth);
         let (unlogged_tx, unlogged_rx) = make_channel(_chan_depth);
         let (backfill_request_tx, backfill_request_rx) = make_channel(_chan_depth);
         let (gc_tx, gc_rx) = make_channel(_chan_depth);
+        let (logserver_query_tx, logserver_query_rx) = make_channel(_chan_depth);
 
         let block_maker_crypto = crypto.get_connector();
         let block_broadcaster_crypto = crypto.get_connector();
@@ -220,16 +229,19 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let logserver_storage = storage.get_connector(logserver_crypto);
         let staging_crypto = crypto.get_connector();
         let fork_receiver_crypto = crypto.get_connector();
+        let pacemaker_crypto = crypto.get_connector();
 
         let ctx = PinnedConsensusServerContext::new(config.clone(), keystore.clone(), batch_proposer_tx, fork_tx, vote_tx, view_change_tx, backfill_request_tx);
         let batch_proposer = BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, app_tx.clone());
         let block_sequencer = BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto);
         let block_broadcaster = BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx.clone(), app_tx.clone());
-        let staging = Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, view_change_rx, client_reply_command_tx.clone(), app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx);
+        let staging = Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, pacemaker_cmd_rx, pacemaker_cmd_tx2, client_reply_command_tx.clone(), app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx);
         let fork_receiver = ForkReceiver::new(config.clone(), fork_receiver_crypto, fork_rx, fork_receiver_command_rx, other_block_tx);
         let app = Application::new(config.clone(), app_rx, unlogged_rx, client_reply_command_tx);
         let client_reply = ClientReplyHandler::new(config.clone(), client_reply_rx, client_reply_command_rx);
-        let logserver = LogServer::new(config.clone(), logserver_client.into(), logserver_rx, backfill_request_rx, gc_rx, logserver_storage);
+        let logserver = LogServer::new(config.clone(), logserver_client.into(), logserver_rx, backfill_request_rx, gc_rx, logserver_query_rx, logserver_storage);
+        let pacemaker = Pacemaker::new(config.clone(), pacemaker_client.into(), pacemaker_crypto, view_change_rx, pacemaker_cmd_tx, pacemaker_cmd_rx2, logserver_query_tx);
+        
         let mut handles = JoinSet::new();
         
     
@@ -256,6 +268,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
             fork_receiver: Arc::new(Mutex::new(fork_receiver)),
             client_reply: Arc::new(Mutex::new(client_reply)),
             logserver: Arc::new(Mutex::new(logserver)),
+            pacemaker: Arc::new(Mutex::new(pacemaker)),
 
             crypto,
             storage: Arc::new(Mutex::new(storage)),
@@ -276,6 +289,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let client_reply = self.client_reply.clone();
         let fork_receiver = self.fork_receiver.clone();
         let logserver = self.logserver.clone();
+        let pacemaker = self.pacemaker.clone();
 
         let mut handles = JoinSet::new();
 
@@ -319,6 +333,10 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
 
         handles.spawn(async move {
             LogServer::run(logserver).await;
+        });
+
+        handles.spawn(async move {
+            Pacemaker::run(pacemaker).await;
         });
     
         handles

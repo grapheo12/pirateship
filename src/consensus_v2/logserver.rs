@@ -2,7 +2,7 @@ use std::{collections::{BTreeMap, HashMap, VecDeque}, sync::Arc};
 
 use log::warn;
 use prost::Message as _;
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 
 use crate::{config::AtomicConfig, crypto::CachedBlock, proto::{checkpoint::{proto_backfill_nack::Origin, ProtoBackfillNack, ProtoBlockHint}, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork, ProtoViewChange}, rpc::{proto_payload::Message, ProtoPayload}}, rpc::{client::PinnedClient, MessageRef, PinnedMessage}, utils::{channel::Receiver, StorageServiceConnector}};
 
@@ -62,6 +62,12 @@ impl ReadCache {
     }
 }
 
+
+pub enum LogServerQuery {
+    CheckHash(u64 /* block.n */, Vec<u8> /* block_hash */, oneshot::Sender<bool>),
+    GetHints(u64 /* last needed block.n */, oneshot::Sender<Vec<ProtoBlockHint>>),
+}
+
 pub struct LogServer {
     config: AtomicConfig,
     client: PinnedClient,
@@ -69,6 +75,8 @@ pub struct LogServer {
     logserver_rx: Receiver<CachedBlock>,
     backfill_request_rx: Receiver<ProtoBackfillNack>,
     gc_rx: Receiver<u64>,
+
+    query_rx: Receiver<LogServerQuery>,
 
 
     storage: StorageServiceConnector,
@@ -81,13 +89,17 @@ pub struct LogServer {
 const LOGSERVER_READ_CACHE_WSS: usize = 100;
 
 impl LogServer {
-    pub fn new(config: AtomicConfig, client: PinnedClient, logserver_rx: Receiver<CachedBlock>, backfill_request_rx: Receiver<ProtoBackfillNack>, gc_rx: Receiver<u64>, storage: StorageServiceConnector) -> Self {
+    pub fn new(
+        config: AtomicConfig, client: PinnedClient,
+        logserver_rx: Receiver<CachedBlock>, backfill_request_rx: Receiver<ProtoBackfillNack>,
+        gc_rx: Receiver<u64>, query_rx: Receiver<LogServerQuery>,
+        storage: StorageServiceConnector) -> Self {
         LogServer {
             config,
             client,
             logserver_rx,
             backfill_request_rx,
-            gc_rx,
+            gc_rx, query_rx,
             storage,
             log: VecDeque::new(),
             read_cache: ReadCache::new(LOGSERVER_READ_CACHE_WSS),
@@ -122,6 +134,12 @@ impl LogServer {
             backfill_req = self.backfill_request_rx.recv() => {
                 if let Some(backfill_req) = backfill_req {
                     self.respond_backfill(backfill_req).await?;
+                }
+            },
+
+            query = self.query_rx.recv() => {
+                if let Some(query) = query {
+                    self.handle_query(query).await;
                 }
             }
         }
@@ -292,6 +310,83 @@ impl LogServer {
                     config_num: block.block.config_num,
                     serialized_body: block.block_ser.clone(),
                 }).collect(),
+        }
+    }
+
+    async fn handle_query(&mut self, query: LogServerQuery) {
+        match query {
+            LogServerQuery::CheckHash(n, hsh, sender) => {
+                if n == 0 {
+                    sender.send(true).unwrap();
+                    return;
+                }
+
+                let block = match self.get_block(n).await {
+                    Some(block) => block,
+                    None => {
+                        sender.send(false).unwrap();
+                        return;
+                    }
+                };
+
+                sender.send(block.block_hash.eq(&hsh)).unwrap();
+            },
+            LogServerQuery::GetHints(last_needed_n, sender) => {
+                // Starting from last_needed_n,
+                // Include last_needed_n, last_needed_n + 1000, last_needed_n + 2000, ..., until last_needed_n + 10000,
+                // Then include last_needed_n + 10000, last_needed_n + 20000, ..., until last_needed_n + 100000,
+                // and so on until we reach last_n. Also include the last_n.
+
+                const JUMP_START: u64 = 1000;
+                const JUMP_MULTIPLIER: u64 = 10;
+
+                let mut hints = Vec::new();
+
+                let last_n = self.log.back().map_or(0, |block| block.block.n);
+                let mut curr_n = last_needed_n;
+                let mut curr_jump = JUMP_START;
+                let mut curr_jump_used_for = 0;
+
+                if curr_n == 0 {
+                    curr_n = 1;
+                }
+
+                while curr_n < last_n {
+                    let block = match self.get_block(curr_n).await {
+                        Some(block) => block,
+                        None => {
+                            break;
+                        }
+                    };
+                    hints.push(ProtoBlockHint {
+                        block_n: block.block.n,
+                        digest: block.block_hash.clone(),
+                    });
+
+
+                    curr_n += curr_jump;
+                    curr_jump_used_for += 1;
+                    if curr_jump_used_for >= JUMP_MULTIPLIER {
+                        curr_jump *= JUMP_MULTIPLIER;
+                        curr_jump_used_for = 0;
+                    }
+                }
+
+                // Also add last_n.
+                let block = match self.get_block(last_n).await {
+                    Some(block) => block,
+                    None => {
+                        // This should never happen.
+                        panic!("Block {} not found", last_n);
+                    }
+                };
+                hints.push(ProtoBlockHint {
+                    block_n: block.block.n,
+                    digest: block.block_hash.clone(),
+                });
+
+                sender.send(hints).unwrap();
+            },
         }
     }
 }
