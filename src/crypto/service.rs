@@ -105,7 +105,7 @@ enum CryptoServiceCommand {
     CheckBlockSer(HashType, oneshot::Receiver<Result<Vec<u8>, Error>>, oneshot::Sender<Result<CachedBlock, Error>>),
     
     // Deserializes and verifies block serialization
-    VerifyBlockSer(Vec<u8>, oneshot::Sender<Result<CachedBlock, Error>>),
+    VerifyBlockSer(Vec<u8>, oneshot::Sender<Result<CachedBlock, Error>>, oneshot::Sender<Result<HashType, Error>>),
     Die
 }
 
@@ -274,7 +274,7 @@ impl CryptoService {
                         },
                     };
                 },
-                CryptoServiceCommand::VerifyBlockSer(block_ser, block_tx) => {
+                CryptoServiceCommand::VerifyBlockSer(block_ser, block_tx, hash_tx) => {
                     let block = deserialize_proto_block(block_ser.as_ref());
                     let hsh = hash_proto_block_ser(&block_ser);
 
@@ -293,11 +293,15 @@ impl CryptoService {
                                     Ok(_sig) => {
                                         if !keystore.verify(&leader_for_view, &_sig, &partial_hsh) {
                                             block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid signature"))).unwrap();
+                                            hash_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid signature")));
+                                            
                                             continue;
                                         }
                                     },
                                     Err(_) => {
                                         block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid signature"))).unwrap();
+                                        hash_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid signature")));
+
                                         continue;
                                     }
                                 }
@@ -312,18 +316,23 @@ impl CryptoService {
                                 }
                                 if !all_qcs_valid {
                                     block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid QC"))).unwrap();
+                                    hash_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid QC")));
+                                    
                                     continue;
                                 }
                             } else {
                                 if block.qc.len() > 0 {
                                     block_tx.send(Err(Error::new(ErrorKind::InvalidData, "QC without signed block"))).unwrap();
+                                    hash_tx.send(Err(Error::new(ErrorKind::InvalidData, "QC without signed block")));
                                     continue;
                                 }
                             }
-                            block_tx.send(Ok(CachedBlock::new(block, block_ser, hsh))).unwrap();
+                            block_tx.send(Ok(CachedBlock::new(block, block_ser, hsh.clone()))).unwrap();
+                            hash_tx.send(Ok(hsh));
                         },
                         Err(_) => {
                             block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Decode error"))).unwrap();
+                            hash_tx.send(Err(Error::new(ErrorKind::InvalidData, "Decode error")));
                         },
                     };
                 }
@@ -431,7 +440,8 @@ impl CryptoServiceConnector {
         let mut fork_future = Vec::with_capacity(part.len());
         for e in part.drain(..) {
             let (tx, rx) = oneshot::channel();
-            self.dispatch(CryptoServiceCommand::VerifyBlockSer(e.serialized_body, tx)).await;
+            let (_tx2, _rx) = oneshot::channel();
+            self.dispatch(CryptoServiceCommand::VerifyBlockSer(e.serialized_body, tx, _tx2)).await;
             fork_future.push(Some(rx));
         }
         MultipartFork {
@@ -441,12 +451,16 @@ impl CryptoServiceConnector {
         }
     }
 
-    pub async fn prepare_for_rebroadcast(&mut self, mut part: Vec<HalfSerializedBlock>) -> Vec<oneshot::Receiver<Result<CachedBlock, Error>>> {
+    pub async fn prepare_for_rebroadcast(&mut self, mut part: Vec<HalfSerializedBlock>) -> Vec<(
+        oneshot::Receiver<Result<CachedBlock, Error>>,
+        oneshot::Receiver<Result<HashType, Error>>
+    )> {
         let mut fork_future = Vec::with_capacity(part.len());
         for e in part.drain(..) {
             let (tx, rx) = oneshot::channel();
-            self.dispatch(CryptoServiceCommand::VerifyBlockSer(e.serialized_body, tx)).await;
-            fork_future.push(rx);
+            let (tx2, rx2) = oneshot::channel();
+            self.dispatch(CryptoServiceCommand::VerifyBlockSer(e.serialized_body, tx, tx2)).await;
+            fork_future.push((rx, rx2));
         }
         fork_future
     }

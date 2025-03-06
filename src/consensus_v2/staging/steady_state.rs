@@ -681,8 +681,9 @@ impl Staging {
         self.pending_signatures.retain(|(n, _)| *n > incoming_qc.n);
         let old_bci = self.bci;
 
-        // Fast path: All votes rule
-        let new_bci_fast_path = if incoming_qc.sig.len() >= self.byzantine_fast_path_threshold() {
+        // Fast path: All votes rule; only applicable if view is stable already.
+        let new_bci_fast_path = if self.view_is_stable &&
+        incoming_qc.sig.len() >= self.byzantine_fast_path_threshold() {
             incoming_qc.n
             // old_bci
         } else {

@@ -136,7 +136,7 @@ impl Pacemaker {
             return Ok(());
         }
         
-        // Verify the signature on the view change message
+        // Verify the signature and the fork on the view change message
         // TODO
 
 

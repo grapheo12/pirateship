@@ -11,7 +11,7 @@ use super::{app::AppCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCom
 
 pub enum BlockBroadcasterCommand {
     UpdateCI(u64),
-    NextAEForkPrefix(Vec<oneshot::Receiver<CachedBlock>>),
+    NextAEForkPrefix(Vec<oneshot::Receiver<Result<CachedBlock, Error>>>),
 }
 
 pub struct BlockBroadcaster {
@@ -176,7 +176,7 @@ impl BlockBroadcaster {
             BlockBroadcasterCommand::UpdateCI(ci) => self.ci = ci,
             BlockBroadcasterCommand::NextAEForkPrefix(blocks) => {
                 for block in blocks {
-                    let block = block.await.unwrap();
+                    let block = block.await.unwrap().expect("Failed to get block");
                     self.fork_prefix_buffer.push(block);
                 }
             }
