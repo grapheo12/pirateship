@@ -1,5 +1,6 @@
 from collections import defaultdict
 import multiprocessing
+import shutil
 from time import sleep
 import time
 from typing import List
@@ -558,6 +559,51 @@ def clean_dev(config, workdir):
     print(deployment)
 
     deployment.clean_dev_vm()
+
+
+
+@main.command()
+@click.option(
+    "-c", "--config", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
+    "-d", "--workdir", required=True,
+    type=click.Path(file_okay=False, resolve_path=True)
+)
+def clean_logs(config, workdir):
+    # Try to get deployment from the pickle file
+    pickle_path = os.path.join(workdir, "deployment", "deployment.pkl")
+    with open(pickle_path, "rb") as f:
+        deployment = pickle.load(f)
+        assert isinstance(deployment, Deployment)
+
+    print(deployment)
+
+    # Clean dev first
+    print("Cleaning remote")
+    deployment.clean_dev_vm()
+
+    # Now clean all experiment logs
+    for root, dirs, files in os.walk(os.path.join(workdir, "experiments")):
+        if "logs" in dirs:
+            logs_path = os.path.join(root, "logs")
+            print("Cleaning", logs_path)
+            shutil.rmtree(logs_path)
+            os.makedirs(logs_path, exist_ok=True)
+
+        # Delete the stale pkl file
+        if "experiment.pkl" in files:
+            os.remove(os.path.join(root, "experiment.pkl"))
+        
+        if "experiment_pristine.pkl" in files:
+            with open(os.path.join(root, "experiment_pristine.pkl"), "rb") as f:
+                experiment = pickle.load(f)
+                assert isinstance(experiment, Experiment)
+            
+            with open(os.path.join(root, "experiment.pkl"), "wb") as f:
+                pickle.dump(experiment, f)
+    
 
 
 @main.command()

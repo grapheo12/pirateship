@@ -429,6 +429,10 @@ sleep 1
         with open(os.path.join(workdir, "experiment.pkl"), "wb") as f:
             pickle.dump(self, f)
 
+        # Save myself (again) to keep the pristine state
+        with open(os.path.join(workdir, "experiment_pristine.pkl"), "wb") as f:
+            pickle.dump(self, f)
+
         # Save myself in text (again)
         with open(os.path.join(workdir, "experiment.txt"), "w") as f:
             pprint(self, f)
