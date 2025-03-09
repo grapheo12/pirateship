@@ -54,16 +54,28 @@ request_config = "Blanks"
 max_concurrent_requests = 16
 
 [[experiments]]
-name = "pirateship"
-git_hash = "9d85b9e007d4f05488fcefa06f379eef66976de1"
+name = "autobahn"
+type = "autobahn"
 repeats = 1
 num_nodes = 4
 node_distribution = "uniform"
-build_command = "make"
+build_command = "make -C autobahn"
 duration = 60
 
 [experiments.sweeping_parameters]
 num_clients = [300, 350, 400]
+
+# [[experiments]]
+# name = "pirateship"
+# git_hash = "9d85b9e007d4f05488fcefa06f379eef66976de1"
+# repeats = 1
+# num_nodes = 4
+# node_distribution = "uniform"
+# build_command = "make"
+# duration = 60
+
+# [experiments.sweeping_parameters]
+# num_clients = [300, 350, 400]
 
 
 # [[experiments]]

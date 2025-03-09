@@ -23,6 +23,7 @@ from crypto import *
 from ssh_utils import *
 from deployment import Deployment
 from experiments import Experiment
+from autobahn_experiments import AutobahnExperiment
 from results import *
 import pickle
 import re
@@ -127,6 +128,11 @@ def parse_config(path, workdir=None, existing_experiments=None):
             base_client_config, e.get("client_config", {}))
         controller_must_run = e.get("controller_must_run", False)
         git_hash_override = e.get("git_hash", None)
+        experiment_type = e.get("type", "pirateship")
+        if experiment_type == "pirateship":
+            klass = Experiment
+        elif experiment_type == "autobahn":
+            klass = AutobahnExperiment
         project_home = toml_dict["project_home"]
 
         if "sweeping_parameters" in e:
@@ -145,7 +151,7 @@ def parse_config(path, workdir=None, existing_experiments=None):
                 else:
                     _client_config = client_config
 
-                experiments.append(Experiment(
+                experiments.append(klass(
                     os.path.join(_e['name'], str(i)),
                     _e['name'], # Group name
                     i, # Seq num
@@ -163,7 +169,7 @@ def parse_config(path, workdir=None, existing_experiments=None):
                     controller_must_run
                 ))
         else:
-            experiments.append(Experiment(
+            experiments.append(klass(
                 e["name"],
                 e["name"],  # Group name
                 0, # Seq num
