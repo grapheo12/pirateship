@@ -16,6 +16,9 @@ from pprint import pprint
 import matplotlib
 import matplotlib.pyplot as plt
 
+from autobahn_logs import LogParser as AutobahnLogParser
+from autobahn_experiments import AutobahnExperiment
+
 # Log format follows the log4rs config.
 # Capture the time from the 3rd []
 
@@ -282,6 +285,15 @@ class Result:
         return ret
 
 
+    def process_autobahn_experiment(self, experiment, ramp_up, ramp_down, byz, tput_scale=1000.0, latency_scale=1000.0) -> Stats | None:
+        """
+        For autobahn, we only take the first repeat.
+        """
+        log_dir = os.path.join(experiment.local_workdir, "logs", "0")
+        print(log_dir)
+        result = AutobahnLogParser.process(log_dir).result()
+        print(result)
+
     def tput_latency_sweep_parse(self, ramp_up, ramp_down, legends) -> Dict[str, List[Stats]]:
         plot_dict = {}
 
@@ -298,6 +310,7 @@ class Result:
             if legend is None:
                 print("\x1b[31;1mNo legend found for", group_name, ". Skipping...\x1b[0m")
                 continue
+
             if "+byz" in legend:
                 needs_byz = True
                 needs_crash = True
@@ -325,7 +338,16 @@ class Result:
                     if idx in skip_indices:
                         print("\x1b[31;1mSkipping experiment", experiment.name, "for crash commit\x1b[0m")
                         continue
-                    stats = self.process_experiment(experiment, ramp_up, ramp_down, byz=False)
+
+                    if isinstance(experiment, AutobahnExperiment):
+                        experiment_type = "autobahn"
+                    else:
+                        experiment_type = "pirateship"
+
+                    if experiment_type == "pirateship":
+                        stats = self.process_experiment(experiment, ramp_up, ramp_down, byz=False)
+                    elif experiment_type == "autobahn":
+                        stats = self.process_autobahn_experiment(experiment, ramp_up, ramp_down, byz=False)
                     if stats is not None:
                         final_stats.append(stats)
                     else:
