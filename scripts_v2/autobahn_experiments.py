@@ -797,7 +797,7 @@ sleep 1
                 # Copy the logs back
                     _script += f"""
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -9 -c {binary_name}' || true
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'rm -rf {self.remote_workdir}/logs/*db*' || true
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'rm -rf {self.remote_workdir}/logs/.db-*' || true
 $SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_num}/ {self.remote_workdir}/logs/{repeat_num}/ || true
 """
                 

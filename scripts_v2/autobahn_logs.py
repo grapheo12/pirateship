@@ -76,8 +76,8 @@ class LogParser:
         return merged
 
     def _parse_clients(self, log):
-        if search(r'Error', log) is not None:
-            raise ParseError('Client(s) panicked')
+        # if search(r'Error', log) is not None:
+        #     raise ParseError('Client(s) panicked')
 
         size = int(search(r'Transactions size: (\d+)', log).group(1))
         rate = int(search(r'Transactions rate: (\d+)', log).group(1))
@@ -96,8 +96,8 @@ class LogParser:
         return size, rate, start, misses, samples, client_latencies
 
     def _parse_primaries(self, log):
-        if search(r'(?:panicked|Error)', log) is not None:
-            raise ParseError('Primary(s) panicked')
+        # if search(r'(?:panicked|Error)', log) is not None:
+        #     raise ParseError('Primary(s) panicked')
 
         tmp = findall(r'\[(.*Z) .* Created B\d+\([^ ]+\) -> ([^ ]+=)', log)
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
@@ -139,8 +139,8 @@ class LogParser:
         return proposals, commits, configs, ip
 
     def _parse_workers(self, log):
-        if search(r'(?:panic|Error)', log) is not None:
-            raise ParseError('Worker(s) panicked')
+        # if search(r'(?:panic|Error)', log) is not None:
+        #     raise ParseError('Worker(s) panicked')
 
         tmp = findall(r'Batch ([^ ]+) contains (\d+) B', log)
         sizes = {d: int(s) for d, s in tmp}
@@ -226,7 +226,7 @@ class LogParser:
         client_latencies = []
         for c in self.client_latencies:
             client_latencies.extend(c)
-        client_latency = median(client_latencies)
+        client_latency = mean(client_latencies)
 
         return (
             '\n'

@@ -63,7 +63,7 @@ build_command = "make -C autobahn"
 duration = 60
 
 [experiments.sweeping_parameters]
-num_clients = [3500]
+num_clients = [260]
 
 # [[experiments]]
 # name = "pirateship"
