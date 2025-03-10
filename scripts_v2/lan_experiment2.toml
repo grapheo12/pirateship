@@ -63,7 +63,7 @@ build_command = "make -C autobahn"
 duration = 60
 
 [experiments.sweeping_parameters]
-num_clients = [300, 350, 400]
+num_clients = [3500]
 
 # [[experiments]]
 # name = "pirateship"
@@ -75,7 +75,7 @@ num_clients = [300, 350, 400]
 # duration = 60
 
 # [experiments.sweeping_parameters]
-# num_clients = [300, 350, 400]
+# num_clients = [350]
 
 
 # [[experiments]]
@@ -114,7 +114,7 @@ force_parse = true
 
 [results.legends]
 # Experiment group to legend mapping
-pirateship = "pirateship+byz"
+# pirateship = "pirateship+byz"
 autobahn = "autobahn"
 # pbft = "pbft+onlybyz"
 # signed_raft = "signed_raft"

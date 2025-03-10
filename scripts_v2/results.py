@@ -285,14 +285,48 @@ class Result:
         return ret
 
 
-    def process_autobahn_experiment(self, experiment, ramp_up, ramp_down, byz, tput_scale=1000.0, latency_scale=1000.0) -> Stats | None:
+    def process_autobahn_experiment(self, experiment, ramp_up, ramp_down, byz, tput_scale=1000.0, latency_scale=1.0) -> Stats | None:
         """
         For autobahn, we only take the first repeat.
         """
         log_dir = os.path.join(experiment.local_workdir, "logs", "0")
         print(log_dir)
-        result = AutobahnLogParser.process(log_dir).result()
-        print(result)
+        try:
+            result = AutobahnLogParser.process(log_dir).result()
+            mean_tput = 0.0
+            mean_latency = 0.0
+            for line in result.split("\n"):
+                print(line)
+                if line.startswith(" Consensus TPS"):
+                    mean_tput = line.split(":")[-1].strip()
+                    mean_tput = mean_tput.replace(",", "")
+                    mean_tput = float(mean_tput.split(" ")[0]) / tput_scale
+
+                if line.startswith(" Client latency"):
+                    mean_latency = line.split(":")[-1].strip()
+                    mean_latency = mean_latency.replace(",", "")
+                    mean_latency = float(mean_latency.split(" ")[0]) / latency_scale
+
+            return Stats(
+                num_nodes=experiment.num_nodes,
+                num_clients=experiment.num_clients,
+                mean_tput=mean_tput,
+                stdev_tput=0,
+                mean_tput_unbatched=0,
+                stdev_tput_unbatched=0,
+                latency_prob_dist=[],
+                mean_latency=mean_latency,
+                median_latency=mean_latency,
+                p25_latency=mean_latency,
+                p75_latency=mean_latency,
+                p99_latency=mean_latency,
+                max_latency=mean_latency,
+                min_latency=mean_latency,
+                stdev_latency=0
+            )
+        except Exception as e:
+            print(e)
+            return None
 
     def tput_latency_sweep_parse(self, ramp_up, ramp_down, legends) -> Dict[str, List[Stats]]:
         plot_dict = {}
