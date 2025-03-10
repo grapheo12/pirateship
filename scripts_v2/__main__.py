@@ -235,7 +235,7 @@ def all(config, workdir):
             cached_diff = diff
             cached_build_cmd = build_cmd
         except Exception as e:
-            print(f"Error deploying {experiment.name}. Continuing anyway: {e}")
+            print(f"Error deploying {experiment.name}. Continuing anyway: {e} {os.getcwd()}")
             cached_git_hash = ""
             cached_diff = ""
             cached_build_cmd = ""
@@ -425,7 +425,7 @@ def deploy_experiments(config, workdir):
             cached_diff = diff
             cached_build_cmd = build_cmd
         except Exception as e:
-            print(f"Error deploying {experiment.name}. Continuing anyway: {e}")
+            print(f"Error deploying {experiment.name}. Continuing anyway: {e} {os.getcwd()}")
             cached_git_hash = ""
             cached_diff = ""
             cached_build_cmd = ""
