@@ -60,22 +60,38 @@ repeats = 1
 num_nodes = 4
 node_distribution = "uniform"
 build_command = "make -C autobahn"
-duration = 60
+duration = 120
 
 [experiments.sweeping_parameters]
-num_clients = [260]
+num_clients = [200, 1000, 2000, 3000]
 
-# [[experiments]]
-# name = "pirateship"
-# git_hash = "9d85b9e007d4f05488fcefa06f379eef66976de1"
-# repeats = 1
-# num_nodes = 4
-# node_distribution = "uniform"
-# build_command = "make"
-# duration = 60
+[[experiments]]
+name = "pirateship"
+git_hash = "9d85b9e007d4f05488fcefa06f379eef66976de1"
+repeats = 1
+num_nodes = 4
+node_distribution = "uniform"
+build_command = "make"
+duration = 120
 
-# [experiments.sweeping_parameters]
-# num_clients = [350]
+[experiments.sweeping_parameters]
+num_clients = [200, 300, 350, 500]
+
+
+[[experiments]]
+name = "pirateship_sig_1"
+git_hash = "9d85b9e007d4f05488fcefa06f379eef66976de1"
+repeats = 1
+num_nodes = 4
+node_distribution = "uniform"
+build_command = "make"
+duration = 120
+
+[experiments.node_config.consensus_config]
+signature_max_delay_blocks = 1
+
+[experiments.sweeping_parameters]
+num_clients = [200, 300, 350]
 
 
 # [[experiments]]
@@ -106,16 +122,17 @@ num_clients = [260]
 [[results]]
 name = "tput_latency_client_sweep"
 plotter = "tput_latency_sweep"
-ramp_up = 10
-ramp_down = 10
+ramp_up = 30
+ramp_down = 30
 output = "lan_experiment.pdf"
 force_parse = true
 # skip_indices = [0, 1, 2, 3]
 
 [results.legends]
 # Experiment group to legend mapping
-# pirateship = "pirateship+byz"
+pirateship = "pirateship+byz"
 autobahn = "autobahn"
+pirateship_sig_1 = "pirateship(sig=1)+byz"
 # pbft = "pbft+onlybyz"
 # signed_raft = "signed_raft"
 

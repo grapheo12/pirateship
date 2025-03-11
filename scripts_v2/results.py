@@ -423,7 +423,7 @@ class Result:
             axes[0, 0].xaxis.set_label_coords(0.5, 0.05, transform=fig.transFigure)
             axes[0, 0].legend(loc='upper center', bbox_to_anchor=(0.5, 1.45), ncol=legends_ncols, fontsize=55, columnspacing=1)
 
-        for ax in axes:
+        for ax in list(axes.flatten()):
             ax.spines.bottom.set_visible(False)
             ax.spines.top.set_visible(False)
             ax.xaxis.tick_top()
@@ -551,11 +551,11 @@ class Result:
             for y in range(total_y_axes):
                 # Put a \ mark on the right of x-axis for all except the last one
                 for x in range(total_x_axes - 1):
-                    axes[x].plot([1, 1], [1, 0], transform=axes[x].transAxes, **kwargs)
+                    axes[y, x].plot([1, 1], [1, 0], transform=axes[y, x].transAxes, **kwargs)
                 
                 # Put a \ mark on the left of x-axis for all except the first one
                 for x in range(1, total_x_axes):
-                    axes[x].plot([0, 0], [1, 0], transform=axes[x].transAxes, **kwargs)
+                    axes[y, x].plot([0, 0], [1, 0], transform=axes[y, x].transAxes, **kwargs)
             
 
 
@@ -602,7 +602,7 @@ class Result:
         num_x_axis_breaks = 0
         num_y_axis_breaks = 0
 
-        GAP_THRESH = 0.05
+        GAP_THRESH = 1.0
 
         x_sorted_box = list(bounding_boxes.items())
         x_sorted_box.sort(key=lambda x: x[1][0])
@@ -703,26 +703,30 @@ class Result:
     
         try:
             fig.subplots_adjust(hspace=0.1, wspace=0.1)
-            for ax in axes:
+            for ax in list(axes.flatten()):
                 ax.grid()
                 for i, (legend, stat_list) in enumerate(plot_dict.items()):
                     tputs = [stat.mean_tput for stat in stat_list]
-                    latencies = [stat.mean_latency for stat in stat_list]
+                    latencies = [stat.median_latency for stat in stat_list]
                     ax.plot(tputs, latencies, label=legend, color=colors[i], marker=markers[i], mew=6, ms=12, linewidth=6)
 
-            
+        
             self.tput_latency_prepare_plot(fig, axes, x_ranges, y_ranges, is_1d, legends_ncols, total_x_axes, total_y_axes)
         except Exception as e:
             print("Defaulting to normal plot")
+            assert not(isinstance(axes, np.ndarray))
             axes.grid()
             for i, (legend, stat_list) in enumerate(plot_dict.items()):
                 tputs = [stat.mean_tput for stat in stat_list]
-                latencies = [stat.mean_latency for stat in stat_list]
+                latencies = [stat.median_latency for stat in stat_list]
                 axes.plot(tputs, latencies, label=legend, color=colors[i], marker=markers[i], mew=6, ms=12, linewidth=6)
 
             plt.xlabel("Throughput (k req/s)")
             plt.ylabel("Latency (ms)")
-            plt.yscale("symlog")
+
+            y_range_total = max([v[3] for v in bounding_boxes.values()]) - min([v[2] for v in bounding_boxes.values()])
+            if y_range_total > 3000:
+                plt.yscale("symlog")
             plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.45), ncol=legends_ncols, fontsize=55, columnspacing=1)
 
 

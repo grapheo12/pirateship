@@ -226,7 +226,7 @@ class LogParser:
         client_latencies = []
         for c in self.client_latencies:
             client_latencies.extend(c)
-        client_latency = mean(client_latencies)
+        client_latency = median(client_latencies)
 
         return (
             '\n'
