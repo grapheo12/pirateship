@@ -3,7 +3,7 @@ use std::{pin::Pin, sync::Arc, time::Duration};
 
 use crate::crypto::FutureHash;
 use crate::utils::channel::{Receiver, Sender};
-use log::debug;
+use log::{debug, info};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{oneshot, Mutex};
 
@@ -95,7 +95,7 @@ impl BlockSequencer {
             client_reply_tx,
             crypto,
             parent_hash_rx: FutureHash::None,
-            seq_num: 1,
+            seq_num: 0,
             view: 0,
             config_num: 0,
             view_is_stable: false,
@@ -228,13 +228,14 @@ impl BlockSequencer {
         fork_validation: Vec<ProtoForkValidation>,
         perf_entry_id: u64,
     ) {
-        let n = self.seq_num;
         self.seq_num += 1;
+        let n = self.seq_num;
 
         let config = self.config.get();
 
         let must_sign = self.force_sign_next_batch
-            || (n - self.last_signed_seq_num) > config.consensus_config.signature_max_delay_blocks;
+            || (n - self.last_signed_seq_num) > config.consensus_config.signature_max_delay_blocks
+            || (self.i_am_leader() && !self.view_is_stable); // Always sign the NewView message.
 
         if must_sign {
             self.last_signed_seq_num = n;
@@ -328,6 +329,7 @@ impl BlockSequencer {
                 new_parent_hash,
                 new_seq_num,
             ) => {
+                info!("Request for new view message: view: {} config: {} new_seq_num: {}", v, c, new_seq_num);
                 self.view = v;
                 self.config_num = c;
                 self.view_is_stable = false;

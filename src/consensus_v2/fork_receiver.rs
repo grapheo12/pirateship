@@ -1,9 +1,10 @@
 use std::{collections::VecDeque, io::Error, sync::Arc};
 
-use log::{debug, warn};
+use log::{debug, info, warn};
+use prost::Message;
 use tokio::sync::{Mutex, oneshot};
 
-use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries}, rpc::SenderType, utils::channel::{Receiver, Sender}};
+use crate::{client, config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::{checkpoint::ProtoBackfillNack, consensus::{HalfSerializedBlock, ProtoAppendEntries}, rpc::ProtoPayload}, rpc::{client::PinnedClient, MessageRef, SenderType}, utils::channel::{Receiver, Sender}};
 
 
 pub enum ForkReceiverCommand {
@@ -53,6 +54,7 @@ impl MultipartFork {
 pub struct ForkReceiver {
     config: AtomicConfig,
     crypto: CryptoServiceConnector,
+    client: PinnedClient,
 
     view: u64,
     config_num: u64,
@@ -75,6 +77,7 @@ impl ForkReceiver {
     pub fn new(
         config: AtomicConfig,
         crypto: CryptoServiceConnector,
+        client: PinnedClient,
         fork_rx: Receiver<(ProtoAppendEntries, SenderType)>,
         command_rx: Receiver<ForkReceiverCommand>,
         broadcaster_tx: Sender<MultipartFork>,
@@ -82,6 +85,7 @@ impl ForkReceiver {
         Self {
             config,
             crypto,
+            client,
             view: 0,
             config_num: 0,
             fork_rx,
@@ -136,7 +140,9 @@ impl ForkReceiver {
             None => return,
         };
 
+
         if ae.view < self.view || ae.config_num < self.config_num {
+            warn!("Old view AppendEntry received: ae view {} < my view {} or ae config num {} < my config num {}", ae.view, self.view, ae.config_num, self.config_num);
             return;
         }
 
@@ -153,14 +159,16 @@ impl ForkReceiver {
         // Staging takes care of that.
 
 
-        if ae.view > self.view {
+        // if ae.view > self.view {
             // The first block of each view from self.view+1..=ae.view must have view_is_stable = false
             let mut test_view = self.view;
             for block in &fork.serialized_blocks {
                 if block.view > test_view {
                     if block.view_is_stable {
-                        // TODO: NACK the AppendEntries; ask to backfill.
-                        // The first block of the new view must have view_is_stable = false
+                        self.send_nack(sender, ae).await;
+                        return;
+                    } else {
+                        info!("Got New View message for view {}", block.view);
                     }
 
                     test_view = block.view;
@@ -170,8 +178,10 @@ impl ForkReceiver {
             if test_view < ae.view {
                 warn!("Malformed AppendEntries: Missing blocks for view {} in AppendEntries", ae.view);
                 // TODO: NAck the AppendEntries; ask to backfill.
+                self.send_nack(sender, ae).await;
+                return;
             }
-        }
+        // }
 
 
 
@@ -197,8 +207,6 @@ impl ForkReceiver {
                 if block.view_is_stable {
                     warn!("Invalid block in AppendEntries: First block for config {} has view_is_stable = true", curr_config);
                     
-                    // TODO: NACK the AppendEntries; ask to backfill.
-                    
                     return;
                 }
                 curr_part.as_mut().unwrap().push(block);
@@ -222,6 +230,7 @@ impl ForkReceiver {
         }
 
         let first_part = parts.remove(0);
+        info!("Preparing part with {} blocks", first_part.len());
         let multipart_fut = self.crypto.prepare_fork(first_part, parts.len(), AppendEntriesStats {
             view: ae.view,
             config_num: ae.config_num,
@@ -290,5 +299,32 @@ impl ForkReceiver {
                 }
             }
         }
+    }
+
+
+    async fn send_nack(&mut self, sender: String, ae: ProtoAppendEntries) {
+        let hints = vec![];
+        let my_name = self.config.get().net_config.name.clone();
+        let first_block_n = ae.fork.as_ref().map_or(ae.commit_index, |f| f.serialized_blocks.first().unwrap().n);
+        let last_index_needed = if first_block_n > 100 { first_block_n - 100 } else { 0 };
+
+        let nack = ProtoBackfillNack {
+            hints,
+            last_index_needed,
+            reply_name: my_name,
+            origin: Some(crate::proto::checkpoint::proto_backfill_nack::Origin::Ae(ae)),
+        };
+
+        let payload = ProtoPayload {
+            message: Some(crate::proto::rpc::proto_payload::Message::BackfillNack(nack)),
+        };
+
+        let buf = payload.encode_to_vec();
+        let sz = buf.len();
+
+
+        let _ = PinnedClient::send(&self.client, &sender,
+            MessageRef(&buf, sz, &SenderType::Anon)
+        ).await;
     }
 }

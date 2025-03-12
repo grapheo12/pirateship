@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use log::info;
 use prost::Message;
 use tokio::sync::{oneshot, Mutex};
 
@@ -131,8 +132,10 @@ impl Pacemaker {
     async fn handle_view_change(&mut self, vc: ProtoViewChange, sender: SenderType) -> Result<(), ()> {
         let (_view_update_thresh, _new_view_thresh) = (self.pacemaker_view_update_threshold(), self.new_view_bcast_threshold());
         
+        info!("Got view change from {:?}", sender);
         // Drop if from older view / config.
         if vc.view < self.view_num || vc.config_num < self.config_num {
+            info!("Dropping view change from {:?} as it is from older view / config", sender);
             return Ok(());
         }
         
@@ -145,7 +148,7 @@ impl Pacemaker {
             Some(fork) if fork.serialized_blocks.len() > 0 => {
                 let first_block = &fork.serialized_blocks[0];
                 let parent_hash = get_parent_hash_in_proto_block_ser(&first_block.serialized_body).unwrap();
-                (first_block.n, parent_hash)
+                (first_block.n - 1, parent_hash)
             },
             _ => {
                 (0, Vec::new())
@@ -156,6 +159,7 @@ impl Pacemaker {
 
         // If not, and the parent it points to is bcied, drop.
         if !hash_match && fork_parent_n <= self.bci {
+            info!("Hash mismatch for view change from {:?}, dropping", sender);
             return Ok(());
         }
 
@@ -164,6 +168,7 @@ impl Pacemaker {
         if !hash_match {
             let hints = ask_logserver!(self, LogServerQuery::GetHints, self.bci);
             self.send_nack(sender, vc, hints).await?;
+            info!("Nacked!! {}", fork_parent_n);
             return Ok(());
         }
 
@@ -173,6 +178,7 @@ impl Pacemaker {
         
         let (_view, _config) = (vc.view, vc.config_num);
 
+        info!("Buffering view change from {:?}", sender);
         vc_buffer.insert(sender, vc);
         
         
@@ -197,6 +203,7 @@ impl Pacemaker {
             reply_name: self.config.get().net_config.name.clone(),
             origin: Some(crate::proto::checkpoint::proto_backfill_nack::Origin::Vc(vc)),
         };
+        info!("Nack: {:?}", nack);
         let payload = ProtoPayload {
             message: Some(crate::proto::rpc::proto_payload::Message::BackfillNack(nack)),
         };
@@ -205,22 +212,20 @@ impl Pacemaker {
         let sz = buf.len();
         let (sender, _) = sender.to_name_and_sub_id();
 
-        PinnedClient::send(&self.client, &sender,
+        let _ = PinnedClient::send(&self.client, &sender,
             MessageRef(&buf, sz, &SenderType::Anon)
-        ).await.unwrap();
+        ).await;
         Ok(())
     }
 
     async fn handle_my_view_jump(&mut self, view_num: u64, config_num: u64, vc: ProtoViewChange) -> Result<(), ()> {
-        let key = (view_num, config_num);
         let my_name = self.config.get().net_config.name.clone();
         let sender = SenderType::Auth(my_name, 0);
         self.vc_buffer.retain(|(view, config), _| {
             *view >= view_num && *config >= config_num
         });
 
-        let vc_buffer = self.vc_buffer.entry(key).or_insert(HashMap::new());
-        vc_buffer.insert(sender, vc);
+        self.handle_view_change(vc, sender).await?;
         Ok(())
     }
 }

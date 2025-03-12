@@ -1,6 +1,6 @@
 use std::{cell::RefCell, io::{Error, ErrorKind}, sync::Arc};
 
-use log::debug;
+use log::{debug, error, info};
 use lz4_flex::block;
 use prost::Message;
 use tokio::sync::{oneshot, Mutex};
@@ -218,6 +218,10 @@ impl BlockBroadcaster {
         }
         ae_fork.push(block.clone());
 
+        if ae_fork.len() > 1 {
+            error!("AE: {:?}", ae_fork);
+        }
+
         for block in &ae_fork {
             self.store_and_forward_internally(&block, AppendEntriesStats {
                 view,
@@ -269,11 +273,12 @@ impl BlockBroadcaster {
 
     async fn process_other_block(&mut self, mut blocks: MultipartFork) -> Result<(), Error> {
         let _blocks = blocks.await_all().await;
+        info!("Await all finished!");
         let num_parts = blocks.remaining_parts;
 
         for block in &_blocks {
-            if let Err(_) = block {
-                // This multipart fork is corrupted, I have no use for the remaining parts.
+            if let Err(e) = block {
+                error!("This multipart fork is corrupted, I have no use for the remaining parts. {:?}", e);
                 let _ = self.fork_receiver_command_tx.send(ForkReceiverCommand::MultipartNack(num_parts)).await;
 
                 return Ok(());
@@ -283,7 +288,7 @@ impl BlockBroadcaster {
         let (view, view_is_stable) = (blocks.ae_stats.view, _blocks.last().unwrap().as_ref().unwrap().block.view_is_stable);
         for block in _blocks {
             let block = block.unwrap();
-            debug!("Processing {}", block.block.n);
+            info!("Processing {}", block.block.n);
             self.store_and_forward_internally(&block, blocks.ae_stats.clone()).await?;
 
             // Forward to app for stats.
@@ -292,7 +297,7 @@ impl BlockBroadcaster {
         }
 
         Ok(())
-    }
+    } 
 
 
 }

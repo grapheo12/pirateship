@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, sync::atomic::fence};
 
-use log::info;
+use log::{error, info, warn};
 use prost::Message as _;
 
 use crate::{
@@ -40,7 +40,7 @@ impl Staging {
     }
 
     pub(super) async fn update_view(&mut self, view_num: u64, config_num: u64) {
-        if self.view >= view_num || self.config_num >= config_num {
+        if self.view >= view_num {
             return;
         }
 
@@ -49,6 +49,7 @@ impl Staging {
         self.view_is_stable = false;
 
         let vc_msg = self.create_my_vc_msg().await;
+        error!("VC Msg: {:?}", vc_msg);
 
         let (payload, vc_msg) = { // Jumping through hoops to avoid cloning.
             let payload = ProtoPayload {
@@ -141,7 +142,7 @@ impl Staging {
         }
 
         // Send the chosen fork to sequencer.
-        let new_last_n = self.pending_blocks.back().map_or(0, |b| b.block.block.n);
+        let new_last_n = self.pending_blocks.back().map_or(self.bci, |b| b.block.block.n);
         let new_parent_hash = self.pending_blocks.back().map_or(default_hash(), |b| b.block.block_hash.clone());
         self.block_sequencer_command_tx.send(
             BlockSequencerControlCommand::NewViewMessage(self.view, self.config_num, fork_validation, new_parent_hash, new_last_n)
@@ -154,11 +155,13 @@ impl Staging {
         // The new view message must be the VERY LAST block in pending now.
         // The QC present here must on that last block.
         let last_n = self.pending_blocks.back().as_ref().unwrap().block.block.n;
-        if qc.n < last_n {
-            return;
-        }
+        // if qc.n < last_n {
+        //     info!("Fail 1");
+        //     return;
+        // }
 
         if qc.view != self.view {
+            info!("Fail 2");
             return;
         }
 
@@ -225,7 +228,7 @@ impl Staging {
         let chosen_fork_stat = self.send_blocks_to_broadcaster_and_get_stats(chosen_fork).await;
         let fork_validation = Vec::new();
 
-        // (chosen_fork_stat, fork_validation)
+        (chosen_fork_stat, fork_validation)
     }
 
     async fn send_blocks_to_broadcaster_and_get_stats(&mut self, fork: ProtoFork) -> ForkStat {
@@ -243,11 +246,18 @@ impl Staging {
             block_hashes.push(hash_fut.await.unwrap().unwrap());
         }
 
+        let (first_n, first_parent) = if fork.serialized_blocks.len() > 0 {
+            let first_block = &fork.serialized_blocks[0];
+            (first_block.n, get_parent_hash_in_proto_block_ser(&first_block.serialized_body).unwrap())
+        } else {
+            (0, default_hash())
+        };
+
         ForkStat {
             fork_len: fork.serialized_blocks.len(),
             block_hashes,
-            first_n: fork.serialized_blocks[0].n,
-            first_parent: get_parent_hash_in_proto_block_ser(&fork.serialized_blocks[0].serialized_body).unwrap(),
+            first_n,
+            first_parent,        
         }
     }
 
@@ -263,6 +273,7 @@ impl Staging {
     fn check_byz_commit_invariant(&self, chosen_fork: &ForkStat) -> Result<u64, ()> {
         if self.bci == 0 {
             // Nothing to do here.
+            warn!("Case 0");
             return Ok(0);
         }
 
@@ -270,7 +281,8 @@ impl Staging {
 
         if chosen_fork.fork_len == 0 {
             // Retain everything in pending_blocks.
-            let last_n = self.pending_blocks.back().map_or(0, |b| b.block.block.n);
+            let last_n = self.pending_blocks.back().map_or(self.bci, |b| b.block.block.n);
+            warn!("Case 0.1");
             return Ok(last_n);
         }
 
@@ -280,6 +292,7 @@ impl Staging {
                 return Err(());
             } else {
                 // Wipe everything from pending_blocks.
+                warn!("Case 1");
                 return Ok(self.bci);
             }
         } else {
@@ -290,6 +303,8 @@ impl Staging {
                     return Err(());
                 } else {
                     // Wipe everything from pending_blocks.
+                    warn!("Case 2.1");
+
                     return Ok(self.bci);
                 }
             } else { // first_block.block.n > self.bci + 1
@@ -301,6 +316,8 @@ impl Staging {
                     return Err(());
                 } else {
                     // Wipe everything from pending_blocks before first_block.block.n
+                    warn!("Case 2.2 {} {}", find_n_in_pending, self.bci);
+
                     return Ok(find_n_in_pending);
                 }
             }

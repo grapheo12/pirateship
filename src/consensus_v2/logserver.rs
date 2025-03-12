@@ -1,10 +1,11 @@
 use std::{collections::{BTreeMap, HashMap, VecDeque}, sync::Arc};
 
-use log::warn;
+use log::{error, info, warn};
+use lz4_flex::block;
 use prost::Message as _;
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::CachedBlock, proto::{checkpoint::{proto_backfill_nack::Origin, ProtoBackfillNack, ProtoBlockHint}, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork, ProtoViewChange}, rpc::{proto_payload::Message, ProtoPayload}}, rpc::{client::PinnedClient, MessageRef, PinnedMessage}, utils::{channel::Receiver, StorageServiceConnector}};
+use crate::{config::AtomicConfig, crypto::CachedBlock, proto::{checkpoint::{proto_backfill_nack::Origin, ProtoBackfillNack, ProtoBlockHint}, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork, ProtoViewChange}, rpc::{proto_payload::Message, ProtoPayload}}, rpc::{client::PinnedClient, MessageRef, PinnedMessage}, utils::{channel::Receiver, get_parent_hash_in_proto_block_ser, StorageServiceConnector}};
 
 
 /// Deletes older blocks in favor of newer ones.
@@ -66,6 +67,7 @@ impl ReadCache {
 pub enum LogServerQuery {
     CheckHash(u64 /* block.n */, Vec<u8> /* block_hash */, oneshot::Sender<bool>),
     GetHints(u64 /* last needed block.n */, oneshot::Sender<Vec<ProtoBlockHint>>),
+    Rollback(u64 /* block.n */),
 }
 
 pub struct LogServer {
@@ -121,7 +123,8 @@ impl LogServer {
             biased;
             block = self.logserver_rx.recv() => {
                 if let Some(block) = block {
-                    self.log.push_back(block);
+                    info!("Received block {}", block.block.n);
+                    self.handle_new_block(block).await;
                 }
             },
 
@@ -324,6 +327,7 @@ impl LogServer {
                 let block = match self.get_block(n).await {
                     Some(block) => block,
                     None => {
+                        error!("Block {} not found, last_n seen: {}", n, self.log.back().map_or(0, |block| block.block.n));
                         sender.send(false).unwrap();
                         return;
                     }
@@ -373,20 +377,42 @@ impl LogServer {
                 }
 
                 // Also add last_n.
-                let block = match self.get_block(last_n).await {
-                    Some(block) => block,
-                    None => {
-                        // This should never happen.
-                        panic!("Block {} not found", last_n);
-                    }
-                };
-                hints.push(ProtoBlockHint {
-                    block_n: block.block.n,
-                    digest: block.block_hash.clone(),
-                });
+                if last_n > 0 {
+                    let block = match self.get_block(last_n).await {
+                        Some(block) => block,
+                        None => {
+                            // This should never happen.
+                            panic!("Block {} not found", last_n);
+                        }
+                    };
+                    hints.push(ProtoBlockHint {
+                        block_n: block.block.n,
+                        digest: block.block_hash.clone(),
+                    });
+                }
 
                 sender.send(hints).unwrap();
             },
+            LogServerQuery::Rollback(n) => {
+                self.log.retain(|block| block.block.n <= n);
+            }
         }
+    }
+
+
+    /// Invariant: Log is continuous, increasing seq num and maintains hash chain continuity
+    async fn handle_new_block(&mut self, block: CachedBlock) {
+        let last_n = self.log.back().map_or(0, |block| block.block.n);
+        if block.block.n != last_n + 1 {
+            error!("Block {} is not the next block, last_n: {}", block.block.n, last_n);
+            return;
+        }
+
+        if last_n > 0 && !block.block.parent.eq(&self.log.back().unwrap().block_hash) {
+            error!("Parent hash mismatch for block {}", block.block.n);
+            return;
+        }
+
+        self.log.push_back(block);
     }
 }

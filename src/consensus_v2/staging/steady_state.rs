@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use async_recursion::async_recursion;
 use futures::future::try_join_all;
-use log::{debug, error, trace, warn};
+use log::{debug, error, info, trace, warn};
 use prost::Message;
 use tokio::sync::oneshot;
 
@@ -124,27 +124,41 @@ impl Staging {
         self.config.get().consensus_config.node_list.len()
     }
 
+    /// Either block.n === last block of pending_blocks + 1 and the hash link matches.
+    /// Or block.n is in pending blocks, so it's hash must be present.
+    /// Or block.n <= self.bci, so we can return false and safely ignore doing anything with this block.
     fn check_continuity(&self, block: &CachedBlock) -> bool {
-        match self.pending_blocks.back() {
-            Some(b) => {
-                let res = b.block.block.n + 1 == block.block.n
-                    && block.block.parent.eq(&b.block.block_hash);
-
-                if !res {
-                    let hash_match = block.block.parent.eq(&b.block.block_hash);
-                    error!(
-                        "Current last block: {} Incoming block: {} Hash link match: {}",
-                        b.block.block.n, block.block.n, hash_match
-                    );
-                }
-
-                res
+        if self.pending_blocks.len() == 0 {
+            if self.curr_parent_for_pending.is_none() {
+                return block.block.n == 1;
+            } else {
+                let parent = &block.block.parent;
+                return parent == &self.curr_parent_for_pending.as_ref().unwrap().block_hash
+                && block.block.n == self.curr_parent_for_pending.as_ref().unwrap().block.n + 1;
             }
-            None => block.block.n == self.bci + 1,
         }
+
+        let last_block = self.pending_blocks.back().unwrap();
+        let first_block = self.pending_blocks.front().unwrap();
+        
+        if block.block.n > last_block.block.block.n + 1 {
+            return false;
+        }
+
+        if block.block.n < first_block.block.block.n {
+            return false;
+        }
+
+        if block.block.n == last_block.block.block.n + 1 {
+            return block.block.parent == last_block.block.block_hash;
+        }
+
+        self.pending_blocks.iter().any(|b| b.block.block.n == block.block.n && b.block.block_hash == block.block_hash)
+        
     }
 
     pub(super) async fn handle_view_change_timer_tick(&mut self) -> Result<(), ()> {
+        error!("View change timer fired");
         self.update_view(self.view + 1, self.config_num).await;
         Ok(())
     }
@@ -251,7 +265,11 @@ impl Staging {
             .await
             .unwrap();
 
-        trace!("Sent vote to {} for {}", leader, last_block.block.block.n);
+        if last_block.block.block.view_is_stable {
+            trace!("Sent vote to {} for {}", leader, last_block.block.block.n);
+        } else {
+            info!("Sent vote to {} for {}", leader, last_block.block.block.n);
+        }
 
         Ok(())
     }
@@ -263,26 +281,36 @@ impl Staging {
         storage_ack: oneshot::Receiver<StorageAck>,
         ae_stats: AppendEntriesStats,
     ) -> Result<(), ()> {
+        if !self.view_is_stable {
+            info!("Processing block {} as leader", block.block.n);
+        }
         if ae_stats.view < self.view {
             // Do not accept anything from a lower view.
             return Ok(());
-        } else if block.block.view == self.view {
-            if !self.view_is_stable && block.block.view_is_stable {
-                // Notify upstream stages of view stabilization
-                self.block_sequencer_command_tx
-                    .send(BlockSequencerControlCommand::ViewStabilised(
-                        self.view,
-                        self.config_num,
-                    ))
-                    .await
-                    .unwrap();
-            }
+        } else if ae_stats.view == self.view {
+            // if !self.view_is_stable && block.block.view_is_stable {
+            //     // Notify upstream stages of view stabilization
+            //     self.block_sequencer_command_tx
+            //         .send(BlockSequencerControlCommand::ViewStabilised(
+            //             self.view,
+            //             self.config_num,
+            //         ))
+            //         .await
+            //         .unwrap();
+            // }
             self.view_is_stable = block.block.view_is_stable;
             // Invariant <ViewLock>: Within the same view, the log must be append-only.
             if !self.check_continuity(&block) {
                 warn!("Continuity broken");
                 return Ok(());
             }
+
+            if !self.view_is_stable {
+                // Signal a rollback, if necessary
+                self.pending_blocks
+                    .retain(|e| e.block.block.n < block.block.n);
+            }
+            
         } else {
             // If from a higher view, this must mean I am no longer the leader in the cluster.
             // Precondition: The blocks I am receiving have been verified earlier,
@@ -291,7 +319,7 @@ impl Staging {
             // Jump to the new view
             self.view = ae_stats.view;
 
-            self.view_is_stable = block.block.view_is_stable;
+            self.view_is_stable = false;
             self.config_num = ae_stats.config_num;
 
             // Notify upstream stages of view change
@@ -315,7 +343,7 @@ impl Staging {
             if new_pending_len < old_pending_len {
                 // Signal a rollback
             }
-            self.pending_signatures.clear();
+            self.pending_signatures.retain(|(n, _)| *n < block.block.n);
             self.client_reply_tx
                 .send(ClientReplyCommand::CancelAllRequests)
                 .await
@@ -323,10 +351,13 @@ impl Staging {
 
             // Ready to accept the block normally.
             if self.i_am_leader() {
+                info!("Recurse leader");
                 return self
                     .process_block_as_leader(block, storage_ack, ae_stats)
                     .await;
             } else {
+                info!("Recurse follower");
+
                 return self
                     .process_block_as_follower(block, storage_ack, ae_stats)
                     .await;
@@ -364,26 +395,38 @@ impl Staging {
         storage_ack: oneshot::Receiver<StorageAck>,
         ae_stats: AppendEntriesStats,
     ) -> Result<(), ()> {
+        if !self.view_is_stable {
+            info!("Processing block {} as follower", block.block.n);
+        }
         if ae_stats.view < self.view {
             // Do not accept anything from a lower view.
+            warn!("Received block from lower view {}. Already in {}", ae_stats.view, self.view);
             return Ok(());
         } else if ae_stats.view == self.view {
-            if !self.view_is_stable && block.block.view_is_stable {
-                // Notify upstream stages of view stabilization
-                self.block_sequencer_command_tx
-                    .send(BlockSequencerControlCommand::ViewStabilised(
-                        self.view,
-                        self.config_num,
-                    ))
-                    .await
-                    .unwrap();
-            }
+            // if !self.view_is_stable && block.block.view_is_stable {
+            //     // Notify upstream stages of view stabilization
+            //     self.block_sequencer_command_tx
+            //         .send(BlockSequencerControlCommand::ViewStabilised(
+            //             self.view,
+            //             self.config_num,
+            //         ))
+            //         .await
+            //         .unwrap();
+            // }
             self.view_is_stable = block.block.view_is_stable;
+
             // Invariant <ViewLock>: Within the same view, the log must be append-only.
             if !self.check_continuity(&block) {
                 warn!("Continuity broken");
                 return Ok(());
             }
+
+            if !self.view_is_stable {
+                // Signal a rollback, if necessary
+                self.pending_blocks
+                    .retain(|e| e.block.block.n < block.block.n);
+            }
+
         } else {
             // If from a higher view, this may mean I am now the leader in the cluster.
             // Precondition: The blocks I am receiving have been verified earlier,
@@ -392,7 +435,7 @@ impl Staging {
             // Jump to the new view
             self.view = ae_stats.view;
 
-            self.view_is_stable = block.block.view_is_stable;
+            self.view_is_stable = false;
             self.config_num = block.block.config_num;
 
             // Notify upstream stages of view change
@@ -409,8 +452,8 @@ impl Staging {
                 .unwrap();
 
             // Flush the pending queue and cancel client requests.
-            self.pending_blocks.clear();
-            self.pending_signatures.clear();
+            self.pending_blocks.retain(|e| e.block.block.n < block.block.n);
+            self.pending_signatures.retain(|(n, _)| *n < block.block.n);
             self.client_reply_tx
                 .send(ClientReplyCommand::CancelAllRequests)
                 .await
@@ -454,6 +497,7 @@ impl Staging {
         for qc in qc_list.drain(..) {
             if !self.view_is_stable {
                 // Try to see if this QC can stabilize the view.
+                info!("Trying to stabilize view {} with QC", self.view);
                 self.maybe_stabilize_view(&qc).await;
             }
             
