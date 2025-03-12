@@ -206,7 +206,10 @@ impl Staging {
 
         self.perf_add_event(&last_block.block, "Vote to Self");
 
-        self.process_vote(name, vote).await
+        let res = self.process_vote(name, vote).await;
+        info!("Voted for self");
+
+        res
     }
 
     async fn send_vote_on_last_block_to_leader(
@@ -398,6 +401,8 @@ impl Staging {
         );
 
         // Now vote for self
+
+        info!("Voting for self");
 
         self.vote_on_last_block_for_self(storage_ack).await?;
 

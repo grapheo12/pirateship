@@ -137,7 +137,10 @@ impl BlockBroadcaster {
                 self.perf_register(perf_entry);
                 let block = block.1.await;
                 self.perf_add_event(perf_entry, "Retrieve prepared block");
-
+                if block.is_err() {
+                    error!("Failed to get block {} {:?}", __n, block);
+                    return Ok(());
+                }
                 self.process_my_block(block.unwrap()).await?;
 
                 info!("Processed block {}", __n);
@@ -200,6 +203,7 @@ impl BlockBroadcaster {
         // Store
         let storage_ack = self.storage.put_block(block).await;
         self.perf_add_event(perf_entry, "Store block");
+        info!("Stored {}", block.block.n);
     
         // Forward
         // Unfortunate cloning.
@@ -207,8 +211,9 @@ impl BlockBroadcaster {
         self.logserver_tx.send(block.clone()).await.unwrap();
         self.perf_add_event(perf_entry, "Forward block to logserver");
 
-        debug!("Sending {}", block.block.n);
+        info!("Sending {}", block.block.n);
         self.staging_tx.send((block.clone(), storage_ack, ae_stats)).await.unwrap();
+        info!("Sent {}", block.block.n);
         self.perf_add_event(perf_entry, "Forward block to staging");
 
         Ok(())
@@ -240,10 +245,11 @@ impl BlockBroadcaster {
                 ci: self.ci,
             }).await?;
         }
+        info!("Bcast 1");
         
         // Forward to app for stats.
         self.app_command_tx.send(AppCommand::NewRequestBatch(block.block.n, view, view_is_stable, true, block.block.tx_list.len(), block.block_hash.clone())).await.unwrap();
-
+        info!("Bcast 2");
         // Forward to other nodes. Involves copies and serialization so done last.
 
         let names = self.get_everyone_except_me();
@@ -272,8 +278,9 @@ impl BlockBroadcaster {
         let sz = data.len();
         let data = PinnedMessage::from(data, sz, SenderType::Anon);
         let mut profile = LatencyProfile::new();
-        PinnedClient::broadcast(&self.client, &names, &data, &mut profile).await?;
+        let res = PinnedClient::broadcast(&self.client, &names, &data, &mut profile).await;
         self.perf_add_event(perf_entry, "Forward block to other nodes");
+        info!("Bcast 3 {:?}", res);
 
         self.perf_deregister(perf_entry);
 

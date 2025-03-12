@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, pin::Pin, sync::Arc, time::Duration};
 
-use log::{debug, warn};
+use log::{debug, info, warn};
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
 use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoVote}, rpc::{client::PinnedClient, SenderType}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer, PerfCounter, StorageAck}};
@@ -173,7 +173,7 @@ impl Staging {
                     return Err(())
                 }
                 let (block, storage_ack, ae_stats) = block.unwrap();
-                debug!("Got {}", block.block.n);
+                info!("Got {}", block.block.n);
                 if i_am_leader {
                     self.process_block_as_leader(block, storage_ack, ae_stats).await?;
                 } else {

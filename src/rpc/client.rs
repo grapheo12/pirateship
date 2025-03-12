@@ -625,7 +625,7 @@ impl PinnedClient {
         }
 
         for name in &need_to_spawn_workers {
-            let (tx, mut rx) = mpsc::channel(10);
+            let (tx, mut rx) = mpsc::channel(1000);
             let mut lchans = client.0.chan_map.0.write().await;
             lchans.insert(name.clone(), tx);
 
