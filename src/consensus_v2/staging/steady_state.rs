@@ -130,10 +130,12 @@ impl Staging {
     fn check_continuity(&self, block: &CachedBlock) -> bool {
         if self.pending_blocks.len() == 0 {
             if self.curr_parent_for_pending.is_none() {
+                info!(">>> CC: 1");
                 return block.block.n == 1;
             } else {
                 let parent = &block.block.parent;
-                return parent == &self.curr_parent_for_pending.as_ref().unwrap().block_hash
+                info!(">>> CC: 2");
+                return parent.eq(&self.curr_parent_for_pending.as_ref().unwrap().block_hash)
                 && block.block.n == self.curr_parent_for_pending.as_ref().unwrap().block.n + 1;
             }
         }
@@ -142,18 +144,22 @@ impl Staging {
         let first_block = self.pending_blocks.front().unwrap();
         
         if block.block.n > last_block.block.block.n + 1 {
+            info!(">>> CC: 3");
             return false;
         }
 
         if block.block.n < first_block.block.block.n {
+            info!(">>> CC: 4");
             return false;
         }
 
         if block.block.n == last_block.block.block.n + 1 {
-            return block.block.parent == last_block.block.block_hash;
+            info!(">>> CC: 5");
+            return block.block.parent.eq(&last_block.block.block_hash);
         }
 
-        self.pending_blocks.iter().any(|b| b.block.block.n == block.block.n && b.block.block_hash == block.block_hash)
+        info!(">>> CC: 6");
+        self.pending_blocks.iter().any(|b| b.block.block.n == block.block.n && b.block.block_hash.eq(&block.block_hash))
         
     }
 
@@ -298,18 +304,29 @@ impl Staging {
             //         .await
             //         .unwrap();
             // }
-            self.view_is_stable = block.block.view_is_stable;
+            if self.view_is_stable || !ae_stats.view_is_stable {
+                self.view_is_stable = ae_stats.view_is_stable;
+
+                // Allowed unchecked transitions:
+                // Stable --> Stable
+                // Stable --> Unstable
+                // Unstable --> Unstable
+                // But not Unstable --> Stable; it has to be checked through QCs.
+            }
+            if !self.view_is_stable {
+                if !block.block.view_is_stable {
+                    info!("New View message for view {}", self.view);
+                }
+                // Signal a rollback, if necessary
+                self.pending_blocks
+                    .retain(|e| e.block.block.n < block.block.n);
+            }
             // Invariant <ViewLock>: Within the same view, the log must be append-only.
             if !self.check_continuity(&block) {
                 warn!("Continuity broken");
                 return Ok(());
             }
 
-            if !self.view_is_stable {
-                // Signal a rollback, if necessary
-                self.pending_blocks
-                    .retain(|e| e.block.block.n < block.block.n);
-            }
             
         } else {
             // If from a higher view, this must mean I am no longer the leader in the cluster.
@@ -413,7 +430,23 @@ impl Staging {
             //         .await
             //         .unwrap();
             // }
-            self.view_is_stable = block.block.view_is_stable;
+            if self.view_is_stable || !ae_stats.view_is_stable {
+                self.view_is_stable = ae_stats.view_is_stable;
+
+                // Allowed unchecked transitions:
+                // Stable --> Stable
+                // Stable --> Unstable
+                // Unstable --> Unstable
+                // But not Unstable --> Stable; it has to be checked through QCs.
+            }
+            if !self.view_is_stable {
+                if !block.block.view_is_stable {
+                    info!("New View message for view {}", self.view);
+                }
+                // Signal a rollback, if necessary
+                self.pending_blocks
+                    .retain(|e| e.block.block.n < block.block.n);
+            }
 
             // Invariant <ViewLock>: Within the same view, the log must be append-only.
             if !self.check_continuity(&block) {
@@ -421,11 +454,6 @@ impl Staging {
                 return Ok(());
             }
 
-            if !self.view_is_stable {
-                // Signal a rollback, if necessary
-                self.pending_blocks
-                    .retain(|e| e.block.block.n < block.block.n);
-            }
 
         } else {
             // If from a higher view, this may mean I am now the leader in the cluster.

@@ -5,7 +5,7 @@ use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
 use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoVote}, rpc::{client::PinnedClient, SenderType}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer, PerfCounter, StorageAck}};
 
-use super::{app::AppCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}, pacemaker::PacemakerCommand};
+use super::{app::AppCommand, batch_proposal::BatchProposerCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}, pacemaker::PacemakerCommand};
 
 pub(super) mod steady_state;
 mod view_change;
@@ -56,6 +56,7 @@ pub struct Staging {
     app_tx: Sender<AppCommand>,
     block_broadcaster_command_tx: Sender<BlockBroadcasterCommand>,
     block_sequencer_command_tx: Sender<BlockSequencerControlCommand>,
+    batch_proposer_command_tx: Sender<BatchProposerCommand>,
     fork_receiver_command_tx: Sender<ForkReceiverCommand>,
     qc_tx: UnboundedSender<ProtoQuorumCertificate>,
 
@@ -82,6 +83,7 @@ impl Staging {
         block_sequencer_command_tx: Sender<BlockSequencerControlCommand>,
         fork_receiver_command_tx: Sender<ForkReceiverCommand>,
         qc_tx: UnboundedSender<ProtoQuorumCertificate>,
+        batch_proposer_command_tx: Sender<BatchProposerCommand>,
     ) -> Self {
         let _config = config.get();
         let _chan_depth = _config.rpc_config.channel_depth as usize;
@@ -130,6 +132,7 @@ impl Staging {
             qc_tx,
             leader_perf_counter_signed,
             leader_perf_counter_unsigned,
+            batch_proposer_command_tx,
         }
     }
 

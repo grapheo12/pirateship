@@ -96,6 +96,8 @@ impl BlockBroadcaster {
             }
 
         }
+
+        info!("Broadcasting worker exited.");
     }
 
     fn perf_register(&mut self, entry: u64) {
@@ -128,7 +130,8 @@ impl BlockBroadcaster {
                     return Err(Error::new(ErrorKind::BrokenPipe, "my_block_rx channel closed"));
                 }
                 let block = block.unwrap();
-                debug!("Expecting {}", block.0);
+                let __n = block.0;
+                info!("Expecting {}", __n);
 
                 let perf_entry = block.0;
                 self.perf_register(perf_entry);
@@ -136,6 +139,8 @@ impl BlockBroadcaster {
                 self.perf_add_event(perf_entry, "Retrieve prepared block");
 
                 self.process_my_block(block.unwrap()).await?;
+
+                info!("Processed block {}", __n);
             },
 
             block_vec = self.other_block_rx.recv() => {
@@ -143,14 +148,18 @@ impl BlockBroadcaster {
                     return Err(Error::new(ErrorKind::BrokenPipe, "other_block_rx channel closed"));
                 }
                 let blocks = block_vec.unwrap();
+                info!("Processing other block");
                 self.process_other_block(blocks).await?;
+                info!("Processed other block");
             },
 
             cmd = self.control_command_rx.recv() => {
                 if cmd.is_none() {
                     return Err(Error::new(ErrorKind::BrokenPipe, "control_command_rx channel closed"));
                 }
+                info!("Processing control command");
                 self.handle_control_command(cmd.unwrap()).await?;
+                info!("Processed control command");
             }
         }
 
@@ -225,6 +234,7 @@ impl BlockBroadcaster {
         for block in &ae_fork {
             self.store_and_forward_internally(&block, AppendEntriesStats {
                 view,
+                view_is_stable: block.block.view_is_stable,
                 config_num,
                 sender: self.config.get().net_config.name.clone(),
                 ci: self.ci,
@@ -285,7 +295,7 @@ impl BlockBroadcaster {
             }
         }
 
-        let (view, view_is_stable) = (blocks.ae_stats.view, _blocks.last().unwrap().as_ref().unwrap().block.view_is_stable);
+        let (view, view_is_stable) = (blocks.ae_stats.view, blocks.ae_stats.view_is_stable);
         for block in _blocks {
             let block = block.unwrap();
             info!("Processing {}", block.block.n);

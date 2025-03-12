@@ -16,6 +16,7 @@ pub enum ForkReceiverCommand {
 #[derive(Debug, Clone)]
 pub struct AppendEntriesStats {
     pub view: u64,
+    pub view_is_stable: bool,
     pub config_num: u64,
     pub sender: String,
     pub ci: u64,
@@ -233,6 +234,7 @@ impl ForkReceiver {
         info!("Preparing part with {} blocks", first_part.len());
         let multipart_fut = self.crypto.prepare_fork(first_part, parts.len(), AppendEntriesStats {
             view: ae.view,
+            view_is_stable: ae.view_is_stable,
             config_num: ae.config_num,
             sender: sender.clone(),
             ci: ae.commit_index,
@@ -243,6 +245,7 @@ impl ForkReceiver {
             assert_eq!(self.multipart_buffer.len(), 0); // Due to the Invariant <blocked_on_multipart>
             self.multipart_buffer.extend(parts.iter().map(|part| (part.clone(), AppendEntriesStats {
                 view: ae.view,
+                view_is_stable: ae.view_is_stable,
                 config_num: ae.config_num,
                 sender: sender.clone(),
                 ci: ae.commit_index,

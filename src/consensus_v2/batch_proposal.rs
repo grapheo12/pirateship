@@ -22,6 +22,8 @@ pub type RawBatch = Vec<ProtoTransaction>;
 pub type MsgAckChanWithTag = (MsgAckChan, u64 /* client tag */, SenderType /* client name */);
 pub type TxWithAckChanTag = (Option<ProtoTransaction>, MsgAckChanWithTag);
 
+pub type BatchProposerCommand = bool; // true == make new batches, false == stop making new batches
+
 pub struct BatchProposer {
     config: AtomicConfig,
 
@@ -35,6 +37,9 @@ pub struct BatchProposer {
     batch_timer: Arc<Pin<Box<ResettableTimer>>>,
 
     perf_counter: RefCell<PerfCounter<usize>>,
+
+    make_new_batches: bool,
+    cmd_rx: Receiver<BatchProposerCommand>,
 }
 
 impl BatchProposer {
@@ -43,6 +48,7 @@ impl BatchProposer {
         batch_proposer_rx: Receiver<TxWithAckChanTag>,
         block_maker_tx: Sender<(RawBatch, Vec<MsgAckChanWithTag>)>,
         app_tx: Sender<AppCommand>,
+        cmd_rx: Receiver<BatchProposerCommand>,
     ) -> Self {
         let batch_timer = ResettableTimer::new(
             Duration::from_millis(config.get().consensus_config.batch_max_delay_ms)
@@ -65,6 +71,8 @@ impl BatchProposer {
             current_reply_vec: Vec::with_capacity(max_batch_size),
             app_tx,
             perf_counter,
+            make_new_batches: false,
+            cmd_rx,
         }
     }
 
@@ -139,6 +147,10 @@ impl BatchProposer {
             _new_tx = self.batch_proposer_rx.recv() => {
                 new_tx = _new_tx;
             },
+            _cmd = self.cmd_rx.recv() => {
+                self.make_new_batches = _cmd.unwrap();
+                return Ok(());
+            },
             _tick = self.batch_timer.wait() => {
                 batch_timer_tick = _tick;
             }
@@ -178,7 +190,7 @@ impl BatchProposer {
 
         let max_batch_size = self.config.get().consensus_config.max_backlog_batch_size;
 
-        if self.current_raw_batch.as_ref().unwrap().len() >= max_batch_size || batch_timer_tick {
+        if self.make_new_batches && (self.current_raw_batch.as_ref().unwrap().len() >= max_batch_size || batch_timer_tick) {
             self.propose_new_batch().await;
         }
 

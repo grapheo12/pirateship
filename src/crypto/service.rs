@@ -2,7 +2,7 @@ use std::{io::{BufReader, Error, ErrorKind}, ops::Deref, pin::Pin, sync::{atomic
 
 use ed25519_dalek::{verify_batch, Signature, SIGNATURE_LENGTH};
 use futures::SinkExt;
-use log::trace;
+use log::{info, trace};
 use rand::{thread_rng, Rng};
 use sha2::{Digest, Sha256};
 use tokio::{sync::{mpsc::{channel, Receiver, Sender}, oneshot}, task::JoinSet};
@@ -246,6 +246,7 @@ impl CryptoService {
 
                     let _ = hash_tx.send(hsh.clone());
                     let _ = hash_tx2.send(hsh.clone());
+                    info!("Prepared block with n: {}", block.n);
                     let _ = block_tx.send(CachedBlock::new(block, buf, hsh));
                     perf_event!();
                     perf_counter.deregister_entry(&perf_entry);

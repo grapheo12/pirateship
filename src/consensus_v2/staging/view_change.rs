@@ -84,6 +84,7 @@ impl Staging {
             ))
             .await
             .unwrap();
+        self.batch_proposer_command_tx.send(false).await.unwrap();
         self.client_reply_tx.send(ClientReplyCommand::CancelAllRequests).await.unwrap();
         self.fork_receiver_command_tx
             .send(ForkReceiverCommand::UpdateView(self.view, self.config_num))
@@ -142,8 +143,16 @@ impl Staging {
         }
 
         // Send the chosen fork to sequencer.
-        let new_last_n = self.pending_blocks.back().map_or(self.bci, |b| b.block.block.n);
-        let new_parent_hash = self.pending_blocks.back().map_or(default_hash(), |b| b.block.block_hash.clone());
+        let new_last_n = if chosen_fork.first_n + chosen_fork.fork_len as u64 > 0 { chosen_fork.first_n + chosen_fork.fork_len as u64 - 1 } else { 0 };
+        let new_parent_hash = if chosen_fork.fork_len > 0 { 
+            chosen_fork.block_hashes[chosen_fork.fork_len - 1].clone()
+        } else if self.pending_blocks.len() > 0 { 
+            self.pending_blocks.back().unwrap().block.block_hash.clone()
+        } else if self.curr_parent_for_pending.is_some() {
+            self.curr_parent_for_pending.as_ref().unwrap().block_hash.clone()
+        } else {
+            default_hash()
+        };
         self.block_sequencer_command_tx.send(
             BlockSequencerControlCommand::NewViewMessage(self.view, self.config_num, fork_validation, new_parent_hash, new_last_n)
         ).await.unwrap();
@@ -161,7 +170,7 @@ impl Staging {
         // }
 
         if qc.view != self.view {
-            info!("Fail 2");
+            info!("Fail 2 qc.view = {}, self.view = {}", qc.view, self.view);
             return;
         }
 
@@ -176,6 +185,11 @@ impl Staging {
             ))
             .await
             .unwrap();
+
+        if self.i_am_leader() {
+            info!("Start proposing blocks!");
+            self.batch_proposer_command_tx.send(true).await.unwrap();
+        }
 
         info!("View {} stabilized", self.view);
     }
