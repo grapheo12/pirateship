@@ -8,8 +8,8 @@ use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector},
 use super::{app::AppCommand, batch_proposal::BatchProposerCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}, pacemaker::PacemakerCommand};
 
 pub(super) mod steady_state;
-mod view_change;
-
+pub(super) mod view_change;
+pub(super) mod fork_choice;
 struct CachedBlockWithVotes {
     block: CachedBlock,
     

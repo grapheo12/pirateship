@@ -12,11 +12,14 @@ use crate::{
 use super::{CachedBlockWithVotes, Staging};
 
 #[derive(Clone, Debug)]
-struct ForkStat {
-    fork_len: usize,
-    block_hashes: Vec<HashType>,
-    first_n: u64,
-    first_parent: HashType,
+pub struct ForkStat {
+    pub fork_len: usize,
+    pub block_hashes: Vec<HashType>,
+    pub first_n: u64,
+    pub first_parent: HashType,
+    pub last_qc: Option<ProtoQuorumCertificate>,
+    pub last_view: u64,
+    pub last_config_num: u64,
 }
 
 
@@ -196,30 +199,55 @@ impl Staging {
     }
 
     async fn create_my_vc_msg(&mut self) -> ProtoViewChange {
-        let my_fork = ProtoFork {
-            serialized_blocks: self
-                .pending_blocks
-                .iter()
-                .map(|b| HalfSerializedBlock {
-                    n: b.block.block.n,
-                    view: b.block.block.view,
-                    view_is_stable: b.block.block.view_is_stable,
-                    config_num: b.block.block.config_num,
-                    serialized_body: b.block.block_ser.clone(),
-                })
-                .collect(),
+        // We will send everything from pending_blocks and the curr parent.
+        // ie self.bci onwards
+        let mut my_fork = if self.curr_parent_for_pending.is_some() {
+            let _parent = self.curr_parent_for_pending.as_ref().unwrap();
+            let half_serialized_block = HalfSerializedBlock {
+                n: _parent.block.n,
+                view: _parent.block.view,
+                view_is_stable: _parent.block.view_is_stable,
+                config_num: _parent.block.config_num,
+                serialized_body: _parent.block_ser.clone(),
+            };
+            ProtoFork {
+                serialized_blocks: vec![half_serialized_block]
+            }
+        } else {
+            ProtoFork {
+                serialized_blocks: Vec::new()
+            }
+        };
+
+        my_fork.serialized_blocks.extend(self
+            .pending_blocks
+            .iter()
+            .map(|b| HalfSerializedBlock {
+                n: b.block.block.n,
+                view: b.block.block.view,
+                view_is_stable: b.block.block.view_is_stable,
+                config_num: b.block.block.config_num,
+                serialized_body: b.block.block_ser.clone(),
+            }));
+
+        // Fork sig will be the sig on the hash of the last block.
+        let last_hash = if self.pending_blocks.len() > 0 {
+            self.pending_blocks.back().unwrap().block.block_hash.clone()
+        } else if self.curr_parent_for_pending.is_some() {
+            self.curr_parent_for_pending.as_ref().unwrap().block_hash.clone()
+        } else {
+            default_hash()
         };
         let fork_len = my_fork.serialized_blocks.len() as u64;
-        let my_fork_ser = my_fork.encode_to_vec();
-        let my_fork_sig = self.crypto.sign(&my_fork_ser).await;
+        let my_fork_sig = self.crypto.sign(&last_hash).await;
 
         ProtoViewChange {
             view: self.view,
+            config_num: self.config_num,
             fork: Some(my_fork),
             fork_sig: my_fork_sig.to_vec(),
             fork_len,
             fork_last_qc: self.last_qc.clone(),
-            config_num: self.config_num,
         }
 
     }
@@ -237,16 +265,17 @@ impl Staging {
     /// Returns the stats from the chosen fork (as ForkStats) that the leader is supposed to install.
     /// Also returns the validation messages that the leader must send to the followers.
     async fn apply_fork_choice_rule(&mut self, forks: &mut HashMap<SenderType, ProtoViewChange>) -> (ForkStat, Vec<ProtoForkValidation>) {
-        // TODO::::: This is just a placeholder.
-        let my_name = &SenderType::Auth(self.config.get().net_config.name.clone(), 0);
-        let chosen_fork = forks.remove(my_name).unwrap().fork.unwrap();
+        let mut applicable_forks = self.fork_choice_filter_from_forks(forks).await;
+        assert!(applicable_forks.len() > 0);
+        let chosen_fork = applicable_forks.remove(0);
         let chosen_fork_stat = self.send_blocks_to_broadcaster_and_get_stats(chosen_fork).await;
         let fork_validation = Vec::new();
 
         (chosen_fork_stat, fork_validation)
     }
 
-    async fn send_blocks_to_broadcaster_and_get_stats(&mut self, fork: ProtoFork) -> ForkStat {
+    async fn send_blocks_to_broadcaster_and_get_stats(&mut self, vc: ProtoViewChange) -> ForkStat {
+        let fork = vc.fork.as_ref().unwrap();
         let block_and_hash_futs = self.crypto.prepare_for_rebroadcast(fork.serialized_blocks.clone()).await;
         
         let (block_futs, hash_futs) = block_and_hash_futs.into_iter().collect::<(Vec<_>, Vec<_>)>();
@@ -268,11 +297,16 @@ impl Staging {
             (0, default_hash())
         };
 
+        let (last_view, last_config_num) = fork.serialized_blocks.last().map_or((0, 0), |b| (b.view, b.config_num));
+
         ForkStat {
             fork_len: fork.serialized_blocks.len(),
             block_hashes,
             first_n,
-            first_parent,        
+            first_parent,
+            last_qc: vc.fork_last_qc.clone(),  
+            last_view,
+            last_config_num,    
         }
     }
 
