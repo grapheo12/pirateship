@@ -101,7 +101,8 @@ impl Staging {
         let bcast_names = self.get_everyone_except_me();
         let _ = PinnedClient::broadcast(
             &self.client, &bcast_names, 
-            &payload, &mut LatencyProfile::new()
+            &payload, &mut LatencyProfile::new(),
+            self.byzantine_liveness_threshold() - 1
         ).await;
         
 

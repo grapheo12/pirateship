@@ -109,7 +109,7 @@ impl Staging {
         self.byzantine_liveness_threshold()
     }
 
-    fn byzantine_liveness_threshold(&self) -> usize {
+    pub(super) fn byzantine_liveness_threshold(&self) -> usize {
         let config = self.config.get();
         let n = config.consensus_config.node_list.len();
         let u = config.consensus_config.liveness_u as usize;
@@ -387,6 +387,9 @@ impl Staging {
         self.perf_register_block(&block);
 
         // Postcondition here: block.view == self.view && check_continuity() == true && i_am_leader
+        let block_view_is_stable = block.block.view_is_stable;
+        let block_view = block.block.view;
+
         let block_with_votes = CachedBlockWithVotes {
             block,
             vote_sigs: HashMap::new(),
@@ -401,6 +404,14 @@ impl Staging {
         );
 
         // Now vote for self
+
+        if block_view < self.view {
+            return Ok(());
+        }
+
+        if !self.view_is_stable && block_view_is_stable {
+            return Ok(());
+        }
 
         info!("Voting for self");
 

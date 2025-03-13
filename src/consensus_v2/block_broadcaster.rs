@@ -278,7 +278,7 @@ impl BlockBroadcaster {
         let sz = data.len();
         let data = PinnedMessage::from(data, sz, SenderType::Anon);
         let mut profile = LatencyProfile::new();
-        let res = PinnedClient::broadcast(&self.client, &names, &data, &mut profile).await;
+        let res = PinnedClient::broadcast(&self.client, &names, &data, &mut profile, self.get_byzantine_broadcast_threshold()).await;
         self.perf_add_event(perf_entry, "Forward block to other nodes");
         info!("Bcast 3 {:?}", res);
 
@@ -286,6 +286,16 @@ impl BlockBroadcaster {
 
         Ok(())
 
+    }
+
+    fn get_byzantine_broadcast_threshold(&self) -> usize {
+        let config = self.config.get();
+        let node_list_len = config.consensus_config.node_list.len();
+        if node_list_len <= config.consensus_config.liveness_u as usize {
+            return 0;
+        }
+        let byzantine_threshold = node_list_len - config.consensus_config.liveness_u as usize;
+        byzantine_threshold - 1
     }
 
     async fn process_other_block(&mut self, mut blocks: MultipartFork) -> Result<(), Error> {

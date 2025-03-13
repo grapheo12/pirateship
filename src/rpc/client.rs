@@ -2,11 +2,11 @@
 // Licensed under the MIT License.
 
 use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}};
-use futures::{FutureExt, TryFutureExt};
+use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt, TryFutureExt};
 use log::{debug, info, trace, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use std::{
-    collections::{HashMap, HashSet}, fs::File, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::Arc,
+    collections::{HashMap, HashSet}, fs::File, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::Arc, time::Duration,
 };
 use tokio::{
     io::{split, AsyncReadExt, AsyncWriteExt, BufWriter, ReadHalf, WriteHalf},
@@ -14,7 +14,7 @@ use tokio::{
     sync::{
         mpsc::{self, Sender, UnboundedSender},
         Mutex, RwLock
-    },
+    }, time::{sleep, timeout},
 };
 use std::time::Instant;
 use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
@@ -188,6 +188,7 @@ pub struct Client {
     pub worker_ready: PinnedHashSet<String>,
     pub key_store: AtomicKeyStore,
     do_auth: bool,
+    graveyard_tx: Mutex<Option<UnboundedSender<BoxFuture<'static, ()>>>>
 }
 
 #[derive(Clone)]
@@ -236,6 +237,7 @@ impl Client {
             chan_map: PinnedHashMap::new(),
             worker_ready: PinnedHashSet::new(),
             key_store: AtomicKeyStore::new(key_store.to_owned()),
+            graveyard_tx: Mutex::new(None),
         }
     }
 
@@ -250,6 +252,7 @@ impl Client {
             chan_map: PinnedHashMap::new(),
             worker_ready: PinnedHashSet::new(),
             key_store,
+            graveyard_tx: Mutex::new(None),
         }
     }
 
@@ -264,6 +267,7 @@ impl Client {
             key_store: AtomicKeyStore::new(KeyStore::empty().to_owned()),
             chan_map: PinnedHashMap::new(),
             worker_ready: PinnedHashSet::new(),
+            graveyard_tx: Mutex::new(None),
         }
     }
 
@@ -614,7 +618,8 @@ impl PinnedClient {
         client: &PinnedClient,
         names: &Vec<String>,
         data: &PinnedMessage,
-        profile: &mut LatencyProfile
+        profile: &mut LatencyProfile,
+        min_success: usize,
     ) -> Result<(), Error> {
         let mut need_to_spawn_workers = Vec::new();
         for name in names {
@@ -624,8 +629,10 @@ impl PinnedClient {
             }
         }
 
+        info!("Need to spawn workes for {:?}", need_to_spawn_workers);
+
         for name in &need_to_spawn_workers {
-            let (tx, mut rx) = mpsc::channel(1000);
+            let (tx, mut rx) = mpsc::channel(10);
             let mut lchans = client.0.chan_map.0.write().await;
             lchans.insert(name.clone(), tx);
 
@@ -665,6 +672,7 @@ impl PinnedClient {
                         let msg_ref = msg.as_ref();
 
                         let len = msg_ref.len() as u32;
+                        info!("Client for {} sending message of size: {}. Queue len: {}", _name, len, rx.len());
                         if let Err(e) = Self::send_raw(&_client, &_name, &sock, SendDataType::SizeType(len)).await {
                             warn!("Broadcast worker for {} dying: {}", _name, e);
                             should_die = true;
@@ -677,7 +685,7 @@ impl PinnedClient {
                         }
 
                         profile.register("Broadcast send raw");
-
+                
                         profile.prefix += &String::from(format!(" to {} ", _name));
                         if profile.should_print {
                             should_print_flush_time = true;
@@ -685,22 +693,26 @@ impl PinnedClient {
                         }
 
                         profile.print();
+                        info!("Client for {} sent message of size: {}", _name, len);
 
                     }
                     
                     // let flush_time = Instant::now();
                     let _ = sock.0.lock().await.flush_write_buffer().await;
-
+                    info!("Client for {} flushed", _name);
+                    
                     // if should_print_flush_time {
-                    //     trace!("[{}] Flush time: {} us", combined_prefix, flush_time.elapsed().as_micros());
-                    // }
-                    
-                    
+                        //     trace!("[{}] Flush time: {} us", combined_prefix, flush_time.elapsed().as_micros());
+                        // }
                     msgs.clear();
 
                     if should_die {
+                        info!("Broadcast worker for {} dying", _name);
+                        rx.close();
                         break;
                     }
+                    
+                    
                 }
 
                 // Deregister as ready.
@@ -712,17 +724,78 @@ impl PinnedClient {
         }
 
         // At this point, all name in names have a dedicated broadcast worker running.
-        // let mut chans = Vec::new();
+        let mut bcast_futs = FuturesUnordered::new();
         {
             let lchans = client.0.chan_map.0.read().await;
+
             for name in names {
                 let chan = lchans.get(name).unwrap();
-                // chans.push(chan.clone());
-                if let Err(e) = chan.send((data.clone(), profile.clone())).await {
-                    warn!("Broadcast error: {}", e);
-                }
+                let _chan = chan.clone();
+                let _profile = profile.clone();
+                let _data = data.clone();
+                let _name = name.clone();
+                bcast_futs.push(Box::pin(async move {
+                    let ret = _chan.try_send((_data.clone(), _profile.clone()));
+                    match ret {
+                        Ok(_) => {
+                            Ok(())
+                        },
+                        Err(_) => {
+                            warn!("Channel congestion for {} Queue len: {}", _name, 10 - _chan.capacity());
+                            _chan.send((_data, _profile)).await
+                        }
+                    }
+                }));
+                
+                // let mut try_num = 0;
+                // let max_try_num = client.0.config.get().net_config.client_max_retry;
+                // while let Err(_) = chan.send((data.clone(), profile.clone())).await {
+                //     try_num += 1;
+                //     if try_num > max_try_num {
+                //         break;
+                //     }
+                //     sleep(Duration::from_millis(1)).await;
+                // }
             }
         }
+
+        let mut total_success = 0;
+        while let Some(res) = bcast_futs.next().await {
+            if res.is_ok() {
+                total_success += 1;
+            }
+
+            if total_success >= min_success {
+                break;
+            }
+        }
+
+        info!("Broadcast done. Success: {}", total_success);
+
+        if bcast_futs.len() == 0 {
+            return Ok(());
+        }
+
+        let mut lgraveyard = client.0.graveyard_tx.lock().await;
+        if lgraveyard.is_none() {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            tokio::spawn(async move {
+                while let Some(fut) = rx.recv().await {
+                    let _ = timeout(Duration::from_secs(2), fut).await;
+                }
+            });
+
+            *lgraveyard = Some(tx);
+        }
+
+
+        let _ = lgraveyard.as_ref().unwrap().send(Box::pin(async move {
+            while bcast_futs.len() > 0 {
+                let _ = bcast_futs.next().await;
+            }
+        }));
+
+
 
         // let _bcast_res = chans.iter().map(|c| c.send((data.clone(), Some(Instant::now()))));
 
