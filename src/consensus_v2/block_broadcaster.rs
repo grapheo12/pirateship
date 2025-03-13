@@ -1,7 +1,6 @@
 use std::{cell::RefCell, io::{Error, ErrorKind}, sync::Arc};
 
-use log::{debug, error, info};
-use lz4_flex::block;
+use log::{debug, error, info, trace};
 use prost::Message;
 use tokio::sync::{oneshot, Mutex};
 
@@ -131,7 +130,7 @@ impl BlockBroadcaster {
                 }
                 let block = block.unwrap();
                 let __n = block.0;
-                info!("Expecting {}", __n);
+                // info!("Expecting {}", __n);
 
                 let perf_entry = block.0;
                 self.perf_register(perf_entry);
@@ -143,7 +142,7 @@ impl BlockBroadcaster {
                 }
                 self.process_my_block(block.unwrap()).await?;
 
-                info!("Processed block {}", __n);
+                trace!("Processed block {}", __n);
             },
 
             block_vec = self.other_block_rx.recv() => {
@@ -151,18 +150,18 @@ impl BlockBroadcaster {
                     return Err(Error::new(ErrorKind::BrokenPipe, "other_block_rx channel closed"));
                 }
                 let blocks = block_vec.unwrap();
-                info!("Processing other block");
+                // info!("Processing other block");
                 self.process_other_block(blocks).await?;
-                info!("Processed other block");
+                // info!("Processed other block");
             },
 
             cmd = self.control_command_rx.recv() => {
                 if cmd.is_none() {
                     return Err(Error::new(ErrorKind::BrokenPipe, "control_command_rx channel closed"));
                 }
-                info!("Processing control command");
+                // info!("Processing control command");
                 self.handle_control_command(cmd.unwrap()).await?;
-                info!("Processed control command");
+                // info!("Processed control command");
             }
         }
 
@@ -203,7 +202,7 @@ impl BlockBroadcaster {
         // Store
         let storage_ack = self.storage.put_block(block).await;
         self.perf_add_event(perf_entry, "Store block");
-        info!("Stored {}", block.block.n);
+        // info!("Stored {}", block.block.n);
     
         // Forward
         // Unfortunate cloning.
@@ -211,9 +210,9 @@ impl BlockBroadcaster {
         self.logserver_tx.send(block.clone()).await.unwrap();
         self.perf_add_event(perf_entry, "Forward block to logserver");
 
-        info!("Sending {}", block.block.n);
+        // info!("Sending {}", block.block.n);
         self.staging_tx.send((block.clone(), storage_ack, ae_stats)).await.unwrap();
-        info!("Sent {}", block.block.n);
+        // info!("Sent {}", block.block.n);
         self.perf_add_event(perf_entry, "Forward block to staging");
 
         Ok(())
@@ -244,12 +243,9 @@ impl BlockBroadcaster {
                 sender: self.config.get().net_config.name.clone(),
                 ci: self.ci,
             }).await?;
-        }
-        info!("Bcast 1");
-        
+        }  
         // Forward to app for stats.
         self.app_command_tx.send(AppCommand::NewRequestBatch(block.block.n, view, view_is_stable, true, block.block.tx_list.len(), block.block_hash.clone())).await.unwrap();
-        info!("Bcast 2");
         // Forward to other nodes. Involves copies and serialization so done last.
 
         let names = self.get_everyone_except_me();
@@ -278,9 +274,8 @@ impl BlockBroadcaster {
         let sz = data.len();
         let data = PinnedMessage::from(data, sz, SenderType::Anon);
         let mut profile = LatencyProfile::new();
-        let res = PinnedClient::broadcast(&self.client, &names, &data, &mut profile, self.get_byzantine_broadcast_threshold()).await;
+        let _res = PinnedClient::broadcast(&self.client, &names, &data, &mut profile, self.get_byzantine_broadcast_threshold()).await;
         self.perf_add_event(perf_entry, "Forward block to other nodes");
-        info!("Bcast 3 {:?}", res);
 
         self.perf_deregister(perf_entry);
 
@@ -300,7 +295,7 @@ impl BlockBroadcaster {
 
     async fn process_other_block(&mut self, mut blocks: MultipartFork) -> Result<(), Error> {
         let _blocks = blocks.await_all().await;
-        info!("Await all finished!");
+        // info!("Await all finished!");
         let num_parts = blocks.remaining_parts;
 
         for block in &_blocks {
@@ -315,7 +310,7 @@ impl BlockBroadcaster {
         let (view, view_is_stable) = (blocks.ae_stats.view, blocks.ae_stats.view_is_stable);
         for block in _blocks {
             let block = block.unwrap();
-            info!("Processing {}", block.block.n);
+            // info!("Processing {}", block.block.n);
             self.store_and_forward_internally(&block, blocks.ae_stats.clone()).await?;
 
             // Forward to app for stats.

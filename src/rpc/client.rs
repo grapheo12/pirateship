@@ -496,7 +496,7 @@ impl PinnedClient {
         }
 
         {
-            info!("Get sock: {} {}", name, client.0.full_duplex);
+            // info!("Get sock: {} {}", name, client.0.full_duplex);
             let repl_sock = Self::get_sock(client, name, client.0.full_duplex).await?;
             let mut repl_sock = repl_sock.0.lock().await;
 
@@ -629,7 +629,7 @@ impl PinnedClient {
             }
         }
 
-        info!("Need to spawn workes for {:?}", need_to_spawn_workers);
+        // info!("Need to spawn workes for {:?}", need_to_spawn_workers);
 
         for name in &need_to_spawn_workers {
             let (tx, mut rx) = mpsc::channel(10);
@@ -672,7 +672,7 @@ impl PinnedClient {
                         let msg_ref = msg.as_ref();
 
                         let len = msg_ref.len() as u32;
-                        info!("Client for {} sending message of size: {}. Queue len: {}", _name, len, rx.len());
+                        // info!("Client for {} sending message of size: {}. Queue len: {}", _name, len, rx.len());
                         if let Err(e) = Self::send_raw(&_client, &_name, &sock, SendDataType::SizeType(len)).await {
                             warn!("Broadcast worker for {} dying: {}", _name, e);
                             should_die = true;
@@ -693,13 +693,13 @@ impl PinnedClient {
                         }
 
                         profile.print();
-                        info!("Client for {} sent message of size: {}", _name, len);
+                        // info!("Client for {} sent message of size: {}", _name, len);
 
                     }
                     
                     // let flush_time = Instant::now();
                     let _ = sock.0.lock().await.flush_write_buffer().await;
-                    info!("Client for {} flushed", _name);
+                    // info!("Client for {} flushed", _name);
                     
                     // if should_print_flush_time {
                         //     trace!("[{}] Flush time: {} us", combined_prefix, flush_time.elapsed().as_micros());
@@ -707,7 +707,7 @@ impl PinnedClient {
                     msgs.clear();
 
                     if should_die {
-                        info!("Broadcast worker for {} dying", _name);
+                        // info!("Broadcast worker for {} dying", _name);
                         rx.close();
                         break;
                     }
@@ -741,7 +741,7 @@ impl PinnedClient {
                             Ok(())
                         },
                         Err(_) => {
-                            warn!("Channel congestion for {} Queue len: {}", _name, 10 - _chan.capacity());
+                            trace!("Channel congestion for {} Queue len: {}", _name, 10 - _chan.capacity());
                             _chan.send((_data, _profile)).await
                         }
                     }
@@ -770,7 +770,7 @@ impl PinnedClient {
             }
         }
 
-        info!("Broadcast done. Success: {}", total_success);
+        trace!("Broadcast done. Success: {}", total_success);
 
         if bcast_futs.len() == 0 {
             return Ok(());

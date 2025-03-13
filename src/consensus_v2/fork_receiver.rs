@@ -231,7 +231,7 @@ impl ForkReceiver {
         }
 
         let first_part = parts.remove(0);
-        info!("Preparing part with {} blocks", first_part.len());
+
         let multipart_fut = self.crypto.prepare_fork(first_part, parts.len(), AppendEntriesStats {
             view: ae.view,
             view_is_stable: ae.view_is_stable,

@@ -246,7 +246,6 @@ impl CryptoService {
 
                     let _ = hash_tx.send(hsh.clone());
                     let _ = hash_tx2.send(hsh.clone());
-                    info!("Prepared block with n: {}", block.n);
                     let _ = block_tx.send(CachedBlock::new(block, buf, hsh));
                     perf_event!();
                     perf_counter.deregister_entry(&perf_entry);

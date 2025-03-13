@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, pin::Pin, sync::Arc, time::Duration};
 
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
 use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoVote}, rpc::{client::PinnedClient, SenderType}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer, PerfCounter, StorageAck}};
@@ -10,6 +10,7 @@ use super::{app::AppCommand, batch_proposal::BatchProposerCommand, block_broadca
 pub(super) mod steady_state;
 pub(super) mod view_change;
 pub(super) mod fork_choice;
+
 struct CachedBlockWithVotes {
     block: CachedBlock,
     
@@ -173,7 +174,7 @@ impl Staging {
                     return Err(())
                 }
                 let (block, storage_ack, ae_stats) = block.unwrap();
-                info!("Got {}", block.block.n);
+                trace!("Got block {}", block.block.n);
                 if i_am_leader {
                     self.process_block_as_leader(block, storage_ack, ae_stats).await?;
                 } else {

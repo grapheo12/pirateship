@@ -174,7 +174,6 @@ impl Staging {
         // }
 
         if qc.view != self.view {
-            info!("Fail 2 qc.view = {}, self.view = {}", qc.view, self.view);
             return;
         }
 
@@ -191,7 +190,6 @@ impl Staging {
             .unwrap();
 
         if self.i_am_leader() {
-            info!("Start proposing blocks!");
             self.batch_proposer_command_tx.send(true).await.unwrap();
         }
 

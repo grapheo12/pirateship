@@ -1,7 +1,6 @@
 use std::{collections::{BTreeMap, HashMap, VecDeque}, sync::Arc};
 
-use log::{error, info, warn};
-use lz4_flex::block;
+use log::{error, info, trace, warn};
 use prost::Message as _;
 use tokio::sync::{oneshot, Mutex};
 
@@ -123,7 +122,7 @@ impl LogServer {
             biased;
             block = self.logserver_rx.recv() => {
                 if let Some(block) = block {
-                    info!("Received block {}", block.block.n);
+                    trace!("Received block {}", block.block.n);
                     self.handle_new_block(block).await;
                 }
             },

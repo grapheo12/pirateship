@@ -3,7 +3,7 @@ use std::{pin::Pin, sync::Arc, time::Duration};
 
 use crate::crypto::FutureHash;
 use crate::utils::channel::{Receiver, Sender};
-use log::{debug, info};
+use log::{debug, info, trace, warn};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{oneshot, Mutex};
 
@@ -187,19 +187,15 @@ impl BlockSequencer {
         let mut qc_buf = Vec::new();
 
         if listen_for_new_batch {
-            info!("Listening for new batch");
             tokio::select! {
                 biased;
                 _ = self.qc_rx.recv_many(&mut qc_buf, chan_depth) => {
-                    info!("Got QC");
                     self.add_qcs(qc_buf).await;
                 }
                 _tick = self.signature_timer.wait() => {
-                    info!("Got sig tick");
                     self.force_sign_next_batch = true;
                 },
                 _batch_and_client_reply = self.batch_rx.recv() => {
-                    info!("Got batch");
                     if let Some(_) = _batch_and_client_reply {
                         let (batch, client_reply) = _batch_and_client_reply.unwrap();
                         self.perf_register(self.seq_num + 1); // Projected seq num is used as entry id for perf
@@ -207,7 +203,6 @@ impl BlockSequencer {
                     }
                 },
                 _cmd = self.control_command_rx.recv() => {
-                    info!("Got cmd");
                     self.handle_control_command(_cmd).await;
                 },
             }
@@ -280,24 +275,21 @@ impl BlockSequencer {
             .prepare_block(block, must_sign, parent_hash_rx)
             .await;
         self.parent_hash_rx = FutureHash::Future(hash_rx);
-        info!("handle_new_batch 1");
 
         self.client_reply_tx
             .send((hash_rx2, replies))
             .await
             .expect("Should be able to send client_reply_tx");
         self.perf_add_event(perf_entry_id, "Send to Client Reply", must_sign);
-        info!("handle_new_batch 2");
 
         self.block_broadcaster_tx
             .send((n, block_rx))
             .await
             .expect("Should be able to send block_broadcaster_tx");
         self.perf_add_event(perf_entry_id, "Send to Block Broadcaster", must_sign);
-        info!("handle_new_batch 3");
 
         self.perf_deregister(perf_entry_id);
-        info!("Sequenced: {}", n);
+        trace!("Sequenced: {}", n);
     }
 
     async fn add_qcs(&mut self, mut qcs: Vec<ProtoQuorumCertificate>) {
@@ -337,7 +329,7 @@ impl BlockSequencer {
                 new_parent_hash,
                 new_seq_num,
             ) => {
-                info!("Request for new view message: view: {} config: {} new_seq_num: {}", v, c, new_seq_num);
+                warn!("Request for new view message: view: {} config: {} new_seq_num: {}", v, c, new_seq_num);
                 self.view = v;
                 self.config_num = c;
                 self.view_is_stable = false;
