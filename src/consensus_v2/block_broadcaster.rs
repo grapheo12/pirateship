@@ -27,7 +27,6 @@ pub struct BlockBroadcaster {
     storage: StorageServiceConnector,
     client: PinnedClient,
     staging_tx: Sender<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats)>,
-    logserver_tx: Sender<CachedBlock>,
 
     // Command ports
     fork_receiver_command_tx: Sender<ForkReceiverCommand>,
@@ -47,7 +46,6 @@ impl BlockBroadcaster {
         control_command_rx: Receiver<BlockBroadcasterCommand>,
         storage: StorageServiceConnector,
         staging_tx: Sender<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats)>,
-        logserver_tx: Sender<CachedBlock>,
         fork_receiver_command_tx: Sender<ForkReceiverCommand>,
         app_command_tx: Sender<AppCommand>,
     ) -> Self {
@@ -73,7 +71,6 @@ impl BlockBroadcaster {
             storage,
             client,
             staging_tx,
-            logserver_tx,
             fork_receiver_command_tx,
             app_command_tx,
             my_block_perf_counter,
@@ -205,9 +202,6 @@ impl BlockBroadcaster {
         // info!("Stored {}", block.block.n);
     
         // Forward
-        // Unfortunate cloning.
-        // But CachedBlock is Arc<_> so this is just a ref count increment.
-        self.logserver_tx.send(block.clone()).await.unwrap();
         self.perf_add_event(perf_entry, "Forward block to logserver");
 
         // info!("Sending {}", block.block.n);

@@ -362,6 +362,12 @@ impl Staging {
                 .await
                 .unwrap();
 
+            // None of the votes from the lower views should count anymore!
+            self.pending_blocks.iter_mut().for_each(|e| {
+                e.replication_set.clear();
+                e.vote_sigs.clear();
+            });
+
             // Ready to accept the block normally.
             if self.i_am_leader() {
                 return self
@@ -373,9 +379,12 @@ impl Staging {
                     .process_block_as_follower(block, storage_ack, ae_stats)
                     .await;
             }
+
+
         }
 
         self.perf_register_block(&block);
+        self.logserver_tx.send(block.clone()).await.unwrap();
 
         // Postcondition here: block.view == self.view && check_continuity() == true && i_am_leader
         let block_view_is_stable = block.block.view_is_stable;
@@ -492,6 +501,13 @@ impl Staging {
                 .await
                 .unwrap();
 
+            // None of the votes from the lower views should count anymore!
+            self.pending_blocks.iter_mut().for_each(|e| {
+                e.replication_set.clear();
+                e.vote_sigs.clear();
+            });
+            
+
             // Ready to accept the block normally.
             if self.i_am_leader() {
                 return self
@@ -503,6 +519,8 @@ impl Staging {
                     .await;
             }
         }
+
+        self.logserver_tx.send(block.clone()).await.unwrap();
 
         // Postcondition here: block.view == self.view && check_continuity() == true && !i_am_leader
         let block_with_votes = CachedBlockWithVotes {
@@ -517,13 +535,8 @@ impl Staging {
 
         let mut qc_list = self
             .pending_blocks
-            .iter()
-            .last()
-            .unwrap()
-            .block
-            .block
-            .qc
-            .iter()
+            .iter().last().unwrap()
+            .block.block.qc.iter()
             .map(|e| e.clone())
             .collect::<Vec<_>>();
 
