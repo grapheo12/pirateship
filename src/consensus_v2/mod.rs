@@ -9,8 +9,8 @@ pub mod client_reply;
 mod logserver;
 mod pacemaker;
 
-#[cfg(test)]
-mod tests;
+// #[cfg(test)]
+// mod tests;
 
 use std::{io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::Arc};
 

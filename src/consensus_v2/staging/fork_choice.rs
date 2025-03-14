@@ -1,33 +1,32 @@
 use std::collections::HashMap;
 
-use prost::Message;
-
-use crate::{crypto::default_hash, proto::consensus::{ProtoFork, ProtoViewChange}, rpc::SenderType, utils::get_parent_hash_in_proto_block_ser};
+use crate::{crypto::{default_hash, hash_proto_block_ser}, proto::consensus::{ProtoFork, ProtoViewChange}, rpc::SenderType, utils::get_parent_hash_in_proto_block_ser};
 
 use super::{view_change::ForkStat, Staging};
 
 impl Staging {
-    pub(super) async fn fork_choice_filter_from_forks(&mut self, forks: &HashMap<SenderType, ProtoViewChange>) -> Vec<ProtoViewChange> {
+    pub(super) async fn vc_to_stats(&mut self, forks: &HashMap<SenderType, ProtoViewChange>) -> HashMap<SenderType, ForkStat> {
         let mut fork_stats = HashMap::new();
         for (sender, vc) in forks {
-            let mut block_hashes = Vec::with_capacity(vc.fork_len as usize);
-            if vc.fork_len > 0 {
+            let fork_len = vc.fork.as_ref().unwrap().serialized_blocks.len();
+            let mut block_hashes = Vec::with_capacity(fork_len);
+            if fork_len > 0 {
                 // Instead of calculating the hashes again, we can just use the parent relations.
                 // Just need to compute the last hash.
-                let last_hash = self.crypto.hash(&vc.fork.as_ref().unwrap().serialized_blocks.last().unwrap().serialized_body).await;
-                for i in 1..vc.fork_len as usize {
+                let last_hash = hash_proto_block_ser(&vc.fork.as_ref().unwrap().serialized_blocks.last().unwrap().serialized_body);
+                for i in 1..fork_len {
                     block_hashes.push(get_parent_hash_in_proto_block_ser(&vc.fork.as_ref().unwrap().serialized_blocks[i].serialized_body).unwrap());
                 }
                 block_hashes.push(last_hash);
             }
 
-            let (last_view, last_config_num) = vc.fork.as_ref().unwrap()
+            let (last_view, last_config_num, last_n) = vc.fork.as_ref().unwrap()
                 .serialized_blocks.last()
-                .map_or((0, 0), |b| (b.view, b.config_num));
+                .map_or((0, 0, 0), |b| (b.view, b.config_num, b.n));
             
             
             fork_stats.insert(sender.clone(), ForkStat {
-                fork_len: vc.fork_len as usize,
+                fork_last_n: last_n,
                 block_hashes,
                 first_n: vc.fork.as_ref().unwrap().serialized_blocks.first().map_or(0, |b| b.n),
                 first_parent: vc.fork.as_ref().unwrap().serialized_blocks.first().map_or(default_hash(),
@@ -38,9 +37,12 @@ impl Staging {
             });
         }
 
+        fork_stats
+    }
+    pub(super) async fn fork_choice_filter_from_forks(&mut self, forks: &HashMap<SenderType, ProtoViewChange>, fork_stats: &mut HashMap<SenderType, ForkStat>) -> Vec<ProtoViewChange> {
         let fast_path_threshold = self.fast_path_selection_threshold();
 
-        let applicable_senders = Self::fork_choice_filter(&mut fork_stats, fast_path_threshold).await;
+        let applicable_senders = Self::fork_choice_filter(fork_stats, fast_path_threshold).await;
         
         applicable_senders.iter().map(|s| {
             let vc = forks.get(s).unwrap();
@@ -106,7 +108,8 @@ impl Staging {
         let mut highest_fast_path_committed_forks = HashMap::new();
 
         for (sender, stat) in fork_stats.iter() {
-            for i in 0..stat.fork_len {
+            let fork_len = stat.block_hashes.len();
+            for i in 0..fork_len {
                 let block_n = stat.first_n + i as u64;
                 let my_block_hash = &stat.block_hashes[i];
 
@@ -117,7 +120,7 @@ impl Staging {
                     if other_stat.first_n > block_n {
                         continue;
                     }
-                    if other_stat.first_n + other_stat.fork_len as u64 - 1 <= block_n {
+                    if other_stat.fork_last_n <= block_n {
                         continue;
                     }
                     let idx = block_n - other_stat.first_n;
@@ -163,19 +166,10 @@ impl Staging {
     }
 
     fn fork_choice_filter_highest_len(fork_stats: &mut HashMap<SenderType, ForkStat>) {
-        let highest_len = fork_stats.iter().map(|(_, f)| if f.first_n + f.fork_len as u64 == 0 {
-            0
-        } else {
-            f.first_n + f.fork_len as u64 - 1
-        }).max().unwrap_or(0);
+        let highest_len = fork_stats.iter().map(|(_, f)| f.fork_last_n).max().unwrap_or(0);
 
         fork_stats.retain(|_, f| {
-            let len = if f.first_n + f.fork_len as u64 == 0 {
-                0
-            } else {
-                f.first_n + f.fork_len as u64 - 1
-            };
-            len == highest_len
+            f.fork_last_n == highest_len
         });
     }
 

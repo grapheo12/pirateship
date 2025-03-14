@@ -1,13 +1,15 @@
 use std::{io::{BufReader, Error, ErrorKind}, ops::Deref, pin::Pin, sync::{atomic::fence, Arc}};
 
+use bytes::{BufMut, BytesMut};
 use ed25519_dalek::{verify_batch, Signature, SIGNATURE_LENGTH};
 use futures::SinkExt;
 use log::{info, trace};
+use prost::Message;
 use rand::{thread_rng, Rng};
 use sha2::{Digest, Sha256};
 use tokio::{sync::{mpsc::{channel, Receiver, Sender}, oneshot}, task::JoinSet};
 
-use crate::{config::AtomicConfig, consensus_v2::fork_receiver::{AppendEntriesStats, MultipartFork}, crypto::{default_hash, DIGEST_LENGTH}, proto::consensus::{HalfSerializedBlock, ProtoBlock, ProtoQuorumCertificate}, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser, PerfCounter}};
+use crate::{config::AtomicConfig, consensus_v2::fork_receiver::{AppendEntriesStats, MultipartFork}, crypto::{default_hash, DIGEST_LENGTH}, proto::consensus::{HalfSerializedBlock, ProtoBlock, ProtoQuorumCertificate, ProtoViewChange}, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser, PerfCounter}};
 
 use super::{hash, AtomicKeyStore, HashType, KeyStore};
 
@@ -56,7 +58,7 @@ impl FutureHash {
     }
 }
 
-fn hash_proto_block_ser(data: &[u8]) -> HashType {
+pub fn hash_proto_block_ser(data: &[u8]) -> HashType {
     let mut hasher = Sha256::new();
     hasher.update(&data[DIGEST_LENGTH+SIGNATURE_LENGTH..]);
     hasher.update(&data[SIGNATURE_LENGTH..SIGNATURE_LENGTH+DIGEST_LENGTH]);
@@ -106,6 +108,11 @@ enum CryptoServiceCommand {
     
     // Deserializes and verifies block serialization
     VerifyBlockSer(Vec<u8>, oneshot::Sender<Result<CachedBlock, Error>>, oneshot::Sender<Result<HashType, Error>>),
+    
+    // For View Change prep/verification
+    PrepareVC(ProtoViewChange, oneshot::Sender<ProtoViewChange>),
+    VerifyVC(ProtoViewChange, String /* Signer name */, oneshot::Sender<bool>),
+    
     Die
 }
 
@@ -186,7 +193,7 @@ impl CryptoService {
                 CryptoServiceCommand::Die => {
                     break;
                 },
-                CryptoServiceCommand::PrepareBlock(proto_block, block_tx, hash_tx, hash_tx2, must_sign, parent_hash_rx) => {
+                CryptoServiceCommand::PrepareBlock(mut proto_block, block_tx, hash_tx, hash_tx2, must_sign, parent_hash_rx) => {
                     // let mut buf = bincode::serialize(&proto_block).unwrap();
                     // let mut buf = bitcode::encode(&proto_block);
                     // let mut buf = proto_block.encode_to_vec();
@@ -206,6 +213,9 @@ impl CryptoService {
                     }
 
                     perf_counter.register_new_entry(perf_entry);
+
+                    proto_block.sig = None;
+                    proto_block.parent.clear();
 
                     let mut buf = serialize_proto_block_nascent(&proto_block).unwrap();
                     perf_event!();
@@ -336,6 +346,65 @@ impl CryptoService {
                         },
                     };
                 }
+            
+                CryptoServiceCommand::PrepareVC(mut vc, tx) => {
+                    // Sign over H(last_block) || H(fork_last_qc) || view || config_num || fork_last_n
+
+                    let last_block_hash = match &vc.fork {
+                        Some(fork) if fork.serialized_blocks.len() > 0 => {
+                            hash_proto_block_ser(&fork.serialized_blocks.last().unwrap()
+                                .serialized_body)
+                        },
+                        _ => {
+                            default_hash()
+                        }
+                    };
+
+                    let last_qc_hash = match &vc.fork_last_qc {
+                        Some(qc) => hash(&qc.encode_to_vec()),
+                        None => default_hash()
+                    };
+
+                    let mut buf = BytesMut::new();
+                    buf.put(last_block_hash.as_slice());
+                    buf.put(last_qc_hash.as_slice());
+                    buf.put_u64(vc.view);
+                    buf.put_u64(vc.config_num);
+                    buf.put_u64(vc.fork_last_n);
+
+                    let sig = keystore.get().sign(buf.to_vec().as_slice());
+                    vc.fork_sig.clear();
+                    vc.fork_sig.extend_from_slice(&sig);
+
+                    tx.send(vc).unwrap();
+                },
+
+                CryptoServiceCommand::VerifyVC(vc, name, tx) => {
+                    let last_block_hash = match &vc.fork {
+                        Some(fork) if fork.serialized_blocks.len() > 0 => {
+                            hash_proto_block_ser(&fork.serialized_blocks.last().unwrap()
+                                .serialized_body)
+                        },
+                        _ => {
+                            default_hash()
+                        }
+                    };
+
+                    let last_qc_hash = match &vc.fork_last_qc {
+                        Some(qc) => hash(&qc.encode_to_vec()),
+                        None => default_hash()
+                    };
+
+                    let mut buf = BytesMut::new();
+                    buf.put(last_block_hash.as_slice());
+                    buf.put(last_qc_hash.as_slice());
+                    buf.put_u64(vc.view);
+                    buf.put_u64(vc.config_num);
+                    buf.put_u64(vc.fork_last_n);
+
+                    let res = keystore.get().verify(&name, vc.fork_sig.as_slice().try_into().unwrap(), buf.to_vec().as_slice());
+                    tx.send(res).unwrap();
+                }
             }
         }
 
@@ -465,5 +534,8 @@ impl CryptoServiceConnector {
         fork_future
     }
 
+    pub async fn prepare_vc(&mut self, vc: ProtoViewChange) -> ProtoViewChange {
+        dispatch_cmd!(self, CryptoServiceCommand::PrepareVC, vc)
+    }
 
 }
