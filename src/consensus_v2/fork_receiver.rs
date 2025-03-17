@@ -2,9 +2,11 @@ use std::{collections::VecDeque, io::Error, sync::Arc};
 
 use log::{debug, info, warn};
 use prost::Message;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 
 use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector, HashType}, proto::{checkpoint::ProtoBackfillNack, consensus::{HalfSerializedBlock, ProtoAppendEntries}, rpc::ProtoPayload}, rpc::{client::PinnedClient, MessageRef, SenderType}, utils::{channel::{Receiver, Sender}, get_parent_hash_in_proto_block_ser}};
+
+use super::logserver::LogServerQuery;
 
 
 pub enum ForkReceiverCommand {
@@ -51,6 +53,16 @@ struct ContinuityStats {
     last_ae_block_hash: Option<HashType>,
 }
 
+macro_rules! ask_logserver {
+    ($me:expr, $query:expr, $($args:expr),+) => {
+        {
+            let (tx, rx) = oneshot::channel();
+            $me.logserver_query_tx.send($query($($args),+, tx)).await.unwrap();
+            rx.await.unwrap()
+        }
+    };
+}
+
 
 /// Receives AppendEntries from other nodes in the network.
 /// Verifies the view change and config change sequence in the sent fork.
@@ -79,6 +91,8 @@ pub struct ForkReceiver {
 
     continuity_stats: ContinuityStats,
 
+    logserver_query_tx: Sender<LogServerQuery>,
+
 }
 
 
@@ -90,6 +104,7 @@ impl ForkReceiver {
         fork_rx: Receiver<(ProtoAppendEntries, SenderType)>,
         command_rx: Receiver<ForkReceiverCommand>,
         broadcaster_tx: Sender<MultipartFork>,
+        logserver_query_tx: Sender<LogServerQuery>,
     ) -> Self {
         Self {
             config,
@@ -105,10 +120,10 @@ impl ForkReceiver {
             continuity_stats: ContinuityStats {
                 last_ae_view: 0,
                 last_ae_block_hash: None,
-            }
+            },
+            logserver_query_tx,
         }
     }
-
 
     pub async fn run(fork_receiver: Arc<Mutex<Self>>) {
         let mut fork_receiver = fork_receiver.lock().await;
@@ -166,6 +181,8 @@ impl ForkReceiver {
         // Staging takes care of that.
         // But at least I can make sure that the AppendEntries start from a common prefix.
         if self.ensure_common_prefix(&ae).await.is_err() {
+            // Send Nack
+            self.send_nack(sender, ae).await;
             return;
         }
 
@@ -327,10 +344,10 @@ impl ForkReceiver {
 
 
     async fn send_nack(&mut self, sender: String, ae: ProtoAppendEntries) {
-        let hints = vec![];
-        let my_name = self.config.get().net_config.name.clone();
         let first_block_n = ae.fork.as_ref().map_or(ae.commit_index, |f| f.serialized_blocks.first().unwrap().n);
         let last_index_needed = if first_block_n > 100 { first_block_n - 100 } else { 0 };
+        let hints = ask_logserver!(self, LogServerQuery::GetHints, last_index_needed);
+        let my_name = self.config.get().net_config.name.clone();
 
         let nack = ProtoBackfillNack {
             hints,
@@ -378,7 +395,11 @@ impl ForkReceiver {
             }
         }
 
-        // TODO: Ask logserver
-        Ok(())
+        // Ask Logserver
+        let parent_n = fork.serialized_blocks.first().unwrap().n - 1;
+        let _logserver_has_block = ask_logserver!(self, LogServerQuery::CheckHash, parent_n, parent_hash);
+
+
+        if _logserver_has_block { Ok(()) } else { Err(()) }
     }
 }

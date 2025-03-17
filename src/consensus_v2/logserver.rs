@@ -141,7 +141,7 @@ impl LogServer {
                         trace!("Updating BCI to {}", n);
                         self.bci = n;
                     },
-                    _ => {
+                    None => {
                         error!("LogServerCommand channel closed");
                         return Err(());
                     }
