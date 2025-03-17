@@ -59,6 +59,7 @@ impl Staging {
         Self::fork_choice_filter_highest_qc_view(fork_stats);
 
 
+        #[cfg(feature = "fast_path")]
         Self::fork_choice_filter_fast_path(fork_stats, fast_path_threshold);
 
 

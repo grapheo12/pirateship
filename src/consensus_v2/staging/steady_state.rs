@@ -549,7 +549,7 @@ impl Staging {
         for qc in qc_list.drain(..) {
             if !self.view_is_stable {
                 // Try to see if this QC can stabilize the view.
-                info!("Trying to stabilize view {} with QC", self.view);
+                trace!("Trying to stabilize view {} with QC", self.view);
                 self.maybe_stabilize_view(&qc).await;
             }
             
@@ -782,8 +782,14 @@ impl Staging {
         // Fast path: All votes rule; only applicable if view is stable already.
         let new_bci_fast_path = if self.view_is_stable &&
         incoming_qc.sig.len() >= self.byzantine_fast_path_threshold() {
-            incoming_qc.n
-            // old_bci
+            #[cfg(feature = "fast_path")]
+            {
+                incoming_qc.n
+            }
+            #[cfg(not(feature = "fast_path"))]
+            {
+                old_bci
+            }
         } else {
             old_bci
         };
