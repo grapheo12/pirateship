@@ -212,7 +212,7 @@ impl ForkReceiver {
 
             if test_view < ae.view {
                 warn!("Malformed AppendEntries: Missing blocks for view {} in AppendEntries", ae.view);
-                // TODO: NAck the AppendEntries; ask to backfill.
+                // NAck the AppendEntries; ask to backfill.
                 self.send_nack(sender, ae).await;
                 return;
             }
@@ -272,7 +272,7 @@ impl ForkReceiver {
             config_num: ae.config_num,
             sender: sender.clone(),
             ci: ae.commit_index,
-        }).await;
+        }, self.byzantine_liveness_threshold()).await;
         self.broadcaster_tx.send(multipart_fut).await.unwrap();
 
         if parts.len() > 0 {
@@ -319,7 +319,7 @@ impl ForkReceiver {
                     };
 
                     if maybe_legit {
-                        let multipart_fut = self.crypto.prepare_fork(part, self.multipart_buffer.len(), ae_stats).await;
+                        let multipart_fut = self.crypto.prepare_fork(part, self.multipart_buffer.len(), ae_stats, self.byzantine_liveness_threshold()).await;
                         self.broadcaster_tx.send(multipart_fut).await.unwrap();
                     }
 
@@ -401,5 +401,12 @@ impl ForkReceiver {
 
 
         if _logserver_has_block { Ok(()) } else { Err(()) }
+    }
+
+    fn byzantine_liveness_threshold(&self) -> usize {
+        let u = self.config.get().consensus_config.liveness_u as usize;
+        let n = self.config.get().consensus_config.node_list.len();
+
+        n - u
     }
 }

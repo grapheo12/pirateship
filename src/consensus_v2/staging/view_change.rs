@@ -297,7 +297,7 @@ impl Staging {
 
     async fn send_blocks_to_broadcaster_and_get_stats(&mut self, vc: ProtoViewChange) -> ForkStat {
         let fork = vc.fork.as_ref().unwrap();
-        let block_and_hash_futs = self.crypto.prepare_for_rebroadcast(fork.serialized_blocks.clone()).await;
+        let block_and_hash_futs = self.crypto.prepare_for_rebroadcast(fork.serialized_blocks.clone(), self.byzantine_liveness_threshold()).await;
         
         let (block_futs, hash_futs) = block_and_hash_futs.into_iter().collect::<(Vec<_>, Vec<_>)>();
         

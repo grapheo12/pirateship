@@ -2,9 +2,10 @@ use std::{cell::RefCell, io::{Error, ErrorKind}, sync::Arc};
 
 use log::{debug, error, info, trace};
 use prost::Message;
+use rustls::crypto;
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::{consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, PerfCounter, StorageAck, StorageServiceConnector}};
+use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock, CryptoServiceConnector, FutureHash, HashType}, proto::{consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, execution::ProtoTransaction, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, PerfCounter, StorageAck, StorageServiceConnector}};
 
 use super::{app::AppCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand, MultipartFork}};
 
@@ -15,6 +16,8 @@ pub enum BlockBroadcasterCommand {
 
 pub struct BlockBroadcaster {
     config: AtomicConfig,
+    crypto: CryptoServiceConnector,
+
     ci: u64,
     fork_prefix_buffer: Vec<CachedBlock>,
     
@@ -33,7 +36,11 @@ pub struct BlockBroadcaster {
     app_command_tx: Sender<AppCommand>,
 
     // Perf Counters
-    my_block_perf_counter: RefCell<PerfCounter<u64>>
+    my_block_perf_counter: RefCell<PerfCounter<u64>>,
+
+
+    // For evil purposes
+    evil_last_hash: FutureHash,
 
 }
 
@@ -41,6 +48,7 @@ impl BlockBroadcaster {
     pub fn new(
         config: AtomicConfig,
         client: PinnedClient,
+        crypto: CryptoServiceConnector,
         my_block_rx: Receiver<(u64, oneshot::Receiver<CachedBlock>)>,
         other_block_rx: Receiver<MultipartFork>,
         control_command_rx: Receiver<BlockBroadcasterCommand>,
@@ -63,6 +71,7 @@ impl BlockBroadcaster {
         
         Self {
             config,
+            crypto,
             ci: 0,
             fork_prefix_buffer: Vec::new(),
             my_block_rx,
@@ -74,6 +83,7 @@ impl BlockBroadcaster {
             fork_receiver_command_tx,
             app_command_tx,
             my_block_perf_counter,
+            evil_last_hash: FutureHash::None,
         }
     }
 
@@ -237,41 +247,17 @@ impl BlockBroadcaster {
                 sender: self.config.get().net_config.name.clone(),
                 ci: self.ci,
             }).await?;
-        }  
+        }
         // Forward to app for stats.
         self.app_command_tx.send(AppCommand::NewRequestBatch(block.block.n, view, view_is_stable, true, block.block.tx_list.len(), block.block_hash.clone())).await.unwrap();
         // Forward to other nodes. Involves copies and serialization so done last.
 
         let names = self.get_everyone_except_me();
-        let append_entry = ProtoAppendEntries {
-            fork: Some(ProtoFork {
-                serialized_blocks: ae_fork.drain(..).map(|block| HalfSerializedBlock { 
-                    n: block.block.n,
-                    view: block.block.view,
-                    view_is_stable: block.block.view_is_stable,
-                    config_num: block.block.config_num,
-                    serialized_body: block.block_ser.clone(), 
-                }).collect(),
-            }),
-            commit_index: self.ci,
-            view,
-            view_is_stable,
-            config_num,
-        };
-        // let data = bincode::serialize(&append_entry).unwrap();
-        // let data = bitcode::encode(&append_entry);
-        let rpc = ProtoPayload {
-            message: Some(crate::proto::rpc::proto_payload::Message::AppendEntries(append_entry)),
-        };
-        let data = rpc.encode_to_vec();
-        self.perf_add_event(perf_entry, "Serialize");
-        let sz = data.len();
-        let data = PinnedMessage::from(data, sz, SenderType::Anon);
-        let mut profile = LatencyProfile::new();
-        let _res = PinnedClient::broadcast(&self.client, &names, &data, &mut profile, self.get_byzantine_broadcast_threshold()).await;
-        self.perf_add_event(perf_entry, "Forward block to other nodes");
 
-        self.perf_deregister(perf_entry);
+        #[cfg(feature = "evil")]
+        let names = self.maybe_act_evil(names, &ae_fork, view, view_is_stable, config_num).await;
+
+        self.broadcast_ae_fork(names, ae_fork, view, view_is_stable, config_num, Some(perf_entry)).await;
 
         Ok(())
 
@@ -316,4 +302,118 @@ impl BlockBroadcaster {
     } 
 
 
+    async fn maybe_act_evil(&mut self, names: Vec<String>, ae_fork: &Vec<CachedBlock>, view: u64, view_is_stable: bool, config_num: u64) -> Vec<String> {
+        #[cfg(not(feature = "evil"))]
+        return names;
+
+        #[cfg(feature = "evil")]
+        {
+
+            let (should_be_evil, byz_start_block) = {
+                let config = &self.config.get();
+                let am_i_first_leader = config.consensus_config.node_list[0] == config.net_config.name;
+                
+                let byz_start_block = config.evil_config.byzantine_start_block;
+                let be_evil = config.evil_config.simulate_byzantine_behavior;
+    
+                (am_i_first_leader && be_evil, byz_start_block)
+                
+            };
+    
+            if !should_be_evil {
+                return names;
+            }
+    
+            if ae_fork.last().unwrap().block.n < byz_start_block {
+                return names;
+            }
+    
+            if let FutureHash::None = self.evil_last_hash {
+                self.evil_last_hash = FutureHash::Immediate(ae_fork.last().unwrap().block.parent.clone());
+                info!("Equivocation starting on {}", ae_fork.last().unwrap().block.n);
+            }
+    
+            let parent_hash_rx = self.evil_last_hash.take();
+            let must_sign = match &ae_fork.last().unwrap().block.sig {
+                Some(crate::proto::consensus::proto_block::Sig::ProposerSig(_)) => true,
+                _ => false,
+            };
+    
+            let mut ae_fork = ae_fork.clone();
+            let block = ae_fork.pop().unwrap();
+            let mut block = block.block.clone();
+    
+            block.tx_list.push(ProtoTransaction {
+                on_receive: None,
+                on_crash_commit: None,
+                on_byzantine_commit: None,
+                is_reconfiguration: false,
+            });
+    
+            trace!("Equivocating on block seq num {}", block.n);
+    
+    
+            let (block, hash_rx, _hash_rx_2) = self.crypto.prepare_block(block, must_sign, parent_hash_rx).await;
+            self.evil_last_hash = FutureHash::Future(hash_rx);
+    
+            let block = block.await.unwrap();
+            ae_fork.push(block);
+    
+            let partition_1_size = names.len() / 2;
+    
+            let (partition1, partition2) = names.split_at(partition_1_size);
+            trace!("Partition 1: {:?}, Partition 2: {:?}", partition1, partition2);
+    
+            self.broadcast_ae_fork(partition2.to_vec(), ae_fork, view, view_is_stable, config_num, None).await;
+    
+            // Equivocation logic: Add 1 extra dummy tx to the end of the last block.
+    
+            partition1.to_vec()
+        }
+
+    }
+
+    async fn broadcast_ae_fork(&mut self, names: Vec<String>, mut ae_fork: Vec<CachedBlock>, view: u64, view_is_stable: bool, config_num: u64, perf_entry: Option<u64>) {
+        let (should_perf, perf_entry) = match perf_entry {
+            Some(e) => (true, e),
+            None => (false, 0),
+        };
+        
+        let append_entry = ProtoAppendEntries {
+            fork: Some(ProtoFork {
+                serialized_blocks: ae_fork.drain(..).map(|block| HalfSerializedBlock { 
+                    n: block.block.n,
+                    view: block.block.view,
+                    view_is_stable: block.block.view_is_stable,
+                    config_num: block.block.config_num,
+                    serialized_body: block.block_ser.clone(), 
+                }).collect(),
+            }),
+            commit_index: self.ci,
+            view,
+            view_is_stable,
+            config_num,
+        };
+        // let data = bincode::serialize(&append_entry).unwrap();
+        // let data = bitcode::encode(&append_entry);
+        let rpc = ProtoPayload {
+            message: Some(crate::proto::rpc::proto_payload::Message::AppendEntries(append_entry)),
+        };
+        let data = rpc.encode_to_vec();
+
+        if should_perf {
+            self.perf_add_event(perf_entry, "Serialize");
+        }
+
+        let sz = data.len();
+        let data = PinnedMessage::from(data, sz, SenderType::Anon);
+        let mut profile = LatencyProfile::new();
+        let _res = PinnedClient::broadcast(&self.client, &names, &data, &mut profile, self.get_byzantine_broadcast_threshold()).await;
+        
+        if should_perf {
+            self.perf_add_event(perf_entry, "Forward block to other nodes");
+            self.perf_deregister(perf_entry);
+        }
+
+    }
 }

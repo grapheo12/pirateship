@@ -3,7 +3,8 @@ use std::{io::{BufReader, Error, ErrorKind}, ops::Deref, pin::Pin, sync::{atomic
 use bytes::{BufMut, BytesMut};
 use ed25519_dalek::{verify_batch, Signature, SIGNATURE_LENGTH};
 use futures::SinkExt;
-use log::{info, trace};
+use itertools::min;
+use log::{info, trace, warn};
 use prost::Message;
 use rand::{thread_rng, Rng};
 use sha2::{Digest, Sha256};
@@ -45,7 +46,6 @@ impl CachedBlock {
 
 // But no DerefMut, I don't want to allow mutation of the inner block.
 
-
 pub enum FutureHash {
     None,
     Immediate(HashType),
@@ -67,7 +67,7 @@ pub fn hash_proto_block_ser(data: &[u8]) -> HashType {
 }
 
 /// Uses Ed25519 batch verify to verify a quorum certificate.
-fn verify_qc(keystore: &KeyStore, qc: &ProtoQuorumCertificate) -> bool {
+fn verify_qc(keystore: &KeyStore, qc: &ProtoQuorumCertificate, min_len: usize) -> bool {
     let mut keys = Vec::new();
     let mut sigs = Vec::new();
     for sig in &qc.sig {
@@ -88,11 +88,21 @@ fn verify_qc(keystore: &KeyStore, qc: &ProtoQuorumCertificate) -> bool {
         }
     }
 
+    if keys.len() < min_len {
+        return false;
+    }
+
     let msgs = (0..keys.len()).map(|_| qc.digest.as_slice()).collect::<Vec<_>>();
 
 
-    verify_batch(&msgs, sigs.as_slice(), &keys)
-        .is_ok()
+    let res = verify_batch(&msgs, sigs.as_slice(), &keys)
+        .is_ok();
+
+    if !res {
+        warn!("QC verification failed");
+    }
+    
+    res
 
 }
 
@@ -107,7 +117,7 @@ enum CryptoServiceCommand {
     CheckBlockSer(HashType, oneshot::Receiver<Result<Vec<u8>, Error>>, oneshot::Sender<Result<CachedBlock, Error>>),
     
     // Deserializes and verifies block serialization
-    VerifyBlockSer(Vec<u8>, oneshot::Sender<Result<CachedBlock, Error>>, oneshot::Sender<Result<HashType, Error>>),
+    VerifyBlockSer(usize /* min_qc_len */, Vec<u8>, oneshot::Sender<Result<CachedBlock, Error>>, oneshot::Sender<Result<HashType, Error>>),
     
     // For View Change prep/verification
     PrepareVC(ProtoViewChange, oneshot::Sender<ProtoViewChange>),
@@ -284,7 +294,7 @@ impl CryptoService {
                         },
                     };
                 },
-                CryptoServiceCommand::VerifyBlockSer(block_ser, block_tx, hash_tx) => {
+                CryptoServiceCommand::VerifyBlockSer(min_qc_len, block_ser, block_tx, hash_tx) => {
                     let block = deserialize_proto_block(block_ser.as_ref());
                     let hsh = hash_proto_block_ser(&block_ser);
 
@@ -319,7 +329,7 @@ impl CryptoService {
                                 // Verify QCs
                                 let mut all_qcs_valid = true;
                                 for qc in &block.qc {
-                                    if !verify_qc(&keystore, qc) {
+                                    if !verify_qc(&keystore, qc, min_qc_len) {
                                         all_qcs_valid = false;
                                         break;
                                     }
@@ -505,12 +515,12 @@ impl CryptoServiceConnector {
         dispatch_cmd!(self, CryptoServiceCommand::CheckBlockSer, hsh, ser_rx)
     }
 
-    pub async fn prepare_fork(&mut self, mut part: Vec<HalfSerializedBlock>, remaining_parts: usize, ae_stats: AppendEntriesStats) -> MultipartFork {
+    pub async fn prepare_fork(&mut self, mut part: Vec<HalfSerializedBlock>, remaining_parts: usize, ae_stats: AppendEntriesStats, min_qc_len: usize) -> MultipartFork {
         let mut fork_future = Vec::with_capacity(part.len());
         for e in part.drain(..) {
             let (tx, rx) = oneshot::channel();
             let (_tx2, _rx) = oneshot::channel();
-            self.dispatch(CryptoServiceCommand::VerifyBlockSer(e.serialized_body, tx, _tx2)).await;
+            self.dispatch(CryptoServiceCommand::VerifyBlockSer(min_qc_len, e.serialized_body, tx, _tx2)).await;
             fork_future.push(Some(rx));
         }
         MultipartFork {
@@ -520,7 +530,7 @@ impl CryptoServiceConnector {
         }
     }
 
-    pub async fn prepare_for_rebroadcast(&mut self, mut part: Vec<HalfSerializedBlock>) -> Vec<(
+    pub async fn prepare_for_rebroadcast(&mut self, mut part: Vec<HalfSerializedBlock>, min_qc_len: usize) -> Vec<(
         oneshot::Receiver<Result<CachedBlock, Error>>,
         oneshot::Receiver<Result<HashType, Error>>
     )> {
@@ -528,7 +538,7 @@ impl CryptoServiceConnector {
         for e in part.drain(..) {
             let (tx, rx) = oneshot::channel();
             let (tx2, rx2) = oneshot::channel();
-            self.dispatch(CryptoServiceCommand::VerifyBlockSer(e.serialized_body, tx, tx2)).await;
+            self.dispatch(CryptoServiceCommand::VerifyBlockSer(min_qc_len, e.serialized_body, tx, tx2)).await;
             fork_future.push((rx, rx2));
         }
         fork_future

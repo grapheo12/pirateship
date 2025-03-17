@@ -1,7 +1,7 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use pft::config::{self, Config};
 use pft::consensus_v2;
 use tokio::{runtime, signal};

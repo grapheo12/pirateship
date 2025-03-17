@@ -221,6 +221,11 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
 
                 self.stats.total_requests += length as u64;
 
+                if self.stats.last_n % 1000 == 0 {
+                    // This is necessary for manual sanity checks.
+                    self.stats.print();
+                }
+
                 self.perf_register(n);
             },
             AppCommand::CrashCommit(blocks) => {
@@ -291,6 +296,12 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
                 if self.stats.ci > new_last_block {
                     self.stats.ci = new_last_block;
                 }
+
+                if self.stats.last_n > new_last_block {
+                    warn!("Rolling back to block {}", new_last_block);
+                }
+
+                self.stats.last_n = new_last_block;
                 self.engine.handle_rollback(new_last_block);
             }
         }

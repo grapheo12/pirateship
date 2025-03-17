@@ -281,7 +281,7 @@ impl Staging {
         ae_stats: AppendEntriesStats,
     ) -> Result<(), ()> {
         if !self.view_is_stable {
-            info!("Processing block {} as leader", block.block.n);
+            trace!("Processing block {} as leader", block.block.n);
         }
         if ae_stats.view < self.view {
             // Do not accept anything from a lower view.
@@ -432,7 +432,7 @@ impl Staging {
         ae_stats: AppendEntriesStats,
     ) -> Result<(), ()> {
         if !self.view_is_stable {
-            info!("Processing block {} as follower", block.block.n);
+            trace!("Processing block {} as follower", block.block.n);
         }
         if ae_stats.view < self.view {
             // Do not accept anything from a lower view.
@@ -563,7 +563,8 @@ impl Staging {
     }
 
     pub(super) async fn verify_and_process_vote(&mut self, sender: String, vote: ProtoVote) -> Result<(), ()> {
-        debug!("Got vote on {} from {}", vote.n, sender);
+        let _n = vote.n;
+        debug!("Got vote on {} from {}", _n, sender);
         let mut verify_futs = Vec::new();
         for sig in &vote.sig_array {
             let found_block = self
@@ -593,7 +594,7 @@ impl Staging {
                     }
                 }
                 Err(_) => {
-                    // This is a vote for a block I have byz committed.
+                    trace!("This is a vote for a block I have byz committed. n = {}", _n);
                     continue;
                 }
             }
@@ -601,6 +602,7 @@ impl Staging {
 
         let results = try_join_all(verify_futs).await.unwrap();
         if !results.iter().all(|e| *e) {
+            trace!("Failed to verify vote on {} from {}", _n, sender);
             return Ok(());
         }
 

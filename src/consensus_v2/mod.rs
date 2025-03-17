@@ -226,6 +226,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let block_maker_crypto = crypto.get_connector();
         let block_broadcaster_crypto = crypto.get_connector();
         let block_broadcaster_storage = storage.get_connector(block_broadcaster_crypto);
+        let block_broadcaster_crypto2 = crypto.get_connector();
         let logserver_crypto = crypto.get_connector();
         let logserver_storage = storage.get_connector(logserver_crypto);
         let staging_crypto = crypto.get_connector();
@@ -235,7 +236,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let ctx = PinnedConsensusServerContext::new(config.clone(), keystore.clone(), batch_proposer_tx, fork_tx, vote_tx, view_change_tx, backfill_request_tx);
         let batch_proposer = BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, app_tx.clone(), batch_proposer_command_rx);
         let block_sequencer = BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto);
-        let block_broadcaster = BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, fork_receiver_command_tx.clone(), app_tx.clone());
+        let block_broadcaster = BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_crypto2, block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, fork_receiver_command_tx.clone(), app_tx.clone());
         let staging = Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, pacemaker_cmd_rx, pacemaker_cmd_tx2, client_reply_command_tx.clone(), app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx, batch_proposer_command_tx, logserver_tx);
         let fork_receiver = ForkReceiver::new(config.clone(), fork_receiver_crypto, fork_receiver_client.into(), fork_rx, fork_receiver_command_rx, other_block_tx, logserver_query_tx.clone());
         let app = Application::new(config.clone(), app_rx, unlogged_rx, client_reply_command_tx);
