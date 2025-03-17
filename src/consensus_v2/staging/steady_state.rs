@@ -6,16 +6,13 @@ use prost::Message;
 use tokio::sync::oneshot;
 
 use crate::{
-    crypto::CachedBlock,
-    proto::{
+    consensus_v2::logserver::LogServerCommand, crypto::CachedBlock, proto::{
         consensus::{
             proto_block::Sig, ProtoNameWithSignature, ProtoQuorumCertificate,
             ProtoSignatureArrayEntry, ProtoVote,
         },
         rpc::ProtoPayload,
-    },
-    rpc::{client::PinnedClient, PinnedMessage, SenderType},
-    utils::StorageAck
+    }, rpc::{client::PinnedClient, PinnedMessage, SenderType}, utils::StorageAck
 };
 
 use super::{
@@ -314,12 +311,19 @@ impl Staging {
                     info!("New View message for view {}", self.view);
                 }
                 // Signal a rollback, if necessary
-                self.pending_blocks
-                    .retain(|e| e.block.block.n < block.block.n);
+                // self.pending_blocks
+                //     .retain(|e| e.block.block.n < block.block.n);
+                self.rollback(block.block.n - 1).await;
             }
             // Invariant <ViewLock>: Within the same view, the log must be append-only.
             if !self.check_continuity(&block) {
                 warn!("Continuity broken");
+                if block.block.n == self.bci { // This is just a sanity check.
+                    if self.curr_parent_for_pending.is_some() 
+                    && !self.curr_parent_for_pending.as_ref().unwrap().block_hash.eq(&block.block_hash) {
+                        error!("Trying to override a byz-committed block!!");
+                    }
+                }
                 return Ok(());
             }
 
@@ -349,14 +353,15 @@ impl Staging {
                 .unwrap();
 
             // Flush the pending queue and cancel client requests.
-            let old_pending_len = self.pending_blocks.len();
-            self.pending_blocks
-                .retain(|e| e.block.block.n < block.block.n);
-            let new_pending_len = self.pending_blocks.len();
-            if new_pending_len < old_pending_len {
-                // Signal a rollback
-            }
-            self.pending_signatures.retain(|(n, _)| *n < block.block.n);
+            self.rollback(block.block.n - 1).await;
+            // let old_pending_len = self.pending_blocks.len();
+            // self.pending_blocks
+            //     .retain(|e| e.block.block.n < block.block.n);
+            // let new_pending_len = self.pending_blocks.len();
+            // if new_pending_len < old_pending_len {
+            //     // Signal a rollback
+            // }
+            // self.pending_signatures.retain(|(n, _)| *n < block.block.n);
             self.client_reply_tx
                 .send(ClientReplyCommand::CancelAllRequests)
                 .await
@@ -384,7 +389,7 @@ impl Staging {
         }
 
         self.perf_register_block(&block);
-        self.logserver_tx.send(block.clone()).await.unwrap();
+        self.logserver_tx.send(LogServerCommand::NewBlock(block.clone())).await.unwrap();
 
         // Postcondition here: block.view == self.view && check_continuity() == true && i_am_leader
         let block_view_is_stable = block.block.view_is_stable;
@@ -458,8 +463,9 @@ impl Staging {
                     info!("New View message for view {}", self.view);
                 }
                 // Signal a rollback, if necessary
-                self.pending_blocks
-                    .retain(|e| e.block.block.n < block.block.n);
+                self.rollback(block.block.n - 1).await;
+                // self.pending_blocks
+                //     .retain(|e| e.block.block.n < block.block.n);
             }
 
             // Invariant <ViewLock>: Within the same view, the log must be append-only.
@@ -520,7 +526,7 @@ impl Staging {
             }
         }
 
-        self.logserver_tx.send(block.clone()).await.unwrap();
+        self.logserver_tx.send(LogServerCommand::NewBlock(block.clone())).await.unwrap();
 
         // Postcondition here: block.view == self.view && check_continuity() == true && !i_am_leader
         let block_with_votes = CachedBlockWithVotes {
@@ -824,11 +830,19 @@ impl Staging {
         }
 
         let _ = self.app_tx.send(AppCommand::ByzCommit(byz_blocks)).await;
+        let _ = self.logserver_tx.send(LogServerCommand::UpdateBCI(self.bci)).await;
     }
 
     fn maybe_update_last_qc(&mut self, qc: &ProtoQuorumCertificate) {
         if qc.n > self.last_qc.as_ref().map(|e| e.n).unwrap_or(0) {
             self.last_qc = Some(qc.clone());
         }
+    }
+
+    async fn rollback(&mut self, n: u64) {
+        self.pending_blocks.retain(|e| e.block.block.n <= n);
+        self.pending_signatures.retain(|(_n, _)| *_n <= n);
+        self.app_tx.send(AppCommand::Rollback(n)).await.unwrap();
+        self.logserver_tx.send(LogServerCommand::Rollback(n)).await.unwrap();
     }
 }

@@ -283,8 +283,11 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
                     self.perf_deregister(n);
                 }
             },
-            AppCommand::Rollback(new_last_block) => {               
-                assert!(new_last_block >= self.stats.bci);
+            AppCommand::Rollback(mut new_last_block) => {               
+                if new_last_block <= self.stats.bci {
+                    new_last_block = self.stats.bci + 1;
+                }
+
                 if self.stats.ci > new_last_block {
                     self.stats.ci = new_last_block;
                 }

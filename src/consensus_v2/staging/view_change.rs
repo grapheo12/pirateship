@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, sync::atomic::fence};
 
-use log::{error, info, warn};
+use log::{error, info, trace, warn};
 use prost::Message as _;
 
 use crate::{
@@ -52,7 +52,7 @@ impl Staging {
         self.view_is_stable = false;
 
         let vc_msg = self.create_my_vc_msg().await;
-        error!("VC Msg: {:?}", vc_msg);
+        trace!("VC Msg: {:?}", vc_msg);
 
         let (payload, vc_msg) = { // Jumping through hoops to avoid cloning.
             let payload = ProtoPayload {

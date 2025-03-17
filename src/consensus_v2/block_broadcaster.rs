@@ -226,7 +226,7 @@ impl BlockBroadcaster {
         ae_fork.push(block.clone());
 
         if ae_fork.len() > 1 {
-            error!("AE: {:?}", ae_fork);
+            trace!("AE: {:?}", ae_fork);
         }
 
         for block in &ae_fork {

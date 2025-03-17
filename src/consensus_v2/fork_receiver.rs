@@ -4,7 +4,7 @@ use log::{debug, info, warn};
 use prost::Message;
 use tokio::sync::{Mutex, oneshot};
 
-use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::{checkpoint::ProtoBackfillNack, consensus::{HalfSerializedBlock, ProtoAppendEntries}, rpc::ProtoPayload}, rpc::{client::PinnedClient, MessageRef, SenderType}, utils::channel::{Receiver, Sender}};
+use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector, HashType}, proto::{checkpoint::ProtoBackfillNack, consensus::{HalfSerializedBlock, ProtoAppendEntries}, rpc::ProtoPayload}, rpc::{client::PinnedClient, MessageRef, SenderType}, utils::{channel::{Receiver, Sender}, get_parent_hash_in_proto_block_ser}};
 
 
 pub enum ForkReceiverCommand {
@@ -46,6 +46,11 @@ impl MultipartFork {
     }
 }
 
+struct ContinuityStats {
+    last_ae_view: u64,
+    last_ae_block_hash: Option<HashType>,
+}
+
 
 /// Receives AppendEntries from other nodes in the network.
 /// Verifies the view change and config change sequence in the sent fork.
@@ -71,6 +76,9 @@ pub struct ForkReceiver {
     // If blocked_on_multipart is true, multipart_buffer must not be empty
     // AND no new AppendEntries will be processed.
     blocked_on_multipart: bool,
+
+    continuity_stats: ContinuityStats,
+
 }
 
 
@@ -94,6 +102,10 @@ impl ForkReceiver {
             broadcaster_tx,
             multipart_buffer: VecDeque::new(),
             blocked_on_multipart: false,
+            continuity_stats: ContinuityStats {
+                last_ae_view: 0,
+                last_ae_block_hash: None,
+            }
         }
     }
 
@@ -136,12 +148,6 @@ impl ForkReceiver {
     }
 
     async fn process_fork(&mut self, mut ae: ProtoAppendEntries, sender: String) {
-        let fork = match &mut ae.fork {
-            Some(f) => f,
-            None => return,
-        };
-
-
         if ae.view < self.view || ae.config_num < self.config_num {
             warn!("Old view AppendEntry received: ae view {} < my view {} or ae config num {} < my config num {}", ae.view, self.view, ae.config_num, self.config_num);
             return;
@@ -158,6 +164,17 @@ impl ForkReceiver {
 
         // Not going to check for ViewLock here.
         // Staging takes care of that.
+        // But at least I can make sure that the AppendEntries start from a common prefix.
+        if self.ensure_common_prefix(&ae).await.is_err() {
+            return;
+        }
+
+        let fork = match &mut ae.fork {
+            Some(f) => f,
+            None => return,
+        };
+
+
 
 
         // if ae.view > self.view {
@@ -259,6 +276,10 @@ impl ForkReceiver {
     async fn handle_command(&mut self, cmd: ForkReceiverCommand) {
         match cmd {
             ForkReceiverCommand::UpdateView(view, config_num) => {
+                if self.view != view {
+                    self.continuity_stats.last_ae_view = view;
+                    self.continuity_stats.last_ae_block_hash = None;
+                }
                 self.view = view;
                 let config_is_updating = self.config_num < config_num;
                 self.config_num = config_num;
@@ -329,5 +350,35 @@ impl ForkReceiver {
         let _ = PinnedClient::send(&self.client, &sender,
             MessageRef(&buf, sz, &SenderType::Anon)
         ).await;
+    }
+
+
+    /// This doesn't have an exact logic.
+    /// Since due to no locking, the log server works with a slightly outdated view of the log than staging.
+    /// For safety, it is ok to send a nack when the block could pass through staging.
+    /// But it is not ok to send a block to staging when it should have been nacked.
+    /// Since staging doesn't have the context to send the nack.
+    /// 
+    /// Logic:
+    /// - If the parent of the ae was the last one this fork receiver forwarded, then the fork may be valid. Forward it.
+    /// - If the parent of the ae is seen by the log server, then the fork may be valid. Forward it.
+    /// If none of these cases match, then there is high probability you do actually need to backfill.
+    /// Assumption on Logserver: Eventually, the log server has all the log entries that staging has.
+    async fn ensure_common_prefix(&mut self, ae: &ProtoAppendEntries) -> Result<(), ()> {
+        let fork = ae.fork.as_ref().unwrap();
+        let parent_hash = get_parent_hash_in_proto_block_ser(
+            &fork.serialized_blocks.first().unwrap().serialized_body
+        ).unwrap();
+
+        if self.continuity_stats.last_ae_block_hash.is_some() {
+            let local_hash_check = self.continuity_stats.last_ae_block_hash.as_ref().unwrap().eq(&parent_hash);
+
+            if local_hash_check {
+                return Ok(());
+            }
+        }
+
+        // TODO: Ask logserver
+        Ok(())
     }
 }

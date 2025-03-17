@@ -66,14 +66,20 @@ impl ReadCache {
 pub enum LogServerQuery {
     CheckHash(u64 /* block.n */, Vec<u8> /* block_hash */, oneshot::Sender<bool>),
     GetHints(u64 /* last needed block.n */, oneshot::Sender<Vec<ProtoBlockHint>>),
-    Rollback(u64 /* block.n */),
+}
+
+pub enum LogServerCommand {
+    NewBlock(CachedBlock),
+    Rollback(u64),
+    UpdateBCI(u64),
 }
 
 pub struct LogServer {
     config: AtomicConfig,
     client: PinnedClient,
+    bci: u64,
 
-    logserver_rx: Receiver<CachedBlock>,
+    logserver_rx: Receiver<LogServerCommand>,
     backfill_request_rx: Receiver<ProtoBackfillNack>,
     gc_rx: Receiver<u64>,
 
@@ -92,7 +98,7 @@ const LOGSERVER_READ_CACHE_WSS: usize = 100;
 impl LogServer {
     pub fn new(
         config: AtomicConfig, client: PinnedClient,
-        logserver_rx: Receiver<CachedBlock>, backfill_request_rx: Receiver<ProtoBackfillNack>,
+        logserver_rx: Receiver<LogServerCommand>, backfill_request_rx: Receiver<ProtoBackfillNack>,
         gc_rx: Receiver<u64>, query_rx: Receiver<LogServerQuery>,
         storage: StorageServiceConnector) -> Self {
         LogServer {
@@ -104,6 +110,7 @@ impl LogServer {
             storage,
             log: VecDeque::new(),
             read_cache: ReadCache::new(LOGSERVER_READ_CACHE_WSS),
+            bci: 0,
         }
     }
 
@@ -120,10 +127,24 @@ impl LogServer {
     async fn worker(&mut self) -> Result<(), ()> {
         tokio::select! {
             biased;
-            block = self.logserver_rx.recv() => {
-                if let Some(block) = block {
-                    trace!("Received block {}", block.block.n);
-                    self.handle_new_block(block).await;
+            cmd = self.logserver_rx.recv() => {
+                match cmd {
+                    Some(LogServerCommand::NewBlock(block)) => {
+                        trace!("Received block {}", block.block.n);
+                        self.handle_new_block(block).await;
+                    },
+                    Some(LogServerCommand::Rollback(n)) => {
+                        trace!("Rolling back to block {}", n);
+                        self.handle_rollback(n).await;
+                    },
+                    Some(LogServerCommand::UpdateBCI(n)) => {
+                        trace!("Updating BCI to {}", n);
+                        self.bci = n;
+                    },
+                    _ => {
+                        error!("LogServerCommand channel closed");
+                        return Err(());
+                    }
                 }
             },
 
@@ -391,9 +412,6 @@ impl LogServer {
                 }
 
                 sender.send(hints).unwrap();
-            },
-            LogServerQuery::Rollback(n) => {
-                self.log.retain(|block| block.block.n <= n);
             }
         }
     }
@@ -413,5 +431,17 @@ impl LogServer {
         }
 
         self.log.push_back(block);
+    }
+
+
+    async fn handle_rollback(&mut self, mut n: u64) {
+        if n <= self.bci {
+            n = self.bci + 1;
+        }
+
+        self.log.retain(|block| block.block.n <= n);
+
+        // Clean up read cache.
+        self.read_cache.cache.retain(|k, _| *k <= n);
     }
 }

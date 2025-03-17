@@ -1,5 +1,7 @@
 workdir = "deployment_artifacts"
 project_home = "https://github.com/grapheo12/pirateship"
+deployment_setup = "docker"
+
 
 [deployment_config]
 mode = "manual" # "lan", "dev", "wan", "lan-small", "lan-nontee" etc.
