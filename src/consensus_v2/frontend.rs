@@ -4,12 +4,15 @@ use std::sync::{Arc, Mutex};
 use crate::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase};
 use crate::utils::channel::{make_channel, Receiver, Sender};
 
-
-
 #[put("/set/{key}")]
 async fn set_key(key: web::Path<String>, value: web::Json<String>) -> impl Responder {
     let key_str = key.into_inner();
     let value_str = value.into_inner();
+
+    ProtoTransactionOp {
+        op_type: crate::proto::execution::ProtoTransactionOpType::Write.into(),
+        operands: vec![key_str.clone().into_bytes(), value_str.clone().into_bytes()],
+    };
 
     HttpResponse::Ok().json(serde_json::json!({
         "message": "Key set successfully",
@@ -21,6 +24,12 @@ async fn set_key(key: web::Path<String>, value: web::Json<String>) -> impl Respo
 #[get("/get/{key}")]
 async fn get_key(key: web::Path<String>) -> impl Responder {
     let key_str = key.into_inner();
+
+    ProtoTransactionOp {
+        op_type: crate::proto::execution::ProtoTransactionOpType::Read.into(),
+        operands: vec![key_str.clone().into_bytes()],
+    };
+
     HttpResponse::Ok().json(serde_json::json!({
         "message": "Key found successfully",
         "key": key_str,
@@ -30,22 +39,21 @@ async fn get_key(key: web::Path<String>) -> impl Responder {
 #[get("/")]
 async fn home() -> impl Responder {
     HttpResponse::Ok().json(serde_json::json!({
-        "message": "Welcome to the Pirateship API!"
+        "message": "hi"
     }))
 }
 
-pub async fn run_server() -> std::io::Result<()> {
-    HttpServer::new( || {
+pub async fn run_actix_server() -> std::io::Result<()> {
+    HttpServer::new(|| {
         App::new()
-            .service(set_key)
-            .service(get_key)
-            .service(home)
+        .service(set_key)
+        .service(get_key)
+        .service(home)
     })
-    .bind(("127.0.0.1", 8080))?
-    .run()
+    .bind("127.0.0.1:8080")? 
+    .run()                
     .await
 }
-
 // Tests
 /*
 curl -X GET "http://localhost:8080/"

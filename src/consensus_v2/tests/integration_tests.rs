@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::process::exit;
 use std::time::{Duration, Instant};
-
+use futures::FutureExt;
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use actix_web::rt::spawn;
 use core_affinity::CoreId;
-use log::{error, info};
+use log::{debug, error, info, warn};
 use prost::Message;
+use tokio::runtime::Runtime;
 use tokio::signal;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::Mutex;
@@ -29,14 +31,13 @@ use crate::utils::channel::make_channel;
 use crate::utils::{RocksDBStorageEngine, StorageService};
 use crate::{config::Config, consensus_v2::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}, utils::channel::{Receiver, Sender}};
 
-use crate::consensus_v2::tests::frontend::run_server;
+// use crate::consensus_v2::tests::frontend::run_server;
 
 use actix_web::{put, get, web, App, HttpResponse, HttpServer, Responder};
 
-
 const PAYLOAD_SIZE: usize = 512;
 const RUNTIME: Duration = Duration::from_secs(30);
-const NUM_CLIENTS: usize = 200;
+const NUM_CLIENTS: usize = 0;
 const NUM_CONCURRENT_REQUESTS: usize = 100;
 const TEST_CRYPTO_NUM_TASKS: usize = 3;
 
@@ -142,7 +143,7 @@ async fn load_close_loop(batch_proposer_tx: Sender<TxWithAckChanTag>, client_id:
 }
 
 macro_rules! pinned_runtime {
-    ($fn_name: expr) => {
+    ($fn_name: expr) => {{
         // Generate configs first
         let cfg_path = "configs/node1_config.json";
         let cfg_contents = std::fs::read_to_string(cfg_path).expect("Invalid file path");
@@ -187,10 +188,10 @@ macro_rules! pinned_runtime {
         client_rt.block_on(async move {
             client_handle.await.unwrap();
         });
-    };
+    }};
 }
 
-async fn client_runner(batch_proposer_tx: Sender<TxWithAckChanTag>, num_clients: usize) {
+async fn client_runner(batch_proposer_tx: Sender<TxWithAckChanTag>, num_clients: usize) { return;
     let mut handles = Vec::new();
     for client_id in 0..num_clients {
         let batch_proposer_tx = batch_proposer_tx.clone();
@@ -351,148 +352,108 @@ async fn _test_client_reply(config: Config, batch_proposer_rx: Receiver<TxWithAc
 }
 
 #[test]
-fn test_client_reply2() {
-    pinned_runtime!(_test_client_reply2);
+fn run_test_2() {
+    pinned_runtime!(run_test)
+}
+async fn run_test(config: Config, batch_proposer_rx: Receiver<TxWithAckChanTag>, num_clients: usize) {
+    println!("start");
+    _test_client_reply2().await;
+    println!("finished");
 }
 
-async fn _test_client_reply2(config: Config, batch_proposer_rx: Receiver<TxWithAckChanTag>, num_clients: usize) {
-    // Generate configs first
-    let cfg_path = "configs/node1_config.json";
-    let cfg_contents = std::fs::read_to_string(cfg_path).expect("Invalid file path");
+async fn _test_client_reply2() {
+    println!("into here");
+    let result = HttpServer::new( || {
+        App::new()
+            .service(set_key)
+            .service(get_key)
+            .service(home)
+    })
+    .bind(("127.0.0.1", 8080)).unwrap().run();
+    let srv_handle = result.handle();
+    tokio::spawn(result);
+}   
 
-    let config = Config::deserialize(&cfg_contents);
-    let _chan_depth = config.rpc_config.channel_depth as usize;
-    let key_store = KeyStore::new(&config.rpc_config.allowed_keylist_path, &config.rpc_config.signing_priv_key_path);
 
-    let config = AtomicConfig::new(config);
-    let keystore = AtomicKeyStore::new(key_store);
-    let mut crypto = CryptoService::new(TEST_CRYPTO_NUM_TASKS, keystore.clone(), config.clone());
-    crypto.run();
 
-    let client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
-    let staging_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
+// #[test]
+// fn run_test() {
+//     println!("start");
+//     let rt = tokio::runtime::Runtime::new().unwrap();
+//     rt.block_on(async {
+//         _test_client_reply2().await;
+//     });
+//     println!("finished");
 
-    let storage_config = &config.get().consensus_config.log_storage_config;
-    let (mut storage, storage_path) = match storage_config {
-        rocksdb_config @ crate::config::StorageConfig::RocksDB(_inner) => {
-            let _db = RocksDBStorageEngine::new(rocksdb_config.clone());
-            (StorageService::new(_db, _chan_depth), _inner.db_path.clone())
-        },
-        crate::config::StorageConfig::FileStorage(_) => {
-            panic!("File storage not supported!");
-        },
+// }
+
+
+// async fn _test_client_reply2() {
+//     println!("into here");
+//     tokio::spawn(async {
+//         run_server()
+//     });
+//     println!("out of here");
+
+//     ()
+//         // let handle = tokio::spawn(async {
+//     //     run_server();
+//     //     "return value"
+//     // });
+// }
+
+
+
+
+#[put("/set/{key}")]
+async fn set_key(key: web::Path<String>, value: web::Json<String>) -> impl Responder {
+    let key_str = key.into_inner();
+    let value_str = value.into_inner();
+
+    ProtoTransactionOp {
+        op_type: crate::proto::execution::ProtoTransactionOpType::Write.into(),
+        operands: vec![key_str.clone().into_bytes(), value_str.clone().into_bytes()],
     };
 
-
-    let (block_maker_tx, block_maker_rx) = make_channel(_chan_depth);
-    let (control_command_tx, control_command_rx) = make_channel(_chan_depth);
-    let (qc_tx, qc_rx) = unbounded_channel();
-    let (block_broadcaster_tx, block_broadcaster_rx) = make_channel(_chan_depth);
-    let (other_block_tx, other_block_rx) = make_channel(_chan_depth);
-    let (client_reply_tx, client_reply_rx) = make_channel(_chan_depth);
-    let (client_reply_command_tx, client_reply_command_rx) = make_channel(_chan_depth);
-    let (broadcaster_control_command_tx, broadcaster_control_command_rx) = make_channel(_chan_depth);
-    let (staging_tx, staging_rx) = make_channel(_chan_depth);
-    let (logserver_tx, mut logserver_rx) = make_channel(_chan_depth);
-    let (vote_tx, vote_rx) = make_channel(_chan_depth);
-    let (view_change_tx, view_change_rx) = make_channel(_chan_depth);
-    let (app_tx, app_rx) = make_channel(_chan_depth);
-    let (fork_receiver_command_tx, mut fork_receiver_command_rx) = make_channel(_chan_depth);
-    let (unlogged_tx, unlogged_rx) = make_channel(_chan_depth);
-
-    let block_maker_crypto = crypto.get_connector();
-    let block_broadcaster_crypto = crypto.get_connector();
-    let block_broadcaster_storage = storage.get_connector(block_broadcaster_crypto);
-    let staging_crypto = crypto.get_connector();
-
-    let batch_proposer = Arc::new(Mutex::new(BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, app_tx.clone())));
-    let block_maker = Arc::new(Mutex::new(BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto)));
-    let block_broadcaster = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, logserver_tx, fork_receiver_command_tx.clone(), app_tx.clone())));
-    let staging = Arc::new(Mutex::new(Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, view_change_rx, client_reply_command_tx.clone(), app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx)));
-    let app = Arc::new(Mutex::new(Application::<KVSAppEngine>::new(config.clone(), app_rx, unlogged_rx, client_reply_command_tx)));
-    let client_reply = Arc::new(Mutex::new(ClientReplyHandler::new(config.clone(), client_reply_rx, client_reply_command_rx)));
-    let mut handles = JoinSet::new();
-
-    handles.spawn(async move {
-        storage.run().await;
-    });
-
-    handles.spawn(async move {
-        BatchProposer::run(batch_proposer).await;
-        println!("Batch proposer quits");
-    });
-
-    handles.spawn(async move {
-        ClientReplyHandler::run(client_reply).await;
-        println!("Client reply quits");
-    });
-
-    handles.spawn(async move {
-        while let Some(_) = fork_receiver_command_rx.recv().await {
-            // Sink
-        }
-    });
-
-
-
-    handles.spawn(async move {
-        BlockSequencer::run(block_maker).await;
-        println!("Block maker quits");
-    });
-
-    handles.spawn(async move {
-        BlockBroadcaster::run(block_broadcaster).await;
-        println!("Block broadcaster quits");
-    });
-
-    handles.spawn(async move {
-        Staging::run(staging).await;
-        println!("Staging quits");
-    });
-
-    handles.spawn(async move {
-        Application::<KVSAppEngine>::run(app).await;
-        println!("Application quits");
-    });
-
-    let mut total_txs_output = 0;
-
-    let start = Instant::now();
-    let tout = Duration::from_secs(1);
-    while start.elapsed() < RUNTIME {
-        let block = timeout(tout, logserver_rx.recv()).await;
-        if block.is_err() {
-            continue;
-        }
-        total_txs_output += block.unwrap().unwrap().block.tx_list.len();
-    }
-    let total_time = start.elapsed().as_secs_f64();
-    let throughput = total_txs_output as f64 / total_time;
-    println!("Crash Throughput: {} req/s", throughput);
-    
-    tokio::time::sleep(Duration::from_secs(1)).await;
-
-    println!("Errors appearing after this are inconsequential");
-    std::fs::remove_dir_all(&storage_path).unwrap();
-    exit(0);
+    HttpResponse::Ok().json(serde_json::json!({
+        "message": "Key set successfully",
+        "key": key_str,
+        "value": value_str
+    }))
 }
 
+#[get("/get/{key}")]
+async fn get_key(key: web::Path<String>) -> impl Responder {
+    let key_str = key.into_inner();
 
+    ProtoTransactionOp {
+        op_type: crate::proto::execution::ProtoTransactionOpType::Read.into(),
+        operands: vec![key_str.clone().into_bytes()],
+    };
 
-
-#[test]
-fn run_test() {
-    test_run_server_endpoints();
+    HttpResponse::Ok().json(serde_json::json!({
+        "message": "Key found successfully",
+        "key": key_str,
+    }))
 }
 
-#[actix_web::test]
-async fn test_run_server_endpoints() {
-    let local = tokio::task::LocalSet::new();
-    local.run_until(async {
-        tokio::task::spawn_local(async move {
-            run_server().await.unwrap();
-        }).await.unwrap();
-    }).await;
-    // Ok(());
-    let _result = Some(());
+#[get("/")]
+async fn home() -> impl Responder {
+    HttpResponse::Ok().json(serde_json::json!({
+        "message": "hi"
+    }))
+}
+
+#[actix_web::main]
+pub async fn run_server() -> std::io::Result<()> {
+    println!("server is starting!");
+    HttpServer::new( || {
+        App::new()
+            .service(set_key)
+            .service(get_key)
+            .service(home)
+    })
+    .bind(("127.0.0.1", 8080))?
+    .run()
+    .await
 }

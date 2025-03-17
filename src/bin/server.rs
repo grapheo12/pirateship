@@ -7,10 +7,11 @@ use pft::consensus_v2;
 use tokio::{runtime, signal};
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
 use pft::consensus_v2::engines::null_app::NullApp;
-use std::io::Write;
+use pft::consensus_v2::frontend;
+use std::thread;
 
-#[global_allocator]
-static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+// #[global_allocator]
+// static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 /// Fetch json config file from command line path.
 /// Panic if not found or parsed properly.
@@ -56,6 +57,15 @@ fn get_feature_set() -> (&'static str, &'static str) {
     (protocol, app)
 }
 
+async fn test_run() {
+    let v = &["apples", "cake", "coffee"];
+
+    for text in v {
+        println!("I like {}.", text);
+    }
+}
+
+
 async fn run_main(cfg: Config) -> io::Result<()> {
     #[cfg(feature = "app_logger")]
     let mut node = consensus_v2::ConsensusNode::<NullApp>::new(cfg);
@@ -90,54 +100,72 @@ async fn run_main(cfg: Config) -> io::Result<()> {
 const NUM_THREADS: usize = 32;
 
 fn main() {
-    log4rs::init_config(config::default_log4rs_config()).unwrap();
+    // log4rs::init_config(config::default_log4rs_config()).unwrap();
 
-    let cfg = process_args();
+    // let cfg = process_args();
 
-    let (protocol, app) = get_feature_set();
-    info!("Protocol: {}, App: {}", protocol, app);
+    // let (protocol, app) = get_feature_set();
+    // info!("Protocol: {}, App: {}", protocol, app);
 
-    #[cfg(feature = "evil")]
-    if cfg.evil_config.simulate_byzantine_behavior {
-        warn!("Will simulate Byzantine behavior!");
-    }
+    // #[cfg(feature = "evil")]
+    // if cfg.evil_config.simulate_byzantine_behavior {
+    //     warn!("Will simulate Byzantine behavior!");
+    // }
 
-    let core_ids = 
-        Arc::new(Mutex::new(Box::pin(core_affinity::get_core_ids().unwrap())));
+    // let core_ids = 
+    //     Arc::new(Mutex::new(Box::pin(core_affinity::get_core_ids().unwrap())));
 
-    let start_idx = cfg.consensus_config.node_list.iter().position(|r| r.eq(&cfg.net_config.name)).unwrap();
-    let mut num_threads = NUM_THREADS;
-    {
-        let _num_cores = core_ids.lock().unwrap().len();
-        if _num_cores - 1 < num_threads {
-            // Leave one core for the storage compaction thread.
-            num_threads = _num_cores - 1;
-        }
-    }
+    // let start_idx = cfg.consensus_config.node_list.iter().position(|r| r.eq(&cfg.net_config.name)).unwrap();
+    // let mut num_threads = NUM_THREADS;
+    // {
+    //     let _num_cores = core_ids.lock().unwrap().len();
+    //     if _num_cores - 1 < num_threads {
+    //         // Leave one core for the storage compaction thread.
+    //         num_threads = _num_cores - 1;
+    //     }
+    // }
+    let num_threads = 4;
 
-    let start_idx = start_idx * num_threads;
+    // let start_idx = start_idx * num_threads;
     
     let i = Box::pin(AtomicUsize::new(0));
     let runtime = runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(num_threads)
-        .on_thread_start(move || {
-            let _cids = core_ids.clone();
-            let lcores = _cids.lock().unwrap();
-            let id = (start_idx + i.fetch_add(1, std::sync::atomic::Ordering::SeqCst)) % lcores.len();
-            let res = core_affinity::set_for_current(lcores[id]);
+        // .on_thread_start(move || {
+        //     let _cids = core_ids.clone();
+        //     let lcores = _cids.lock().unwrap();
+        //     let id = (start_idx + i.fetch_add(1, std::sync::atomic::Ordering::SeqCst)) % lcores.len();
+        //     let res = core_affinity::set_for_current(lcores[id]);
             
-            if res {
-                debug!("Thread pinned to core {:?}", id);
-            }else{
-                debug!("Thread pinning to core {:?} failed", id);
-            }
+        //     if res {
+        //         debug!("Thread pinned to core {:?}", id);
+        //     }else{
+        //         debug!("Thread pinning to core {:?} failed", id);
+        //     }
 
-            std::io::stdout().flush()
-                .unwrap();
-        })
+        //     std::io::stdout().flush()
+        //         .unwrap();
+        // })
         .build()
         .unwrap();
+    
+    let frontend_handle = thread::spawn(|| {
+        // Create the second runtime for the frontend server.
+        let frontend_runtime = runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(2) // adjust as needed
+            .build()
+            .unwrap();
+        // Run the frontend task on the frontend runtime.
+        match frontend_runtime.block_on(frontend::run_actix_server()) {
+            Ok(_) => println!("Frontend server ran successfully."),
+            Err(e) => eprintln!("Frontend server error: {:?}", e),
+        }
+    });
 
-    let _ = runtime.block_on(run_main(cfg));
+    frontend_handle.join().unwrap();
+
+
+    let _ = runtime.block_on(test_run());
 }
