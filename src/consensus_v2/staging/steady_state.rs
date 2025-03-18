@@ -6,7 +6,7 @@ use prost::Message;
 use tokio::sync::oneshot;
 
 use crate::{
-    consensus_v2::logserver::LogServerCommand, crypto::CachedBlock, proto::{
+    consensus_v2::{logserver::LogServerCommand, pacemaker::PacemakerCommand}, crypto::CachedBlock, proto::{
         consensus::{
             proto_block::Sig, ProtoNameWithSignature, ProtoQuorumCertificate,
             ProtoSignatureArrayEntry, ProtoVote,
@@ -156,7 +156,32 @@ impl Staging {
 
     pub(super) async fn handle_view_change_timer_tick(&mut self) -> Result<(), ()> {
         warn!("View change timer fired");
-        self.update_view(self.view + 1, self.config_num).await;
+        if self.view == 0 || self.view_is_stable {
+            self.maybe_update_view(self.view + 1, self.config_num).await;
+
+            return Ok(());
+        }
+
+        // View is not stable.
+        // I may be timing out in the middle of another view change.
+        // In that case, check if I have received enough view change messages
+        // such that if the leader got these messages, it must have sent a new view message.
+        // If not, stay in the same view, ignore the view timer tick.
+        // If yes, (and we are after GST), the leader may have crashed or is among r_live.
+        // In that case, I should update my view.
+
+        let (tx, rx) = oneshot::channel();
+        self.pacemaker_tx.send(PacemakerCommand::QueryEnoughVCMsg(self.view, self.config_num, tx)).await.unwrap();
+        let enough = rx.await.unwrap();
+
+        if enough {
+            if self.__vc_retry_num >= 100 {
+                self.maybe_update_view(self.view + 1, self.config_num).await;
+                self.__vc_retry_num = 0;
+            } else {
+                self.__vc_retry_num += 1;
+            }
+        }
         Ok(())
     }
 
@@ -410,13 +435,13 @@ impl Staging {
 
         // Now vote for self
 
-        if block_view < self.view {
-            return Ok(());
-        }
+        // if block_view < self.view {
+        //     return Ok(());
+        // }
 
-        if !self.view_is_stable && block_view_is_stable {
-            return Ok(());
-        }
+        // if !self.view_is_stable && block_view_is_stable {
+        //     return Ok(());
+        // }
 
         self.vote_on_last_block_for_self(storage_ack).await?;
 
@@ -611,6 +636,9 @@ impl Staging {
 
     /// Precondition: The vote has been cryptographically verified to be from sender.
     async fn process_vote(&mut self, sender: String, mut vote: ProtoVote) -> Result<(), ()> {
+        if !self.view_is_stable {
+            info!("Processing vote on {} from {}", vote.n, sender);
+        }
         if self.view != vote.view {
             return Ok(());
         }

@@ -21,6 +21,8 @@ pub enum PacemakerCommand {
 
     /// Only for staging use to notify about new bci.
     UpdateBCI(u64 /* new bci */),
+
+    QueryEnoughVCMsg(u64 /* view */, u64 /* config */, oneshot::Sender<bool>),
 }
 
 pub struct Pacemaker {
@@ -122,6 +124,18 @@ impl Pacemaker {
                 else if let Some(PacemakerCommand::UpdateBCI(bci)) = cmd {
                     self.bci = bci;
                 }
+
+                else if let Some(PacemakerCommand::QueryEnoughVCMsg(view, config, reply)) = cmd {
+                    if self.last_new_viewed_view >= view {
+                        let _ = reply.send(true);
+                        return Ok(());
+                    }
+                    let key = (view, config);
+                    let vc_buffer_len = self.vc_buffer.get(&key).map_or(0, |v| v.len());
+                    info!("VC buffer len for view {}: {}", view, vc_buffer_len);
+                    let enough = vc_buffer_len >= self.new_view_bcast_threshold();
+                    let _ = reply.send(enough);
+                }
             },
         }
 
@@ -132,13 +146,18 @@ impl Pacemaker {
     async fn handle_view_change(&mut self, vc: ProtoViewChange, sender: SenderType) -> Result<(), ()> {
         let (_view_update_thresh, _new_view_thresh) = (self.pacemaker_view_update_threshold(), self.new_view_bcast_threshold());
         
-        info!("Got view change from {:?}", sender);
+        info!("Got view change from {:?} with view {}", sender, vc.view);
         // Drop if from older view / config.
         if vc.view < self.view_num || vc.config_num < self.config_num {
             info!("Dropping view change from {:?} as it is from older view / config", sender);
             return Ok(());
         }
-        
+
+        if self.last_new_viewed_view >= vc.view {
+            info!("Dropping view change from {:?} as it is from older view", sender);
+            return Ok(());
+        }
+
         // Verify the signature and the fork on the view change message
         // TODO
 

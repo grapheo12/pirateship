@@ -1,10 +1,11 @@
 use std::{collections::VecDeque, io::Error, sync::Arc};
 
+use gluesql::test_suite::default;
 use log::{debug, info, warn};
 use prost::Message;
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector, HashType}, proto::{checkpoint::ProtoBackfillNack, consensus::{HalfSerializedBlock, ProtoAppendEntries}, rpc::ProtoPayload}, rpc::{client::PinnedClient, MessageRef, SenderType}, utils::{channel::{Receiver, Sender}, get_parent_hash_in_proto_block_ser}};
+use crate::{config::AtomicConfig, crypto::{default_hash, CachedBlock, CryptoServiceConnector, HashType}, proto::{checkpoint::ProtoBackfillNack, consensus::{HalfSerializedBlock, ProtoAppendEntries}, rpc::ProtoPayload}, rpc::{client::PinnedClient, MessageRef, SenderType}, utils::{channel::{Receiver, Sender}, get_parent_hash_in_proto_block_ser}};
 
 use super::logserver::LogServerQuery;
 
@@ -50,7 +51,7 @@ impl MultipartFork {
 
 struct ContinuityStats {
     last_ae_view: u64,
-    last_ae_block_hash: Option<HashType>,
+    last_ae_block_hash: Option<oneshot::Receiver<Result<HashType, Error>>>,
 }
 
 macro_rules! ask_logserver {
@@ -220,6 +221,8 @@ impl ForkReceiver {
 
 
 
+
+
         // The fork will have the following general structure
         // (view1, config1) <- (view1, config1) <- ... <- (view1, config1)
         // <- (view2, config1, <New View block with view_is_stable = false>)
@@ -266,7 +269,7 @@ impl ForkReceiver {
 
         let first_part = parts.remove(0);
 
-        let multipart_fut = self.crypto.prepare_fork(first_part, parts.len(), AppendEntriesStats {
+        let (multipart_fut, mut hash_receivers) = self.crypto.prepare_fork(first_part, parts.len(), AppendEntriesStats {
             view: ae.view,
             view_is_stable: ae.view_is_stable,
             config_num: ae.config_num,
@@ -274,6 +277,8 @@ impl ForkReceiver {
             ci: ae.commit_index,
         }, self.byzantine_liveness_threshold()).await;
         self.broadcaster_tx.send(multipart_fut).await.unwrap();
+
+        self.continuity_stats.last_ae_block_hash = Some(hash_receivers.pop().unwrap());
 
         if parts.len() > 0 {
             assert_eq!(self.multipart_buffer.len(), 0); // Due to the Invariant <blocked_on_multipart>
@@ -319,8 +324,9 @@ impl ForkReceiver {
                     };
 
                     if maybe_legit {
-                        let multipart_fut = self.crypto.prepare_fork(part, self.multipart_buffer.len(), ae_stats, self.byzantine_liveness_threshold()).await;
+                        let (multipart_fut, mut hash_receivers) = self.crypto.prepare_fork(part, self.multipart_buffer.len(), ae_stats, self.byzantine_liveness_threshold()).await;
                         self.broadcaster_tx.send(multipart_fut).await.unwrap();
+                        self.continuity_stats.last_ae_block_hash = Some(hash_receivers.pop().unwrap());
                     }
 
                 }
@@ -383,15 +389,25 @@ impl ForkReceiver {
     /// Assumption on Logserver: Eventually, the log server has all the log entries that staging has.
     async fn ensure_common_prefix(&mut self, ae: &ProtoAppendEntries) -> Result<(), ()> {
         let fork = ae.fork.as_ref().unwrap();
-        let parent_hash = get_parent_hash_in_proto_block_ser(
-            &fork.serialized_blocks.first().unwrap().serialized_body
-        ).unwrap();
+        if fork.serialized_blocks.len() == 0 {
+            warn!("Empty AppendEntries received");
+            return Ok(());
+        }
+        
+        let parent_hash = 
+            get_parent_hash_in_proto_block_ser(
+                &fork.serialized_blocks.first().unwrap().serialized_body
+            ).unwrap();
 
         if self.continuity_stats.last_ae_block_hash.is_some() {
-            let local_hash_check = self.continuity_stats.last_ae_block_hash.as_ref().unwrap().eq(&parent_hash);
+            let hsh = self.continuity_stats.last_ae_block_hash.as_mut().unwrap().await.unwrap();
+            if let Ok(hsh) = hsh {
+                let local_hash_check = hsh.eq(&parent_hash);
+    
+                if local_hash_check {
+                    return Ok(());
+                }
 
-            if local_hash_check {
-                return Ok(());
             }
         }
 

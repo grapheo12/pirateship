@@ -30,7 +30,7 @@ impl Staging {
     ) -> Result<(), ()> {
         match cmd {
             PacemakerCommand::UpdateView(view_num, config_num) => {
-                self.update_view(view_num, config_num).await;
+                self.maybe_update_view(view_num, config_num).await;
             }
             PacemakerCommand::NewViewForks(view_num, config_num, forks) => {
                 self.propose_new_view(view_num, config_num, forks).await;
@@ -42,11 +42,15 @@ impl Staging {
         Ok(())
     }
 
-    pub(super) async fn update_view(&mut self, view_num: u64, config_num: u64) {
+    pub(super) async fn maybe_update_view(&mut self, view_num: u64, config_num: u64) {
         if self.view >= view_num {
             return;
         }
 
+        self.update_view(view_num, config_num).await;
+    }
+
+    pub(super) async fn update_view(&mut self, view_num: u64, config_num: u64) {
         self.view = view_num;
         self.config_num = config_num;
         self.view_is_stable = false;

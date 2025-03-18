@@ -64,6 +64,8 @@ pub struct Staging {
 
     leader_perf_counter_unsigned: RefCell<PerfCounter<u64>>,
     leader_perf_counter_signed: RefCell<PerfCounter<u64>>,
+
+    __vc_retry_num: usize,
 }
 
 impl Staging {
@@ -137,6 +139,7 @@ impl Staging {
             leader_perf_counter_unsigned,
             batch_proposer_command_tx,
             logserver_tx,
+            __vc_retry_num: 0,
         }
     }
 

@@ -1,9 +1,9 @@
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{collections::HashMap, sync::Arc, time::{Duration, Instant}};
 
 use log::{debug, error, info};
 use nix::libc::stat;
 use prost::Message as _;
-use tokio::task::JoinSet;
+use tokio::{task::JoinSet, time::sleep};
 
 use crate::{config::ClientConfig, proto::{client::{self, ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::channel::{make_channel, Receiver, Sender}};
 use crate::rpc::MessageRef;
@@ -219,6 +219,8 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         let mut curr_round_robin_id = 0;
 
         let my_name = self.config.net_config.name.clone();
+
+        sleep(Duration::from_secs(1)).await;
 
         while total_requests < max_requests {
             // Wait for the checker task to give a go-ahead.
