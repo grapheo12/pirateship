@@ -601,6 +601,12 @@ impl Staging {
             self.__storage_ack_buffer.push_back(storage_ack);
         }
 
+        if self.view_is_stable && self.ci - self.bci > 500 {
+            // Trigger a view change
+            warn!("Triggering view change due to too much gap between CI and BCI: {} {}", self.ci, self.bci);
+            self.view_change_timer.fire_now().await;
+        }
+
         Ok(())
     }
 
@@ -742,8 +748,8 @@ impl Staging {
         //     .collect::<Vec<_>>();
         // trace!("Pending blocks: {:?}", n_num_tx);
 
-        let pending_len = self.pending_blocks.len();
-        let thresh = if pending_len > 200 {
+        let non_bcied = self.ci - self.bci;
+        let thresh = if non_bcied > 200 {
             self.byzantine_commit_threshold()
         } else {
             self.crash_commit_threshold()
