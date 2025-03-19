@@ -198,6 +198,9 @@ impl Staging {
 
         // Wait for it to be stored.
         // Invariant: I vote => I stored
+        for ack in self.__storage_ack_buffer.drain(..) {
+            let _ = ack.await.unwrap();
+        }
         let _ = storage_ack.await.unwrap();
 
         self.perf_add_event(&last_block.block, "Storage");
@@ -238,6 +241,9 @@ impl Staging {
 
         // Wait for it to be stored.
         // Invariant: I vote => I stored
+        for ack in self.__storage_ack_buffer.drain(..) {
+            let _ = ack.await.unwrap();
+        }
         let _ = storage_ack.await.unwrap();
 
         // I will resend all the signatures in pending_blocks that I have not received a QC for.
@@ -304,6 +310,7 @@ impl Staging {
         block: CachedBlock,
         storage_ack: oneshot::Receiver<StorageAck>,
         ae_stats: AppendEntriesStats,
+        this_is_final_block: bool,
     ) -> Result<(), ()> {
         if !self.view_is_stable {
             trace!("Processing block {} as leader", block.block.n);
@@ -401,12 +408,12 @@ impl Staging {
             // Ready to accept the block normally.
             if self.i_am_leader() {
                 return self
-                    .process_block_as_leader(block, storage_ack, ae_stats)
+                    .process_block_as_leader(block, storage_ack, ae_stats, this_is_final_block)
                     .await;
             } else {
 
                 return self
-                    .process_block_as_follower(block, storage_ack, ae_stats)
+                    .process_block_as_follower(block, storage_ack, ae_stats, this_is_final_block)
                     .await;
             }
 
@@ -443,7 +450,12 @@ impl Staging {
         //     return Ok(());
         // }
 
-        self.vote_on_last_block_for_self(storage_ack).await?;
+        if this_is_final_block {
+            self.vote_on_last_block_for_self(storage_ack).await?;
+        } else {
+            self.__storage_ack_buffer.push_back(storage_ack);
+        }
+
 
         Ok(())
     }
@@ -455,6 +467,7 @@ impl Staging {
         block: CachedBlock,
         storage_ack: oneshot::Receiver<StorageAck>,
         ae_stats: AppendEntriesStats,
+        this_is_final_block: bool
     ) -> Result<(), ()> {
         if !self.view_is_stable {
             trace!("Processing block {} as follower", block.block.n);
@@ -542,11 +555,11 @@ impl Staging {
             // Ready to accept the block normally.
             if self.i_am_leader() {
                 return self
-                    .process_block_as_leader(block, storage_ack, ae_stats)
+                    .process_block_as_leader(block, storage_ack, ae_stats, this_is_final_block)
                     .await;
             } else {
                 return self
-                    .process_block_as_follower(block, storage_ack, ae_stats)
+                    .process_block_as_follower(block, storage_ack, ae_stats, this_is_final_block)
                     .await;
             }
         }
@@ -582,7 +595,11 @@ impl Staging {
         }
 
         // Reply vote to the leader.
-        self.send_vote_on_last_block_to_leader(storage_ack).await?;
+        if this_is_final_block {
+            self.send_vote_on_last_block_to_leader(storage_ack).await?;
+        } else {
+            self.__storage_ack_buffer.push_back(storage_ack);
+        }
 
         Ok(())
     }

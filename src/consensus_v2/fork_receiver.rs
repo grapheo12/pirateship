@@ -350,6 +350,7 @@ impl ForkReceiver {
 
 
     async fn send_nack(&mut self, sender: String, ae: ProtoAppendEntries) {
+        info!("Nacking AE to {}", sender);
         let first_block_n = ae.fork.as_ref().map_or(ae.commit_index, |f| f.serialized_blocks.first().unwrap().n);
         let last_index_needed = if first_block_n > 100 { first_block_n - 100 } else { 0 };
         let hints = ask_logserver!(self, LogServerQuery::GetHints, last_index_needed);

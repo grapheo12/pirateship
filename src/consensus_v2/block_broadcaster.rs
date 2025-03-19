@@ -29,7 +29,7 @@ pub struct BlockBroadcaster {
     // Output ports
     storage: StorageServiceConnector,
     client: PinnedClient,
-    staging_tx: Sender<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats)>,
+    staging_tx: Sender<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats, bool /* this_is_final_block */)>,
 
     // Command ports
     fork_receiver_command_tx: Sender<ForkReceiverCommand>,
@@ -53,7 +53,7 @@ impl BlockBroadcaster {
         other_block_rx: Receiver<MultipartFork>,
         control_command_rx: Receiver<BlockBroadcasterCommand>,
         storage: StorageServiceConnector,
-        staging_tx: Sender<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats)>,
+        staging_tx: Sender<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats, bool)>,
         fork_receiver_command_tx: Sender<ForkReceiverCommand>,
         app_command_tx: Sender<AppCommand>,
     ) -> Self {
@@ -203,7 +203,7 @@ impl BlockBroadcaster {
         Ok(())
     }
 
-    async fn store_and_forward_internally(&mut self, block: &CachedBlock, ae_stats: AppendEntriesStats) -> Result<(), Error> {
+    async fn store_and_forward_internally(&mut self, block: &CachedBlock, ae_stats: AppendEntriesStats, this_is_final_block: bool) -> Result<(), Error> {
         let perf_entry = block.block.n;
         
         // Store
@@ -215,7 +215,7 @@ impl BlockBroadcaster {
         self.perf_add_event(perf_entry, "Forward block to logserver");
 
         // info!("Sending {}", block.block.n);
-        self.staging_tx.send((block.clone(), storage_ack, ae_stats)).await.unwrap();
+        self.staging_tx.send((block.clone(), storage_ack, ae_stats, this_is_final_block)).await.unwrap();
         // info!("Sent {}", block.block.n);
         self.perf_add_event(perf_entry, "Forward block to staging");
 
@@ -239,14 +239,18 @@ impl BlockBroadcaster {
             trace!("AE: {:?}", ae_fork);
         }
 
+        let _fork_size = ae_fork.len();
+        let mut cnt = 0;
         for block in &ae_fork {
+            cnt += 1;
+            let this_is_final_block = cnt == _fork_size;
             self.store_and_forward_internally(&block, AppendEntriesStats {
                 view,
                 view_is_stable: block.block.view_is_stable,
                 config_num,
                 sender: self.config.get().net_config.name.clone(),
                 ci: self.ci,
-            }).await?;
+            }, this_is_final_block).await?;
         }
         // Forward to app for stats.
         self.app_command_tx.send(AppCommand::NewRequestBatch(block.block.n, view, view_is_stable, true, block.block.tx_list.len(), block.block_hash.clone())).await.unwrap();
@@ -288,10 +292,15 @@ impl BlockBroadcaster {
         }
 
         let (view, view_is_stable) = (blocks.ae_stats.view, blocks.ae_stats.view_is_stable);
+        let _fork_size = _blocks.len();
+        let mut cnt = 0;
         for block in _blocks {
+            cnt += 1;
+            let this_is_final_block = cnt == _fork_size;
+
             let block = block.unwrap();
             // info!("Processing {}", block.block.n);
-            self.store_and_forward_internally(&block, blocks.ae_stats.clone()).await?;
+            self.store_and_forward_internally(&block, blocks.ae_stats.clone(), this_is_final_block).await?;
 
             // Forward to app for stats.
             self.app_command_tx.send(AppCommand::NewRequestBatch(block.block.n, view, view_is_stable, false, block.block.tx_list.len(), block.block_hash.clone())).await.unwrap();
@@ -406,6 +415,9 @@ impl BlockBroadcaster {
         }
 
         let sz = data.len();
+        if !view_is_stable {
+            info!("AE size: {} Broadcasting to {:?}", sz, names);
+        }
         let data = PinnedMessage::from(data, sz, SenderType::Anon);
         let mut profile = LatencyProfile::new();
         let _res = PinnedClient::broadcast(&self.client, &names, &data, &mut profile, self.get_byzantine_broadcast_threshold()).await;
