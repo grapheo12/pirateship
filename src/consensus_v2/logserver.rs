@@ -4,7 +4,7 @@ use log::{error, info, trace, warn};
 use prost::Message as _;
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::CachedBlock, proto::{checkpoint::{proto_backfill_nack::Origin, ProtoBackfillNack, ProtoBlockHint}, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork, ProtoViewChange}, rpc::{proto_payload::Message, ProtoPayload}}, rpc::{client::PinnedClient, MessageRef, PinnedMessage}, utils::{channel::Receiver, get_parent_hash_in_proto_block_ser, StorageServiceConnector}};
+use crate::{config::AtomicConfig, crypto::CachedBlock, proto::{checkpoint::{proto_backfill_nack::Origin, ProtoBackfillNack, ProtoBlockHint}, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork, ProtoViewChange}, rpc::{proto_payload::Message, ProtoPayload}}, rpc::{client::PinnedClient, MessageRef, PinnedMessage}, utils::{channel::{Receiver, Sender}, get_parent_hash_in_proto_block_ser, StorageServiceConnector}};
 
 
 /// Deletes older blocks in favor of newer ones.
@@ -64,8 +64,8 @@ impl ReadCache {
 
 
 pub enum LogServerQuery {
-    CheckHash(u64 /* block.n */, Vec<u8> /* block_hash */, oneshot::Sender<bool>),
-    GetHints(u64 /* last needed block.n */, oneshot::Sender<Vec<ProtoBlockHint>>),
+    CheckHash(u64 /* block.n */, Vec<u8> /* block_hash */, Sender<bool>),
+    GetHints(u64 /* last needed block.n */, Sender<Vec<ProtoBlockHint>>),
 }
 
 pub enum LogServerCommand {
@@ -340,7 +340,7 @@ impl LogServer {
         match query {
             LogServerQuery::CheckHash(n, hsh, sender) => {
                 if n == 0 {
-                    sender.send(true).unwrap();
+                    sender.send(true).await.unwrap();
                     return;
                 }
 
@@ -348,12 +348,12 @@ impl LogServer {
                     Some(block) => block,
                     None => {
                         error!("Block {} not found, last_n seen: {}", n, self.log.back().map_or(0, |block| block.block.n));
-                        sender.send(false).unwrap();
+                        sender.send(false).await.unwrap();
                         return;
                     }
                 };
 
-                sender.send(block.block_hash.eq(&hsh)).unwrap();
+                sender.send(block.block_hash.eq(&hsh)).await.unwrap();
             },
             LogServerQuery::GetHints(last_needed_n, sender) => {
                 // Starting from last_needed_n,
@@ -411,7 +411,10 @@ impl LogServer {
                     });
                 }
 
-                sender.send(hints).unwrap();
+                let len = hints.len();
+
+                let res = sender.send(hints).await;
+                info!("Sent hints size {}, result = {:?}", len, res);
             }
         }
     }

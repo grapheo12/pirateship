@@ -273,7 +273,7 @@ impl BlockBroadcaster {
         if node_list_len <= config.consensus_config.liveness_u as usize {
             return 0;
         }
-        let byzantine_threshold = node_list_len - config.consensus_config.liveness_u as usize;
+        let byzantine_threshold = node_list_len; // - config.consensus_config.liveness_u as usize;
         byzantine_threshold - 1
     }
 

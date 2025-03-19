@@ -69,10 +69,10 @@ num_clients = [400]
 name = "timeseries"
 plotter = "crash_byz_tput_timeseries"
 ramp_up = 10
-ramp_down = 10
+ramp_down = 100
 output = "evil_experiment.pdf"
 force_parse = true
-target_node = "node7"
+target_node = "node2"
 
 [results.font]
 size = 55

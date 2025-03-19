@@ -1,5 +1,5 @@
 use std::{collections::HashMap, sync::Arc};
-
+use crate::utils::channel::make_channel;
 use log::info;
 use prost::Message;
 use tokio::sync::{oneshot, Mutex};
@@ -47,9 +47,9 @@ pub struct Pacemaker {
 macro_rules! ask_logserver {
     ($me:expr, $query:expr, $($args:expr),+) => {
         {
-            let (tx, rx) = oneshot::channel();
+            let (tx, rx) = make_channel(1);
             $me.logserver_query_tx.send($query($($args),+, tx)).await.unwrap();
-            rx.await.unwrap()
+            rx.recv().await.unwrap()
         }
     };
 }

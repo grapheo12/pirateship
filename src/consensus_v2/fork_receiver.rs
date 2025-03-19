@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, io::Error, sync::Arc};
+use crate::utils::channel::make_channel;
 
-use gluesql::test_suite::default;
 use log::{debug, info, warn};
 use prost::Message;
 use tokio::sync::{oneshot, Mutex};
@@ -8,6 +8,7 @@ use tokio::sync::{oneshot, Mutex};
 use crate::{config::AtomicConfig, crypto::{default_hash, CachedBlock, CryptoServiceConnector, HashType}, proto::{checkpoint::ProtoBackfillNack, consensus::{HalfSerializedBlock, ProtoAppendEntries}, rpc::ProtoPayload}, rpc::{client::PinnedClient, MessageRef, SenderType}, utils::{channel::{Receiver, Sender}, get_parent_hash_in_proto_block_ser}};
 
 use super::logserver::LogServerQuery;
+use futures::FutureExt;
 
 
 pub enum ForkReceiverCommand {
@@ -52,14 +53,15 @@ impl MultipartFork {
 struct ContinuityStats {
     last_ae_view: u64,
     last_ae_block_hash: Option<oneshot::Receiver<Result<HashType, Error>>>,
+    waiting_on_nack_reply: bool
 }
 
 macro_rules! ask_logserver {
     ($me:expr, $query:expr, $($args:expr),+) => {
         {
-            let (tx, rx) = oneshot::channel();
+            let (tx, rx) = make_channel(1);
             $me.logserver_query_tx.send($query($($args),+, tx)).await.unwrap();
-            rx.await.unwrap()
+            rx.recv().await.unwrap()
         }
     };
 }
@@ -121,6 +123,7 @@ impl ForkReceiver {
             continuity_stats: ContinuityStats {
                 last_ae_view: 0,
                 last_ae_block_hash: None,
+                waiting_on_nack_reply: false
             },
             logserver_query_tx,
         }
@@ -164,6 +167,14 @@ impl ForkReceiver {
     }
 
     async fn process_fork(&mut self, mut ae: ProtoAppendEntries, sender: String) {
+        if self.continuity_stats.waiting_on_nack_reply {
+            info!("Possible AE after nack!");
+        }
+
+        if !ae.view_is_stable {
+            info!("Got New View message for view {}", ae.view);
+        }
+        
         if ae.view < self.view || ae.config_num < self.config_num {
             warn!("Old view AppendEntry received: ae view {} < my view {} or ae config num {} < my config num {}", ae.view, self.view, ae.config_num, self.config_num);
             return;
@@ -178,12 +189,22 @@ impl ForkReceiver {
         }
 
 
+        if self.config.get().net_config.name == "node7" 
+        && self.view == 3 && ae.view_is_stable
+        && (ae.fork.as_ref().unwrap().serialized_blocks.last().unwrap().n >= 20000
+            || ae.fork.as_ref().unwrap().serialized_blocks.last().unwrap().n < 20105) {
+            info!("Skipping to generate Nack!");
+            return;
+        }
+
         // Not going to check for ViewLock here.
         // Staging takes care of that.
         // But at least I can make sure that the AppendEntries start from a common prefix.
         if self.ensure_common_prefix(&ae).await.is_err() {
             // Send Nack
             self.send_nack(sender, ae).await;
+            info!("Returning after sending nack!");
+            self.continuity_stats.waiting_on_nack_reply = true;
             return;
         }
 
@@ -219,6 +240,7 @@ impl ForkReceiver {
             }
         // }
 
+        self.continuity_stats.waiting_on_nack_reply = false;
 
 
 
@@ -352,9 +374,16 @@ impl ForkReceiver {
     async fn send_nack(&mut self, sender: String, ae: ProtoAppendEntries) {
         info!("Nacking AE to {}", sender);
         let first_block_n = ae.fork.as_ref().map_or(ae.commit_index, |f| f.serialized_blocks.first().unwrap().n);
+        info!(">> {}", first_block_n);
         let last_index_needed = if first_block_n > 100 { first_block_n - 100 } else { 0 };
+        info!(">> {}", last_index_needed);
+        
         let hints = ask_logserver!(self, LogServerQuery::GetHints, last_index_needed);
+        // let hints = vec![];
+        info!(">> {:?}", hints);
+
         let my_name = self.config.get().net_config.name.clone();
+        info!(">> {}", my_name);
 
         let nack = ProtoBackfillNack {
             hints,
@@ -362,18 +391,25 @@ impl ForkReceiver {
             reply_name: my_name,
             origin: Some(crate::proto::checkpoint::proto_backfill_nack::Origin::Ae(ae)),
         };
+        info!(">> {:?}", nack);
 
         let payload = ProtoPayload {
             message: Some(crate::proto::rpc::proto_payload::Message::BackfillNack(nack)),
         };
 
+        info!(">> {:?}", payload);
+
         let buf = payload.encode_to_vec();
+        info!(">>");
         let sz = buf.len();
+        info!(">> {}", sz);
 
 
         let _ = PinnedClient::send(&self.client, &sender,
             MessageRef(&buf, sz, &SenderType::Anon)
         ).await;
+
+        info!(">> Sent nack");
     }
 
 

@@ -321,7 +321,7 @@ SCP_CMD="scp -o StrictHostKeyChecking=no -i {self.dev_ssh_key}"
                         binary_name = "controller"
 
                     _script += f"""
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '{self.remote_workdir}/build/{binary_name} {self.remote_workdir}/configs/{bin}_config.json > {self.remote_workdir}/logs/{repeat_num}/{bin}.log 2> {self.remote_workdir}/logs/{repeat_num}/{bin}.err' &
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'RUST_BACKTRACE=full {self.remote_workdir}/build/{binary_name} {self.remote_workdir}/configs/{bin}_config.json > {self.remote_workdir}/logs/{repeat_num}/{bin}.log 2> {self.remote_workdir}/logs/{repeat_num}/{bin}.err' &
 PID="$PID $!"
 """
                     

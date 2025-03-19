@@ -584,8 +584,9 @@ impl Staging {
             .map(|e| e.clone())
             .collect::<Vec<_>>();
 
+        let old_view_is_stable = self.view_is_stable;
         for qc in qc_list.drain(..) {
-            if !self.view_is_stable {
+            if !old_view_is_stable {
                 // Try to see if this QC can stabilize the view.
                 trace!("Trying to stabilize view {} with QC", self.view);
                 self.maybe_stabilize_view(&qc).await;
@@ -601,7 +602,7 @@ impl Staging {
             self.__storage_ack_buffer.push_back(storage_ack);
         }
 
-        if self.view_is_stable && self.ci - self.bci > 500 {
+        if old_view_is_stable /* don't trigger unnecessarily on new view messages */ && self.ci - self.bci > 500 {
             // Trigger a view change
             warn!("Triggering view change due to too much gap between CI and BCI: {} {}", self.ci, self.bci);
             self.view_change_timer.fire_now().await;

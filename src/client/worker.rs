@@ -302,7 +302,6 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                     let recv_node = &node_list[(*curr_round_robin_id) % node_list.len()];
                     *curr_round_robin_id = *curr_round_robin_id + 1;
                     req.last_sent_to = recv_node.clone();
-
                     PinnedClient::send(
                         &self.client,
                         recv_node,
