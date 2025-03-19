@@ -184,6 +184,7 @@ impl Staging {
                 if i_am_leader {
                     self.process_block_as_leader(block, storage_ack, ae_stats).await?;
                 } else {
+                    // TODO: Send in bulk.
                     self.process_block_as_follower(block, storage_ack, ae_stats).await?;
                 }
             },
