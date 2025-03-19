@@ -724,82 +724,93 @@ impl PinnedClient {
         }
 
         // At this point, all name in names have a dedicated broadcast worker running.
-        let mut bcast_futs = FuturesUnordered::new();
         {
             let lchans = client.0.chan_map.0.read().await;
-
             for name in names {
                 let chan = lchans.get(name).unwrap();
-                let _chan = chan.clone();
-                let _profile = profile.clone();
-                let _data = data.clone();
-                let _name = name.clone();
-                bcast_futs.push(Box::pin(async move {
-                    let ret = _chan.try_send((_data.clone(), _profile.clone()));
-                    match ret {
-                        Ok(_) => {
-                            Ok(())
-                        },
-                        Err(_) => {
-                            trace!("Channel congestion for {} Queue len: {}", _name, 10 - _chan.capacity());
-                            _chan.send((_data, _profile)).await
-                        }
-                    }
-                }));
-                
-                // let mut try_num = 0;
-                // let max_try_num = client.0.config.get().net_config.client_max_retry;
-                // while let Err(_) = chan.send((data.clone(), profile.clone())).await {
-                //     try_num += 1;
-                //     if try_num > max_try_num {
-                //         break;
-                //     }
-                //     sleep(Duration::from_millis(1)).await;
-                // }
-            }
-        }
-
-        let mut total_success = 0;
-        while let Some(res) = bcast_futs.next().await {
-            if res.is_ok() {
-                total_success += 1;
-            }
-
-            if total_success >= min_success {
-                break;
-            }
-        }
-
-        trace!("Broadcast done. Success: {}", total_success);
-
-        if bcast_futs.len() == 0 {
-            return Ok(());
-        }
-
-        let mut lgraveyard = client.0.graveyard_tx.lock().await;
-        if lgraveyard.is_none() {
-            let (tx, mut rx) = mpsc::unbounded_channel();
-            tokio::spawn(async move {
-                while let Some(fut) = rx.recv().await {
-                    let _ = timeout(Duration::from_secs(2), fut).await;
+                // chans.push(chan.clone());
+                if let Err(e) = chan.send((data.clone(), profile.clone())).await {
+                    warn!("Broadcast error: {}", e);
                 }
-            });
-
-            *lgraveyard = Some(tx);
-        }
-
-
-        let _ = lgraveyard.as_ref().unwrap().send(Box::pin(async move {
-            while bcast_futs.len() > 0 {
-                let _ = bcast_futs.next().await;
             }
-        }));
+        }
+        
+        // let mut bcast_futs = FuturesUnordered::new();
+        // {
+        //     let lchans = client.0.chan_map.0.read().await;
+
+        //     for name in names {
+        //         let chan = lchans.get(name).unwrap();
+        //         let _chan = chan.clone();
+        //         let _profile = profile.clone();
+        //         let _data = data.clone();
+        //         let _name = name.clone();
+        //         bcast_futs.push(Box::pin(async move {
+        //             let ret = _chan.try_send((_data.clone(), _profile.clone()));
+        //             match ret {
+        //                 Ok(_) => {
+        //                     Ok(())
+        //                 },
+        //                 Err(_) => {
+        //                     trace!("Channel congestion for {} Queue len: {}", _name, 10 - _chan.capacity());
+        //                     _chan.send((_data, _profile)).await
+        //                 }
+        //             }
+        //         }));
+                
+        //         // let mut try_num = 0;
+        //         // let max_try_num = client.0.config.get().net_config.client_max_retry;
+        //         // while let Err(_) = chan.send((data.clone(), profile.clone())).await {
+        //         //     try_num += 1;
+        //         //     if try_num > max_try_num {
+        //         //         break;
+        //         //     }
+        //         //     sleep(Duration::from_millis(1)).await;
+        //         // }
+        //     }
+        // }
+
+        // // let mut total_success = 0;
+        // // while let Some(res) = bcast_futs.next().await {
+        // //     if res.is_ok() {
+        // //         total_success += 1;
+        // //     }
+
+        // //     if total_success >= min_success {
+        // //         break;
+        // //     }
+        // // }
+
+        // // trace!("Broadcast done. Success: {}", total_success);
+
+        // if bcast_futs.len() == 0 {
+        //     return Ok(());
+        // }
+
+        // // let mut lgraveyard = client.0.graveyard_tx.lock().await;
+        // // if lgraveyard.is_none() {
+        // //     let (tx, mut rx) = mpsc::unbounded_channel();
+        // //     tokio::spawn(async move {
+        // //         while let Some(fut) = rx.recv().await {
+        // //             let _ = timeout(Duration::from_secs(2), fut).await;
+        // //         }
+        // //     });
+
+        // //     *lgraveyard = Some(tx);
+        // // }
+
+
+        // // let _ = lgraveyard.as_ref().unwrap().send(Box::pin(async move {
+        // //     while bcast_futs.len() > 0 {
+        // //         let _ = bcast_futs.next().await;
+        // //     }
+        // // }));
 
 
 
-        // let _bcast_res = chans.iter().map(|c| c.send((data.clone(), Some(Instant::now()))));
+        // // let _bcast_res = chans.iter().map(|c| c.send((data.clone(), Some(Instant::now()))));
 
-        // join_all(bcast_futs).await;
+        // // join_all(bcast_futs).await;
 
         Ok(())
     }
