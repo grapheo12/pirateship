@@ -735,18 +735,25 @@ impl Staging {
     async fn maybe_crash_commit(&mut self) -> Result<(), ()> {
         let old_ci = self.ci;
 
-        let n_num_tx = self
-            .pending_blocks
-            .iter()
-            .map(|e| (e.block.block.n, e.block.block.tx_list.len()))
-            .collect::<Vec<_>>();
-        trace!("Pending blocks: {:?}", n_num_tx);
+        // let n_num_tx = self
+        //     .pending_blocks
+        //     .iter()
+        //     .map(|e| (e.block.block.n, e.block.block.tx_list.len()))
+        //     .collect::<Vec<_>>();
+        // trace!("Pending blocks: {:?}", n_num_tx);
+
+        let pending_len = self.pending_blocks.len();
+        let thresh = if pending_len > 200 {
+            self.byzantine_commit_threshold()
+        } else {
+            self.crash_commit_threshold()
+        };
         for block in self.pending_blocks.iter() {
             if block.block.block.n <= self.ci {
                 continue;
             }
 
-            if block.replication_set.len() >= self.crash_commit_threshold() {
+            if block.replication_set.len() >= thresh {
                 self.ci = block.block.block.n;
             }
         }
