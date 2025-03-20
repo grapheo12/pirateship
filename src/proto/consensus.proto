@@ -94,6 +94,7 @@ message ProtoAppendEntries {
     uint64 view = 4;
     bool view_is_stable = 5;
     uint64 config_num = 6;
+    bool is_backfill_response = 7;
 }
 
 message ProtoSignatureArrayEntry {

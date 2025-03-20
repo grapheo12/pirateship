@@ -268,6 +268,7 @@ impl LogServer {
                 ProtoPayload {
                     message: Some(Message::AppendEntries(ProtoAppendEntries {
                         fork: Some(new_fork),
+                        is_backfill_response: true,
                         ..ae
                     }))
                 }

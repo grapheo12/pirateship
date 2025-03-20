@@ -402,6 +402,7 @@ impl BlockBroadcaster {
             view,
             view_is_stable,
             config_num,
+            is_backfill_response: false,
         };
         // let data = bincode::serialize(&append_entry).unwrap();
         // let data = bitcode::encode(&append_entry);

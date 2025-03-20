@@ -13,7 +13,8 @@ use futures::FutureExt;
 
 pub enum ForkReceiverCommand {
     UpdateView(u64 /* view num */, u64 /* config num */), // Also acts as a Ack for MultiPartFork
-    MultipartNack(usize /* delete these many parts from the multipart buffer */)
+    MultipartNack(usize /* delete these many parts from the multipart buffer */),
+    UseBackfillResponse(ProtoAppendEntries, SenderType),
 }
 
 /// Shortcut stats for AppendEntries
@@ -140,7 +141,7 @@ impl ForkReceiver {
     }
 
     async fn worker(&mut self) -> Result<(), ()> {
-        if self.blocked_on_multipart {
+        if self.blocked_on_multipart || self.continuity_stats.waiting_on_nack_reply {
             let cmd = self.command_rx.recv().await.unwrap();
             self.handle_command(cmd).await;
         } else {
@@ -206,7 +207,6 @@ impl ForkReceiver {
             // Send Nack
             self.send_nack(sender, ae).await;
             info!("Returning after sending nack!");
-            self.continuity_stats.waiting_on_nack_reply = true;
             return;
         }
 
@@ -368,6 +368,10 @@ impl ForkReceiver {
                 if self.multipart_buffer.len() == 0 {
                     self.blocked_on_multipart = false;
                 }
+            },
+            ForkReceiverCommand::UseBackfillResponse(ae, sender) => {
+                let (name, _) = sender.to_name_and_sub_id();
+                self.process_fork(ae, name).await;
             }
         }
     }
@@ -375,43 +379,33 @@ impl ForkReceiver {
 
     async fn send_nack(&mut self, sender: String, ae: ProtoAppendEntries) {
         info!("Nacking AE to {}", sender);
+        self.continuity_stats.waiting_on_nack_reply = true;
         let first_block_n = ae.fork.as_ref().map_or(ae.commit_index, |f| f.serialized_blocks.first().unwrap().n);
-        info!(">> {}", first_block_n);
         let last_index_needed = if first_block_n > 100 { first_block_n - 100 } else { 0 };
-        info!(">> {}", last_index_needed);
         
         let hints = ask_logserver!(self, LogServerQuery::GetHints, last_index_needed);
-        // let hints = vec![];
-        info!(">> {:?}", hints);
-
+        
         let my_name = self.config.get().net_config.name.clone();
-        info!(">> {}", my_name);
-
+        
         let nack = ProtoBackfillNack {
             hints,
             last_index_needed,
             reply_name: my_name,
             origin: Some(crate::proto::checkpoint::proto_backfill_nack::Origin::Ae(ae)),
         };
-        info!(">> {:?}", nack);
 
         let payload = ProtoPayload {
             message: Some(crate::proto::rpc::proto_payload::Message::BackfillNack(nack)),
         };
 
-        info!(">> {:?}", payload);
 
         let buf = payload.encode_to_vec();
-        info!(">>");
         let sz = buf.len();
-        info!(">> {}", sz);
-
 
         let _ = PinnedClient::send(&self.client, &sender,
             MessageRef(&buf, sz, &SenderType::Anon)
         ).await;
 
-        info!(">> Sent nack");
     }
 
 
