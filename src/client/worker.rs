@@ -256,6 +256,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                 Some(CheckerResponse::TryAgain(task, node_vec, leader)) => {
                     // We need to send the same request again.
                     if let Some(_leader) = leader {
+                        PinnedClient::drop_all_connections(&self.client).await;
                         curr_leader_id = _leader;
                     }
 
