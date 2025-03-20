@@ -101,7 +101,7 @@ impl Staging {
             .send(PacemakerCommand::MyViewJumped(self.view, self.config_num, vc_msg))
             .await
             .unwrap();
-
+        self.__ae_seen_in_this_view = 0;
 
 
         // Broadcast the view change message
