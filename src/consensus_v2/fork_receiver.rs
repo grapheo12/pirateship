@@ -190,15 +190,16 @@ impl ForkReceiver {
         }
 
 
-        if self.config.get().net_config.name == "node7" 
-        && ae.view_is_stable
-        && (ae.fork.as_ref().unwrap().serialized_blocks.last().unwrap().n >= 10000
-            && ae.fork.as_ref().unwrap().serialized_blocks.last().unwrap().n < 10105)
-        && !self.continuity_stats.waiting_on_nack_reply
-        {
-            info!("Skipping to generate Nack!");
-            return;
-        }
+        // BELOW IS A TEST FOR NACKS. DISABLED IN PRODUCTION.
+        // if self.config.get().net_config.name == "node7" 
+        // && ae.view_is_stable
+        // && (ae.fork.as_ref().unwrap().serialized_blocks.last().unwrap().n >= 10000
+        //     && ae.fork.as_ref().unwrap().serialized_blocks.last().unwrap().n < 10105)
+        // && !self.continuity_stats.waiting_on_nack_reply
+        // {
+        //     info!("Skipping to generate Nack!");
+        //     return;
+        // }
 
         // Not going to check for ViewLock here.
         // Staging takes care of that.
