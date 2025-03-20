@@ -22,7 +22,10 @@ pub type RawBatch = Vec<ProtoTransaction>;
 pub type MsgAckChanWithTag = (MsgAckChan, u64 /* client tag */, SenderType /* client name */);
 pub type TxWithAckChanTag = (Option<ProtoTransaction>, MsgAckChanWithTag);
 
-pub type BatchProposerCommand = bool; // true == make new batches, false == stop making new batches
+pub type BatchProposerCommand = (
+    bool /* true == make new batches, false == stop making new batches */,
+    String /* Current leader */
+);
 
 pub struct BatchProposer {
     config: AtomicConfig,
@@ -39,6 +42,8 @@ pub struct BatchProposer {
     perf_counter: RefCell<PerfCounter<usize>>,
 
     make_new_batches: bool,
+    current_leader: String,
+
     cmd_rx: Receiver<BatchProposerCommand>,
 }
 
@@ -72,6 +77,7 @@ impl BatchProposer {
             app_tx,
             perf_counter,
             make_new_batches: false,
+            current_leader: String::new(),
             cmd_rx,
         }
     }
@@ -148,7 +154,9 @@ impl BatchProposer {
                 new_tx = _new_tx;
             },
             _cmd = self.cmd_rx.recv() => {
-                self.make_new_batches = _cmd.unwrap();
+                let (make_new_batches, current_leader) = _cmd.unwrap();
+                self.make_new_batches = make_new_batches;
+                self.current_leader = current_leader;
                 return Ok(());
             },
             _tick = self.batch_timer.wait() => {
@@ -164,14 +172,14 @@ impl BatchProposer {
 
         
         if new_tx.is_some() {
-            self.perf_register_random(work_counter);
             // TODO: Filter read-only transactions that do not need to go through consensus.
             // Forward them directly to execution.
-
             if !self.i_am_leader() {
                 self.reply_leader(new_tx.unwrap()).await;
                 return Ok(());
             }
+
+            self.perf_register_random(work_counter);
 
             let new_tx = new_tx.unwrap();
             if new_tx.0.is_none() {
@@ -190,7 +198,7 @@ impl BatchProposer {
 
         let max_batch_size = self.config.get().consensus_config.max_backlog_batch_size;
 
-        if self.make_new_batches && (self.current_raw_batch.as_ref().unwrap().len() >= max_batch_size || batch_timer_tick) {
+        if self.current_raw_batch.as_ref().unwrap().len() >= max_batch_size || (self.make_new_batches && batch_timer_tick) {
             self.propose_new_batch().await;
         }
 
@@ -209,7 +217,7 @@ impl BatchProposer {
         let reply = ProtoClientReply {
             reply: Some(
                 crate::proto::client::proto_client_reply::Reply::Leader(ProtoCurrentLeader {
-                    name: String::from("node1"),
+                    name: self.current_leader.clone(),
                     serialized_node_infos: node_infos.serialize(),
                 })
             ),
@@ -236,8 +244,8 @@ impl BatchProposer {
     }
 
 
-    fn i_am_leader(&self) -> bool { // TODO
-        self.config.get().net_config.name == self.config.get().consensus_config.node_list[0]
+    fn i_am_leader(&self) -> bool {
+        self.config.get().net_config.name == self.current_leader
     }
 
 }

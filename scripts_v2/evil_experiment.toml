@@ -38,7 +38,7 @@ checkpoint_interval_ms = 60000
 
 [node_config.evil_config]
 simulate_byzantine_behavior = true
-byzantine_start_block = 5000
+byzantine_start_block = 10000
 
 
 [client_config]
@@ -59,20 +59,47 @@ repeats = 1
 num_nodes = 7
 node_distribution = "uniform"
 build_command = "make pirateship_logger_evil"
-duration = 120
+duration = 60
 
 [experiments.sweeping_parameters]
-num_clients = [0]
+num_clients = [400]
 
 
 [[results]]
 name = "timeseries"
 plotter = "crash_byz_tput_timeseries"
-ramp_up = 10
-ramp_down = 100
+ramp_up = 17
+ramp_down = 30
 output = "evil_experiment.pdf"
 force_parse = true
-target_node = "node2"
+target_node = "node3"
 
 [results.font]
 size = 55
+
+[[results.events]]
+name = "first_equivocate"
+pattern = "\\[INFO\\]\\[.*\\]\\[(.*)\\] Equivocation starting on .*"
+target = "node1"
+description = "Equivocation\nstart"
+
+[[results.events]]
+name = "first_revolt"
+pattern = "\\[INFO\\]\\[.*\\]\\[(.*)\\] Got view change from .* with view .*"
+target = "node1"
+occurrence_num = 8 # 7 from the first view change; 1 from the second view change
+description = "First follower\ntimeout"
+
+[[results.events]]
+name = "moved_view"
+pattern = "\\[INFO\\]\\[.*\\]\\[(.*)\\] Got view change from Auth\\(\"node1\", 0\\) with view .*"
+target = "node1"
+occurrence_num = 2
+description = "Leader\nstep down"
+
+[[results.events]]
+name = "view_stabilized"
+pattern = "\\[INFO\\]\\[.*\\]\\[(.*)\\] View .* stabilized"
+occurrence_num = 2
+target = "node1"
+description = "New view\nstabilized"
