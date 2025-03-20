@@ -22,7 +22,10 @@ pub type RawBatch = Vec<ProtoTransaction>;
 pub type MsgAckChanWithTag = (MsgAckChan, u64 /* client tag */, SenderType /* client name */);
 pub type TxWithAckChanTag = (Option<ProtoTransaction>, MsgAckChanWithTag);
 
-pub type BatchProposerCommand = bool; // true == make new batches, false == stop making new batches
+pub type BatchProposerCommand = (
+    bool /* true == make new batches, false == stop making new batches */,
+    String /* Current leader */
+);
 
 pub struct BatchProposer {
     config: AtomicConfig,
@@ -39,6 +42,8 @@ pub struct BatchProposer {
     perf_counter: RefCell<PerfCounter<usize>>,
 
     make_new_batches: bool,
+    current_leader: String,
+
     cmd_rx: Receiver<BatchProposerCommand>,
 }
 
@@ -72,6 +77,7 @@ impl BatchProposer {
             app_tx,
             perf_counter,
             make_new_batches: false,
+            current_leader: String::new(),
             cmd_rx,
         }
     }
@@ -148,7 +154,9 @@ impl BatchProposer {
                 new_tx = _new_tx;
             },
             _cmd = self.cmd_rx.recv() => {
-                self.make_new_batches = _cmd.unwrap();
+                let (make_new_batches, current_leader) = _cmd.unwrap();
+                self.make_new_batches = make_new_batches;
+                self.current_leader = current_leader;
                 return Ok(());
             },
             _tick = self.batch_timer.wait() => {
@@ -209,7 +217,7 @@ impl BatchProposer {
         let reply = ProtoClientReply {
             reply: Some(
                 crate::proto::client::proto_client_reply::Reply::Leader(ProtoCurrentLeader {
-                    name: String::from("node1"),
+                    name: self.current_leader.clone(),
                     serialized_node_infos: node_infos.serialize(),
                 })
             ),

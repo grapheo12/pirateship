@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use prost::Message as _;
 use tokio::{sync::{oneshot, Mutex}, task::JoinSet};
 
-use crate::{config::AtomicConfig, crypto::HashType, proto::{client::{ProtoByzResponse, ProtoClientReply, ProtoTransactionReceipt}, execution::ProtoTransactionResult, rpc::ProtoPayload}, rpc::{server::LatencyProfile, PinnedMessage, SenderType}, utils::channel::{Receiver, Sender}};
+use crate::{config::{AtomicConfig, NodeInfo}, crypto::HashType, proto::{client::{ProtoByzResponse, ProtoClientReply, ProtoTransactionReceipt, ProtoTryAgain}, execution::ProtoTransactionResult, rpc::ProtoPayload}, rpc::{server::LatencyProfile, PinnedMessage, SenderType}, utils::channel::{Receiver, Sender}};
 
 use super::batch_proposal::MsgAckChanWithTag;
 
@@ -156,7 +156,19 @@ impl ClientReplyHandler {
     async fn handle_reply_command(&mut self, cmd: ClientReplyCommand) {
         match cmd {
             ClientReplyCommand::CancelAllRequests => {
-                self.reply_map.clear();
+                let node_infos = NodeInfo {
+                    nodes: self.config.get().net_config.nodes.clone()
+                };
+                for (_, mut vec) in self.reply_map.drain() {
+                    for (chan, tag, _) in vec.drain(..) {
+                        let reply = Self::get_try_again_message(tag, &node_infos);
+                        let reply_ser = reply.encode_to_vec();
+                        let _sz = reply_ser.len();
+                        let reply_msg = PinnedMessage::from(reply_ser, _sz, crate::rpc::SenderType::Anon);
+                        let _ = chan.send((reply_msg, LatencyProfile::new())).await;
+                    }
+                }
+                
             },
             ClientReplyCommand::CrashCommitAck(crash_commit_ack) => {
                 for (hash, (n, reply_vec)) in crash_commit_ack {
@@ -177,6 +189,17 @@ impl ClientReplyHandler {
                     }
                 }
             },
+        }
+    }
+
+    fn get_try_again_message(client_tag: u64, node_infos: &NodeInfo) -> ProtoClientReply {
+        ProtoClientReply {
+            reply: Some(
+                crate::proto::client::proto_client_reply::Reply::TryAgain(ProtoTryAgain {
+                    serialized_node_infos: node_infos.serialize(),
+                }),
+            ),
+            client_tag,
         }
     }
 

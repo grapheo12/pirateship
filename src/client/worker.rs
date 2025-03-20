@@ -160,16 +160,18 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                                 }
                             }
                         },
-                        Some(client::proto_client_reply::Reply::TryAgain(try_again)) => {
+                        Some(client::proto_client_reply::Reply::TryAgain(_try_again)) => {
+                            sleep(Duration::from_secs(1)).await;
                             let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, None, None)).await;
                         },
-                        Some(client::proto_client_reply::Reply::TentativeReceipt(tentative_receipt)) => {
+                        Some(client::proto_client_reply::Reply::TentativeReceipt(_tentative_receipt)) => {
                             // We treat tentative receipt as a success.
                             let _ = backpressure_tx.send(CheckerResponse::Success(req.id)).await;
                             let _ = stat_tx.send(ClientWorkerStat::CrashCommitLatency(req.start_time.elapsed())).await;
 
                         },
                         Some(client::proto_client_reply::Reply::Leader(leader)) => {
+                            sleep(Duration::from_secs(1)).await;
                             // We need to try again but with the leader reset.
                             let curr_leader = leader.name;
                             let node_list = crate::config::NodeInfo::deserialize(&leader.serialized_node_infos);
