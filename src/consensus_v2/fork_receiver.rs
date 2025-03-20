@@ -1,5 +1,5 @@
 use std::{collections::VecDeque, io::Error, sync::Arc};
-use crate::utils::channel::make_channel;
+use crate::{crypto::FutureHash, utils::channel::make_channel};
 
 use log::{debug, info, warn};
 use prost::Message;
@@ -13,7 +13,8 @@ use futures::FutureExt;
 
 pub enum ForkReceiverCommand {
     UpdateView(u64 /* view num */, u64 /* config num */), // Also acts as a Ack for MultiPartFork
-    MultipartNack(usize /* delete these many parts from the multipart buffer */)
+    MultipartNack(usize /* delete these many parts from the multipart buffer */),
+    UseBackfillResponse(ProtoAppendEntries, SenderType),
 }
 
 /// Shortcut stats for AppendEntries
@@ -52,7 +53,7 @@ impl MultipartFork {
 
 struct ContinuityStats {
     last_ae_view: u64,
-    last_ae_block_hash: Option<oneshot::Receiver<Result<HashType, Error>>>,
+    last_ae_block_hash: FutureHash,
     waiting_on_nack_reply: bool
 }
 
@@ -122,7 +123,7 @@ impl ForkReceiver {
             blocked_on_multipart: false,
             continuity_stats: ContinuityStats {
                 last_ae_view: 0,
-                last_ae_block_hash: None,
+                last_ae_block_hash: FutureHash::None,
                 waiting_on_nack_reply: false
             },
             logserver_query_tx,
@@ -140,7 +141,7 @@ impl ForkReceiver {
     }
 
     async fn worker(&mut self) -> Result<(), ()> {
-        if self.blocked_on_multipart {
+        if self.blocked_on_multipart || self.continuity_stats.waiting_on_nack_reply {
             let cmd = self.command_rx.recv().await.unwrap();
             self.handle_command(cmd).await;
         } else {
@@ -190,9 +191,11 @@ impl ForkReceiver {
 
 
         if self.config.get().net_config.name == "node7" 
-        && self.view == 3 && ae.view_is_stable
-        && (ae.fork.as_ref().unwrap().serialized_blocks.last().unwrap().n >= 20000
-            || ae.fork.as_ref().unwrap().serialized_blocks.last().unwrap().n < 20105) {
+        && ae.view_is_stable
+        && (ae.fork.as_ref().unwrap().serialized_blocks.last().unwrap().n >= 10000
+            && ae.fork.as_ref().unwrap().serialized_blocks.last().unwrap().n < 10105)
+        && !self.continuity_stats.waiting_on_nack_reply
+        {
             info!("Skipping to generate Nack!");
             return;
         }
@@ -204,7 +207,6 @@ impl ForkReceiver {
             // Send Nack
             self.send_nack(sender, ae).await;
             info!("Returning after sending nack!");
-            self.continuity_stats.waiting_on_nack_reply = true;
             return;
         }
 
@@ -300,7 +302,7 @@ impl ForkReceiver {
         }, self.byzantine_liveness_threshold()).await;
         self.broadcaster_tx.send(multipart_fut).await.unwrap();
 
-        self.continuity_stats.last_ae_block_hash = Some(hash_receivers.pop().unwrap());
+        self.continuity_stats.last_ae_block_hash = FutureHash::FutureResult(hash_receivers.pop().unwrap());
 
         if parts.len() > 0 {
             assert_eq!(self.multipart_buffer.len(), 0); // Due to the Invariant <blocked_on_multipart>
@@ -322,7 +324,7 @@ impl ForkReceiver {
             ForkReceiverCommand::UpdateView(view, config_num) => {
                 if self.view != view {
                     self.continuity_stats.last_ae_view = view;
-                    self.continuity_stats.last_ae_block_hash = None;
+                    self.continuity_stats.last_ae_block_hash = FutureHash::None;
                 }
                 self.view = view;
                 let config_is_updating = self.config_num < config_num;
@@ -348,7 +350,7 @@ impl ForkReceiver {
                     if maybe_legit {
                         let (multipart_fut, mut hash_receivers) = self.crypto.prepare_fork(part, self.multipart_buffer.len(), ae_stats, self.byzantine_liveness_threshold()).await;
                         self.broadcaster_tx.send(multipart_fut).await.unwrap();
-                        self.continuity_stats.last_ae_block_hash = Some(hash_receivers.pop().unwrap());
+                        self.continuity_stats.last_ae_block_hash = FutureHash::FutureResult(hash_receivers.pop().unwrap());
                     }
 
                 }
@@ -366,6 +368,10 @@ impl ForkReceiver {
                 if self.multipart_buffer.len() == 0 {
                     self.blocked_on_multipart = false;
                 }
+            },
+            ForkReceiverCommand::UseBackfillResponse(ae, sender) => {
+                let (name, _) = sender.to_name_and_sub_id();
+                self.process_fork(ae, name).await;
             }
         }
     }
@@ -373,43 +379,33 @@ impl ForkReceiver {
 
     async fn send_nack(&mut self, sender: String, ae: ProtoAppendEntries) {
         info!("Nacking AE to {}", sender);
+        self.continuity_stats.waiting_on_nack_reply = true;
         let first_block_n = ae.fork.as_ref().map_or(ae.commit_index, |f| f.serialized_blocks.first().unwrap().n);
-        info!(">> {}", first_block_n);
         let last_index_needed = if first_block_n > 100 { first_block_n - 100 } else { 0 };
-        info!(">> {}", last_index_needed);
         
         let hints = ask_logserver!(self, LogServerQuery::GetHints, last_index_needed);
-        // let hints = vec![];
-        info!(">> {:?}", hints);
-
+        
         let my_name = self.config.get().net_config.name.clone();
-        info!(">> {}", my_name);
-
+        
         let nack = ProtoBackfillNack {
             hints,
             last_index_needed,
             reply_name: my_name,
             origin: Some(crate::proto::checkpoint::proto_backfill_nack::Origin::Ae(ae)),
         };
-        info!(">> {:?}", nack);
 
         let payload = ProtoPayload {
             message: Some(crate::proto::rpc::proto_payload::Message::BackfillNack(nack)),
         };
 
-        info!(">> {:?}", payload);
 
         let buf = payload.encode_to_vec();
-        info!(">>");
         let sz = buf.len();
-        info!(">> {}", sz);
-
 
         let _ = PinnedClient::send(&self.client, &sender,
             MessageRef(&buf, sz, &SenderType::Anon)
         ).await;
 
-        info!(">> Sent nack");
     }
 
 
@@ -435,16 +431,36 @@ impl ForkReceiver {
             get_parent_hash_in_proto_block_ser(
                 &fork.serialized_blocks.first().unwrap().serialized_body
             ).unwrap();
-
-        if self.continuity_stats.last_ae_block_hash.is_some() {
-            let hsh = self.continuity_stats.last_ae_block_hash.as_mut().unwrap().await.unwrap();
-            if let Ok(hsh) = hsh {
-                let local_hash_check = hsh.eq(&parent_hash);
-    
-                if local_hash_check {
-                    return Ok(());
+        
+        let hsh = match self.continuity_stats.last_ae_block_hash.take() {
+            FutureHash::None => None,
+            FutureHash::Immediate(hsh) => {
+                self.continuity_stats.last_ae_block_hash = FutureHash::Immediate(hsh.clone());
+                Some(hsh.clone())
+            },
+            FutureHash::Future(receiver) => {
+                let hsh = receiver.await.unwrap();
+                self.continuity_stats.last_ae_block_hash = FutureHash::Immediate(hsh.clone());
+                Some(hsh)
+            },
+            FutureHash::FutureResult(receiver) => {
+                let hsh = receiver.await.unwrap();
+                if hsh.is_err() {
+                    self.continuity_stats.last_ae_block_hash = FutureHash::None;
+                    None
+                } else {
+                    let hsh = hsh.unwrap();
+                    self.continuity_stats.last_ae_block_hash = FutureHash::Immediate(hsh.clone());
+                    Some(hsh)
                 }
+            },
+        };
+        if hsh.is_some() {
+            let hsh = hsh.unwrap();
+            let local_hash_check = hsh.eq(&parent_hash);
 
+            if local_hash_check {
+                return Ok(());
             }
         }
 

@@ -62,7 +62,7 @@ build_command = "make pirateship_logger_evil"
 duration = 120
 
 [experiments.sweeping_parameters]
-num_clients = [400]
+num_clients = [0]
 
 
 [[results]]

@@ -367,6 +367,7 @@ impl Staging {
 
             // Jump to the new view
             self.view = ae_stats.view;
+            self.__ae_seen_in_this_view = 0;
 
             self.view_is_stable = false;
             self.config_num = ae_stats.config_num;
@@ -422,6 +423,7 @@ impl Staging {
 
         self.perf_register_block(&block);
         self.logserver_tx.send(LogServerCommand::NewBlock(block.clone())).await.unwrap();
+        self.__ae_seen_in_this_view += if this_is_final_block { 1 } else { 0 };
 
         // Postcondition here: block.view == self.view && check_continuity() == true && i_am_leader
         let block_view_is_stable = block.block.view_is_stable;
@@ -520,6 +522,7 @@ impl Staging {
 
             // Jump to the new view
             self.view = ae_stats.view;
+            self.__ae_seen_in_this_view = 0;
 
             self.view_is_stable = false;
             self.config_num = block.block.config_num;
@@ -565,6 +568,7 @@ impl Staging {
         }
 
         self.logserver_tx.send(LogServerCommand::NewBlock(block.clone())).await.unwrap();
+        self.__ae_seen_in_this_view += if this_is_final_block { 1 } else { 0 };
 
         // Postcondition here: block.view == self.view && check_continuity() == true && !i_am_leader
         let block_with_votes = CachedBlockWithVotes {
@@ -602,7 +606,9 @@ impl Staging {
             self.__storage_ack_buffer.push_back(storage_ack);
         }
 
-        if old_view_is_stable /* don't trigger unnecessarily on new view messages */ && self.ci - self.bci > 500 {
+        if old_view_is_stable && self.__ae_seen_in_this_view > 200
+        /* don't trigger unnecessarily on new view messages */
+        && self.ci - self.bci > 500 {
             // Trigger a view change
             warn!("Triggering view change due to too much gap between CI and BCI: {} {}", self.ci, self.bci);
             self.view_change_timer.fire_now().await;

@@ -50,6 +50,7 @@ pub enum FutureHash {
     None,
     Immediate(HashType),
     Future(oneshot::Receiver<HashType>),
+    FutureResult(oneshot::Receiver<Result<HashType, Error>>),
 }
 
 impl FutureHash {
@@ -242,6 +243,7 @@ impl CryptoService {
                         FutureHash::None => default_hash(),
                         FutureHash::Immediate(val) => val,
                         FutureHash::Future(receiver) => receiver.await.unwrap(),
+                        FutureHash::FutureResult(receiver) => receiver.await.unwrap().unwrap(),
                     };
                     update_parent_hash_in_proto_block_ser(&mut buf, &parent);
                     perf_event!();
