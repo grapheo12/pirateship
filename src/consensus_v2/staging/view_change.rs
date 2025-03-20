@@ -203,6 +203,8 @@ impl Staging {
         }
 
         info!("View {} stabilized", self.view);
+
+        self.client_reply_tx.send(ClientReplyCommand::StopCancelling).await.unwrap();
     }
 
     async fn create_my_vc_msg(&mut self) -> ProtoViewChange {

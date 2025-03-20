@@ -10,6 +10,7 @@ use super::batch_proposal::MsgAckChanWithTag;
 
 pub enum ClientReplyCommand {
     CancelAllRequests,
+    StopCancelling,
     CrashCommitAck(HashMap<HashType, (u64, Vec<ProtoTransactionResult>)>),
     ByzCommitAck(HashMap<HashType, (u64, Vec<ProtoByzResponse>)>),
 }
@@ -34,6 +35,8 @@ pub struct ClientReplyHandler {
 
     reply_processors: JoinSet<()>,
     reply_processor_queue: (async_channel::Sender<ReplyProcessorCommand>, async_channel::Receiver<ReplyProcessorCommand>),
+
+    must_cancel: bool,
 }
 
 impl ClientReplyHandler {
@@ -54,6 +57,7 @@ impl ClientReplyHandler {
             reply_processors: JoinSet::new(),
             reply_processor_queue: async_channel::bounded(_chan_depth),
             byz_response_store: HashMap::new(),
+            must_cancel: false,
         }
     }
 
@@ -112,7 +116,7 @@ impl ClientReplyHandler {
                 let (batch_hash_chan, mut reply_vec) = batch.unwrap();
                 let batch_hash = batch_hash_chan.await.unwrap();
 
-                if batch_hash.is_empty() {
+                if batch_hash.is_empty() || self.must_cancel {
                     // This is called when !listen_on_new_batch
                     // This must be cancelled.
                     if !reply_vec.is_empty() {
@@ -189,6 +193,8 @@ impl ClientReplyHandler {
                         let _ = chan.send((reply_msg, LatencyProfile::new())).await;
                     }
                 }
+
+                self.must_cancel = true;
                 
             },
             ClientReplyCommand::CrashCommitAck(crash_commit_ack) => {
@@ -209,6 +215,9 @@ impl ClientReplyHandler {
                         self.byz_commit_reply_buf.insert(hash, (n, reply_vec));
                     }
                 }
+            },
+            ClientReplyCommand::StopCancelling => {
+                self.must_cancel = false;
             },
         }
     }
