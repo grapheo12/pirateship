@@ -171,7 +171,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
 
                         },
                         Some(client::proto_client_reply::Reply::Leader(leader)) => {
-                            sleep(Duration::from_secs(1)).await;
+                            // sleep(Duration::from_secs(1)).await;
                             // We need to try again but with the leader reset.
                             let curr_leader = leader.name;
                             let node_list = crate::config::NodeInfo::deserialize(&leader.serialized_node_infos);
@@ -190,7 +190,8 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             
                             info!("Leader changed to {}", curr_leader);
 
-                            let node_list = node_list.nodes.keys().map(|e| e.clone()).collect::<Vec<_>>();
+                            let mut node_list = node_list.nodes.keys().map(|e| e.clone()).collect::<Vec<_>>();
+                            node_list.sort();
                             let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, Some(node_list), new_leader_id)).await;
                         },
                         

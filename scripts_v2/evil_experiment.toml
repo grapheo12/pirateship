@@ -59,7 +59,7 @@ repeats = 1
 num_nodes = 7
 node_distribution = "uniform"
 build_command = "make pirateship_logger_evil"
-duration = 120
+duration = 150
 
 [experiments.sweeping_parameters]
 num_clients = [400]
