@@ -606,9 +606,14 @@ impl Staging {
             self.__storage_ack_buffer.push_back(storage_ack);
         }
 
-        if old_view_is_stable && self.__ae_seen_in_this_view > 200
+        let (hard_gap, soft_gap) = {
+            let config = &self.config.get().consensus_config;
+            (config.commit_index_gap_hard, config.commit_index_gap_soft)
+        };
+
+        if old_view_is_stable && self.__ae_seen_in_this_view > soft_gap as usize
         /* don't trigger unnecessarily on new view messages */
-        && self.ci - self.bci > 500 {
+        && self.ci - self.bci > hard_gap {
             // Trigger a view change
             warn!("Triggering view change due to too much gap between CI and BCI: {} {}", self.ci, self.bci);
             self.view_change_timer.fire_now().await;
@@ -748,15 +753,12 @@ impl Staging {
     async fn maybe_crash_commit(&mut self) -> Result<(), ()> {
         let old_ci = self.ci;
 
-        // let n_num_tx = self
-        //     .pending_blocks
-        //     .iter()
-        //     .map(|e| (e.block.block.n, e.block.block.tx_list.len()))
-        //     .collect::<Vec<_>>();
-        // trace!("Pending blocks: {:?}", n_num_tx);
-
+        let soft_gap = {
+            let config = &self.config.get().consensus_config;
+            config.commit_index_gap_soft
+        };
         let non_bcied = self.ci - self.bci;
-        let thresh = if non_bcied > 200 {
+        let thresh = if non_bcied > soft_gap {
             self.byzantine_commit_threshold()
         } else {
             self.crash_commit_threshold()

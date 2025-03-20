@@ -70,7 +70,6 @@ pub struct RpcConfig {
 pub struct ConsensusConfig {
     pub node_list: Vec<String>, // This better be in the same order in all nodes.
     pub learner_list: Vec<String>,
-    pub quorum_diversity_k: usize,
     pub max_backlog_batch_size: usize,
     pub batch_max_delay_ms: u64,
     pub signature_max_delay_ms: u64,
@@ -79,6 +78,8 @@ pub struct ConsensusConfig {
     pub num_crypto_workers: usize,
     pub log_storage_config: StorageConfig,
     pub liveness_u: u64,
+    pub commit_index_gap_soft: u64, // ci - bci >= this -> even for crash commits, honest leader needs (n - u) votes
+    pub commit_index_gap_hard: u64, // ci - bci >= this -> followers trigger view change.
 }
 
 impl ConsensusConfig {
@@ -196,13 +197,14 @@ impl ClientConfig {
             consensus_config: ConsensusConfig {
                 node_list: Vec::new(),
                 learner_list: Vec::new(),
-                quorum_diversity_k: 0,
                 batch_max_delay_ms: 10,
                 max_backlog_batch_size: 1,
                 signature_max_delay_blocks: 128,
                 signature_max_delay_ms: 100,
                 view_timeout_ms: 150,
                 num_crypto_workers: 128,
+                commit_index_gap_soft: 256,
+                commit_index_gap_hard: 512,
 
                 liveness_u: 1,
 

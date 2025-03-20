@@ -1,10 +1,11 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use pft::config::{self, Config};
 use pft::consensus_v2;
 use tokio::{runtime, signal};
+use std::process::exit;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
 use pft::consensus_v2::engines::null_app::NullApp;
 use std::io::Write;
@@ -75,6 +76,9 @@ async fn run_main(cfg: Config) -> io::Result<()> {
         Ok(_) => {
             info!("Received SIGINT. Shutting down.");
             handles.abort_all();
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            info!("Force shutdown.");
+            exit(0);
         },
         Err(e) => {
             error!("Signal: {:?}", e);

@@ -32,7 +32,8 @@ recv_buffer_size = 32768
 channel_depth = 1000
 
 [node_config.consensus_config]
-quorum_diversity_k = 3
+commit_index_gap_soft = 250
+commit_index_gap_hard = 500
 liveness_u = 1
 max_backlog_batch_size = 1000
 signature_max_delay_blocks = 50
