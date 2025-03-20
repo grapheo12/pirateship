@@ -67,6 +67,7 @@ pub struct Staging {
 
     __vc_retry_num: usize,
     __storage_ack_buffer: VecDeque<oneshot::Receiver<Result<(), Error>>>,
+    __ae_seen_in_this_view: usize,
 }
 
 impl Staging {
@@ -143,6 +144,7 @@ impl Staging {
             logserver_tx,
             __vc_retry_num: 0,
             __storage_ack_buffer: VecDeque::new(),
+            __ae_seen_in_this_view: 0,
         }
     }
 
