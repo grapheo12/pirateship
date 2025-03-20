@@ -198,7 +198,7 @@ impl BatchProposer {
 
         let max_batch_size = self.config.get().consensus_config.max_backlog_batch_size;
 
-        if self.current_raw_batch.as_ref().unwrap().len() >= max_batch_size || batch_timer_tick {
+        if self.current_raw_batch.as_ref().unwrap().len() >= max_batch_size || (self.make_new_batches && batch_timer_tick) {
             self.propose_new_batch().await;
         }
 

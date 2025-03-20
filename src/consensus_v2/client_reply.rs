@@ -115,7 +115,9 @@ impl ClientReplyHandler {
                 if batch_hash.is_empty() {
                     // This is called when !listen_on_new_batch
                     // This must be cancelled.
-                    info!("Clearing out queued replies of size {}", reply_vec.len());
+                    if !reply_vec.is_empty() {
+                        info!("Clearing out queued replies of size {}", reply_vec.len());
+                    }
                     let node_infos = NodeInfo {
                         nodes: self.config.get().net_config.nodes.clone()
                     };

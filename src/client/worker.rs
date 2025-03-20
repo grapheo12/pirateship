@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc, time::{Duration, Instant}};
 use log::{debug, error, info};
 use nix::libc::stat;
 use prost::Message as _;
-use tokio::{task::JoinSet, time::sleep};
+use tokio::{sync::oneshot::error, task::JoinSet, time::sleep};
 
 use crate::{config::ClientConfig, proto::{client::{self, ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::channel::{make_channel, Receiver, Sender}};
 use crate::rpc::MessageRef;
@@ -161,6 +161,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             }
                         },
                         Some(client::proto_client_reply::Reply::TryAgain(_try_again)) => {
+                            info!("Trying again after backoff");
                             sleep(Duration::from_secs(1)).await;
                             let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, None, None)).await;
                         },
@@ -180,6 +181,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             let new_leader_id = node_list_vec.iter().position(|e| e.eq(&curr_leader));
                             if new_leader_id.is_none() {
                                 // Malformed!
+                                error!("Malformed leader response. Leader not found in the node list.");
                                 let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, None, None)).await;
                                 continue;
                             }
