@@ -110,7 +110,7 @@ impl ServerContextType for PinnedConsensusServerContext {
                         return Ok(RespType::NoResp);
                     },
             crate::proto::rpc::proto_payload::Message::AppendEntries(proto_append_entries) => {
-                        info!("Received append entries from {:?}. Size: {}", sender, proto_append_entries.encoded_len());
+                        // info!("Received append entries from {:?}. Size: {}", sender, proto_append_entries.encoded_len());
                         self.fork_receiver_tx.send((proto_append_entries, sender)).await
                             .expect("Channel send error");
                         return Ok(RespType::NoResp);
