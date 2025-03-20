@@ -1,5 +1,5 @@
 use std::{collections::VecDeque, io::Error, sync::Arc};
-use crate::utils::channel::make_channel;
+use crate::{crypto::FutureHash, utils::channel::make_channel};
 
 use log::{debug, info, warn};
 use prost::Message;
@@ -52,7 +52,7 @@ impl MultipartFork {
 
 struct ContinuityStats {
     last_ae_view: u64,
-    last_ae_block_hash: Option<oneshot::Receiver<Result<HashType, Error>>>,
+    last_ae_block_hash: FutureHash,
     waiting_on_nack_reply: bool
 }
 
@@ -122,7 +122,7 @@ impl ForkReceiver {
             blocked_on_multipart: false,
             continuity_stats: ContinuityStats {
                 last_ae_view: 0,
-                last_ae_block_hash: None,
+                last_ae_block_hash: FutureHash::None,
                 waiting_on_nack_reply: false
             },
             logserver_query_tx,
@@ -302,7 +302,7 @@ impl ForkReceiver {
         }, self.byzantine_liveness_threshold()).await;
         self.broadcaster_tx.send(multipart_fut).await.unwrap();
 
-        self.continuity_stats.last_ae_block_hash = Some(hash_receivers.pop().unwrap());
+        self.continuity_stats.last_ae_block_hash = FutureHash::FutureResult(hash_receivers.pop().unwrap());
 
         if parts.len() > 0 {
             assert_eq!(self.multipart_buffer.len(), 0); // Due to the Invariant <blocked_on_multipart>
@@ -324,7 +324,7 @@ impl ForkReceiver {
             ForkReceiverCommand::UpdateView(view, config_num) => {
                 if self.view != view {
                     self.continuity_stats.last_ae_view = view;
-                    self.continuity_stats.last_ae_block_hash = None;
+                    self.continuity_stats.last_ae_block_hash = FutureHash::None;
                 }
                 self.view = view;
                 let config_is_updating = self.config_num < config_num;
@@ -350,7 +350,7 @@ impl ForkReceiver {
                     if maybe_legit {
                         let (multipart_fut, mut hash_receivers) = self.crypto.prepare_fork(part, self.multipart_buffer.len(), ae_stats, self.byzantine_liveness_threshold()).await;
                         self.broadcaster_tx.send(multipart_fut).await.unwrap();
-                        self.continuity_stats.last_ae_block_hash = Some(hash_receivers.pop().unwrap());
+                        self.continuity_stats.last_ae_block_hash = FutureHash::FutureResult(hash_receivers.pop().unwrap());
                     }
 
                 }
@@ -437,16 +437,36 @@ impl ForkReceiver {
             get_parent_hash_in_proto_block_ser(
                 &fork.serialized_blocks.first().unwrap().serialized_body
             ).unwrap();
-
-        if self.continuity_stats.last_ae_block_hash.is_some() {
-            let hsh = self.continuity_stats.last_ae_block_hash.as_mut().unwrap().await.unwrap();
-            if let Ok(hsh) = hsh {
-                let local_hash_check = hsh.eq(&parent_hash);
-    
-                if local_hash_check {
-                    return Ok(());
+        
+        let hsh = match self.continuity_stats.last_ae_block_hash.take() {
+            FutureHash::None => None,
+            FutureHash::Immediate(hsh) => {
+                self.continuity_stats.last_ae_block_hash = FutureHash::Immediate(hsh.clone());
+                Some(hsh.clone())
+            },
+            FutureHash::Future(receiver) => {
+                let hsh = receiver.await.unwrap();
+                self.continuity_stats.last_ae_block_hash = FutureHash::Immediate(hsh.clone());
+                Some(hsh)
+            },
+            FutureHash::FutureResult(receiver) => {
+                let hsh = receiver.await.unwrap();
+                if hsh.is_err() {
+                    self.continuity_stats.last_ae_block_hash = FutureHash::None;
+                    None
+                } else {
+                    let hsh = hsh.unwrap();
+                    self.continuity_stats.last_ae_block_hash = FutureHash::Immediate(hsh.clone());
+                    Some(hsh)
                 }
+            },
+        };
+        if hsh.is_some() {
+            let hsh = hsh.unwrap();
+            let local_hash_check = hsh.eq(&parent_hash);
 
+            if local_hash_check {
+                return Ok(());
             }
         }
 
