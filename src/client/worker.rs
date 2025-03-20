@@ -175,7 +175,9 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             // We need to try again but with the leader reset.
                             let curr_leader = leader.name;
                             let node_list = crate::config::NodeInfo::deserialize(&leader.serialized_node_infos);
-                            let new_leader_id = node_list.nodes.iter().position(|e| e.0.eq(&curr_leader));
+                            let mut node_list_vec = node_list.nodes.keys().map(|e| e.clone()).collect::<Vec<_>>();
+                            node_list_vec.sort();
+                            let new_leader_id = node_list_vec.iter().position(|e| e.eq(&curr_leader));
                             if new_leader_id.is_none() {
                                 // Malformed!
                                 let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, None, None)).await;
@@ -190,9 +192,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             
                             info!("Leader changed to {}", curr_leader);
 
-                            let mut node_list = node_list.nodes.keys().map(|e| e.clone()).collect::<Vec<_>>();
-                            node_list.sort();
-                            let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, Some(node_list), new_leader_id)).await;
+                            let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, Some(node_list_vec), new_leader_id)).await;
                         },
                         
                         None => {
