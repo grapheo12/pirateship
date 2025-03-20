@@ -217,6 +217,8 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         let mut total_requests = 0;
         let max_requests = self.config.workload_config.num_requests;
         let mut node_list = self.config.net_config.nodes.keys().map(|e| e.clone()).collect::<Vec<_>>();
+        node_list.sort();
+
         let mut curr_leader_id = 0;
         let mut curr_round_robin_id = 0;
 
@@ -288,6 +290,8 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
     async fn send_request(&self, req: &mut OutstandingRequest, node_list: &Vec<String>, curr_leader_id: &mut usize, curr_round_robin_id: &mut usize, outstanding_requests: &mut HashMap<u64, OutstandingRequest>) {
         let buf = &req.payload;
         let sz = buf.len();
+
+        let __executor_mode = req.executor_mode.clone();
         loop {
             let res = match req.executor_mode {
                 Executor::Leader => {
@@ -315,7 +319,15 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
 
             if res.is_err() {
                 debug!("Error: {:?}", res);
-                *curr_leader_id = (*curr_leader_id + 1) % node_list.len();
+                match __executor_mode {
+                    Executor::Leader => {
+                        *curr_leader_id = (*curr_leader_id + 1) % node_list.len();
+                    },
+                    Executor::Any => {
+                        // *curr_round_robin_id = (*curr_round_robin_id + 1) % node_list.len();
+                    }
+                }
+
                 outstanding_requests.clear(); // Clear it out because I am not going to listen on that socket again
                 // info!("Retrying with leader {} Backoff: {} ms: Error: {:?}", curr_leader, current_backoff_ms, res);
                 // backoff!(*current_backoff_ms);
