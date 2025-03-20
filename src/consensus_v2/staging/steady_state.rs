@@ -423,7 +423,7 @@ impl Staging {
 
         self.perf_register_block(&block);
         self.logserver_tx.send(LogServerCommand::NewBlock(block.clone())).await.unwrap();
-        self.__ae_seen_in_this_view += 1;
+        self.__ae_seen_in_this_view += if this_is_final_block { 1 } else { 0 };
 
         // Postcondition here: block.view == self.view && check_continuity() == true && i_am_leader
         let block_view_is_stable = block.block.view_is_stable;
@@ -568,7 +568,7 @@ impl Staging {
         }
 
         self.logserver_tx.send(LogServerCommand::NewBlock(block.clone())).await.unwrap();
-        self.__ae_seen_in_this_view += 1;
+        self.__ae_seen_in_this_view += if this_is_final_block { 1 } else { 0 };
 
         // Postcondition here: block.view == self.view && check_continuity() == true && !i_am_leader
         let block_with_votes = CachedBlockWithVotes {
