@@ -275,6 +275,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                     let mut req = req.unwrap();
                     self.send_request(&mut req, &node_list, &mut curr_leader_id, &mut curr_round_robin_id, &mut outstanding_requests).await;
                     generator_tx.send(req.get_checker_task()).await.unwrap();
+                    outstanding_requests.insert(req.id, req);
                 },
                 None => {
                     break;
