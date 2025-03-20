@@ -108,8 +108,23 @@ impl ClientReplyHandler {
                     return Ok(());
                 }
 
-                let (batch_hash_chan, reply_vec) = batch.unwrap();
+                let (batch_hash_chan, mut reply_vec) = batch.unwrap();
                 let batch_hash = batch_hash_chan.await.unwrap();
+
+                if batch_hash.is_empty() {
+                    // This is called when !listen_on_new_batch
+                    // This must be cancelled.
+                    let node_infos = NodeInfo {
+                        nodes: self.config.get().net_config.nodes.clone()
+                    };
+                    for (chan, tag, _) in reply_vec.drain(..) {
+                        let reply = Self::get_try_again_message(tag, &node_infos);
+                        let reply_ser = reply.encode_to_vec();
+                        let _sz = reply_ser.len();
+                        let reply_msg = PinnedMessage::from(reply_ser, _sz, crate::rpc::SenderType::Anon);
+                        let _ = chan.send((reply_msg, LatencyProfile::new())).await;
+                    }
+                }
 
                 self.byz_reply_map.insert(batch_hash.clone(), reply_vec.iter().map(|(_, client_tag, sender)| (*client_tag, sender.clone())).collect());
                 self.reply_map.insert(batch_hash.clone(), reply_vec);

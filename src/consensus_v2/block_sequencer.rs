@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::{pin::Pin, sync::Arc, time::Duration};
 
-use crate::crypto::FutureHash;
+use crate::crypto::{default_hash, FutureHash};
 use crate::utils::channel::{Receiver, Sender};
 use log::{debug, info, trace, warn};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -214,6 +214,18 @@ impl BlockSequencer {
                 }
                 _cmd = self.control_command_rx.recv() => {
                     self.handle_control_command(_cmd).await;
+                },
+                _batch_and_client_reply = self.batch_rx.recv() => {
+                    if let Some(_) = _batch_and_client_reply {
+                        let (_, client_reply) = _batch_and_client_reply.unwrap();
+                        let (tx, rx) = oneshot::channel();
+                        tx.send(vec![]).expect("Should be able to send hash");
+
+                        self.client_reply_tx
+                            .send((rx, client_reply))
+                            .await
+                            .expect("Should be able to send client_reply_tx");
+                    }
                 },
             }
         }
