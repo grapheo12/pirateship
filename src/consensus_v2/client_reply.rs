@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use log::info;
 use prost::Message as _;
 use tokio::{sync::{oneshot, Mutex}, task::JoinSet};
 
@@ -114,6 +115,7 @@ impl ClientReplyHandler {
                 if batch_hash.is_empty() {
                     // This is called when !listen_on_new_batch
                     // This must be cancelled.
+                    info!("Clearing out queued replies of size {}", reply_vec.len());
                     let node_infos = NodeInfo {
                         nodes: self.config.get().net_config.nodes.clone()
                     };
@@ -124,6 +126,8 @@ impl ClientReplyHandler {
                         let reply_msg = PinnedMessage::from(reply_ser, _sz, crate::rpc::SenderType::Anon);
                         let _ = chan.send((reply_msg, LatencyProfile::new())).await;
                     }
+
+                    return Ok(());
                 }
 
                 self.byz_reply_map.insert(batch_hash.clone(), reply_vec.iter().map(|(_, client_tag, sender)| (*client_tag, sender.clone())).collect());
