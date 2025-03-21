@@ -6,7 +6,7 @@ pub mod fork_receiver;
 pub mod app;
 pub mod engines;
 pub mod client_reply;
-
+pub mod frontend;
 #[cfg(test)]
 mod tests;
 
