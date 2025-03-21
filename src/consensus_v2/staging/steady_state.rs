@@ -626,7 +626,7 @@ impl Staging {
 
         if old_view_is_stable && self.__ae_seen_in_this_view > soft_gap as usize
         /* don't trigger unnecessarily on new view messages */
-        && self.ci - self.bci > hard_gap {
+        && self.ci as i64 - self.bci as i64 > hard_gap as i64 {
             // Trigger a view change
             warn!("Triggering view change due to too much gap between CI and BCI: {} {}", self.ci, self.bci);
             self.view_change_timer.fire_now().await;
@@ -771,13 +771,13 @@ impl Staging {
             let config = &self.config.get().consensus_config;
             config.commit_index_gap_soft
         };
-        let non_bcied = self.ci - self.bci;
+        let non_bcied = self.ci as i64 - self.bci as i64;
 
         #[cfg(feature = "no_qc")]
         let thresh = self.crash_commit_threshold();
 
         #[cfg(not(feature = "no_qc"))]
-        let thresh = if non_bcied > soft_gap {
+        let thresh = if non_bcied > soft_gap as i64 {
             self.byzantine_commit_threshold()
         } else {
             self.crash_commit_threshold()

@@ -114,7 +114,7 @@ impl Staging {
             &leader_staging_event_order,
         ));
 
-        Self {
+        let mut ret = Self {
             config,
             client,
             crypto,
@@ -145,7 +145,15 @@ impl Staging {
             __vc_retry_num: 0,
             __storage_ack_buffer: VecDeque::new(),
             __ae_seen_in_this_view: 0,
+        };
+
+        #[cfg(not(feature = "view_change"))]
+        {
+            ret.view = 1;
+            ret.view_is_stable = true;
         }
+
+        ret
     }
 
     pub async fn run(staging: Arc<Mutex<Self>>) {

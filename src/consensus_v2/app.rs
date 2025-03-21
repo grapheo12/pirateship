@@ -45,7 +45,7 @@ struct LogStats {
 
 impl LogStats {
     fn new() -> Self {
-        Self {
+        let mut res = Self {
             ci: 0,
             bci: 0,
             view: 0,
@@ -58,7 +58,15 @@ impl LogStats {
             total_crash_committed_txs: 0,
             total_byz_committed_txs: 0,
             total_unlogged_txs: 0,
+        };
+
+        #[cfg(not(feature = "view_change"))]
+        {
+            res.view_is_stable = true;
+            res.view = 1;
         }
+
+        res
     }
 
     fn print(&self) {
@@ -68,7 +76,7 @@ impl LogStats {
             self.ci,
             self.bci,
             self.total_requests - (self.total_crash_committed_txs + self.total_unlogged_txs),
-            self.ci - self.bci,
+            self.ci as i64 - self.bci as i64,
             self.total_crash_committed_txs,
             self.total_byz_committed_txs,
             self.last_hash.encode_hex::<String>(),

@@ -84,7 +84,7 @@ impl BlockSequencer {
         let perf_counter_unsigned =
             RefCell::new(PerfCounter::new("BlockSequencerUnsigned", &event_order));
 
-        Self {
+        let mut ret = Self {
             config,
             control_command_rx,
             batch_rx,
@@ -103,7 +103,17 @@ impl BlockSequencer {
             last_signed_seq_num: 0,
             perf_counter_signed,
             perf_counter_unsigned,
+        };
+
+        #[cfg(not(feature = "view_change"))]
+        {
+            ret.view_is_stable = true;
+            ret.view = 1;
+            ret.config_num = 1;
         }
+
+        ret
+
     }
 
     pub async fn run(block_maker: Arc<Mutex<Self>>) {

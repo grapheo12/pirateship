@@ -68,7 +68,8 @@ impl BatchProposer {
 
         let perf_counter = RefCell::new(PerfCounter::new("BatchProposer", &event_order));
 
-        Self {
+        #[allow(unused_mut)]
+        let mut ret = Self {
             config,
             batch_proposer_rx, block_maker_tx,
             current_raw_batch: Some(RawBatch::with_capacity(max_batch_size)),
@@ -79,7 +80,16 @@ impl BatchProposer {
             make_new_batches: false,
             current_leader: String::new(),
             cmd_rx,
+        };
+
+        #[cfg(not(feature = "view_change"))]
+        {
+            let leader = ret.config.get().consensus_config.get_leader_for_view(1);
+            ret.make_new_batches = leader == ret.config.get().net_config.name;
+            ret.current_leader = leader;
         }
+
+        ret
     }
 
     pub async fn run(batch_proposer: Arc<Mutex<Self>>) {
