@@ -303,7 +303,8 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                     }
 
                     if let Some(_node_list) = node_vec {
-                        node_list = _node_list;
+                        node_list.clear();
+                        node_list.extend(_node_list.iter().map(|e| e.clone()));
                     }
 
                     let new_leader_name = node_list[curr_leader_id].clone();
