@@ -792,7 +792,7 @@ sleep 1
                     if "node" in bin:
                         binary_name = "node"
                     elif "client" in bin:
-                        binary_name = "benchmark_client"
+                        binary_name = "benchmark" # "benchmark_client" is more than 15 chars and pkill doesn't like that
 
                 # Copy the logs back
                     _script += f"""
