@@ -49,8 +49,6 @@ fn get_feature_set() -> (&'static str, &'static str) {
 
     #[cfg(feature = "lucky_raft")]{ protocol = "lucky_raft"; }
     #[cfg(feature = "signed_raft")]{ protocol = "signed_raft"; }
-    #[cfg(feature = "diverse_raft")]{ protocol = "diverse_raft"; }
-    #[cfg(feature = "jolteon")]{ protocol = "jolteon"; }
     #[cfg(feature = "chained_pbft")]{ protocol = "chained_pbft"; }
     #[cfg(feature = "pirateship")]{ protocol = "pirateship"; }
 
@@ -64,7 +62,7 @@ async fn run_main(cfg: Config) -> io::Result<()> {
     // let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
     
     #[cfg(feature = "app_kvs")]
-    let node = Arc::new(consensus::ConsensusNode::<PinnedKVStoreEngine>::new(&cfg));
+    let node = Arc::new(consensus_v2::ConsensusNode::<KVSAppEngine>::new(&cfg));
     
     #[cfg(feature = "app_sql")]
     let node = Arc::new(consensus::ConsensusNode::<PinnedSQLEngine>::new(&cfg));

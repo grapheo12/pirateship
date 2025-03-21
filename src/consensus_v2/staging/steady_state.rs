@@ -109,11 +109,21 @@ impl Staging {
     pub(super) fn byzantine_liveness_threshold(&self) -> usize {
         let config = self.config.get();
         let n = config.consensus_config.node_list.len();
-        let u = config.consensus_config.liveness_u as usize;
+        
+        #[cfg(feature = "platforms")]
+        {
+            let u = config.consensus_config.liveness_u as usize;
+    
+            assert!(n >= u);
+    
+            n - u
+        }
 
-        assert!(n >= u);
-
-        n - u
+        #[cfg(not(feature = "platforms"))]
+        {
+            let f = n / 3;
+            n - f
+        }
     }
 
     fn byzantine_fast_path_threshold(&self) -> usize {
@@ -155,6 +165,9 @@ impl Staging {
     }
 
     pub(super) async fn handle_view_change_timer_tick(&mut self) -> Result<(), ()> {
+        #[cfg(not(feature = "view_change"))]
+        return Ok(());
+
         warn!("View change timer fired");
         if self.view == 0 || self.view_is_stable {
             self.maybe_update_view(self.view + 1, self.config_num).await;
@@ -709,6 +722,7 @@ impl Staging {
 
         self.maybe_crash_commit().await?;
 
+        #[cfg(not(feature = "no_qc"))]
         self.maybe_create_qcs().await?;
 
         Ok(())
@@ -758,11 +772,17 @@ impl Staging {
             config.commit_index_gap_soft
         };
         let non_bcied = self.ci - self.bci;
+
+        #[cfg(feature = "no_qc")]
+        let thresh = self.crash_commit_threshold();
+
+        #[cfg(not(feature = "no_qc"))]
         let thresh = if non_bcied > soft_gap {
             self.byzantine_commit_threshold()
         } else {
             self.crash_commit_threshold()
         };
+
         for block in self.pending_blocks.iter() {
             if block.block.block.n <= self.ci {
                 continue;

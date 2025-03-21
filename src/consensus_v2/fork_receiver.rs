@@ -474,9 +474,18 @@ impl ForkReceiver {
     }
 
     fn byzantine_liveness_threshold(&self) -> usize {
-        let u = self.config.get().consensus_config.liveness_u as usize;
         let n = self.config.get().consensus_config.node_list.len();
+        
+        #[cfg(feature = "platforms")]
+        {
+            let u = self.config.get().consensus_config.liveness_u as usize;
+            n - u
+        }
 
-        n - u
+        #[cfg(not(feature = "platforms"))]
+        {
+            let f = n / 3;
+            n - f
+        }
     }
 }

@@ -84,19 +84,40 @@ impl Pacemaker {
     fn pacemaker_view_update_threshold(&self) -> usize {
         let config = self.config.get();
         let n = config.consensus_config.node_list.len();
-        let u = config.consensus_config.liveness_u as usize;
 
-        // TODO: Change it to be explicitly r_safe + 1.
-        n - 2 * u
+        #[cfg(feature = "platforms")]
+        {
+            let u = config.consensus_config.liveness_u as usize;
+    
+            // TODO: Change it to be explicitly r_safe + 1.
+            n - 2 * u
+        }
+
+        #[cfg(not(feature = "platforms"))]
+        {
+            let f = n / 3;
+            f + 1
+        }
     }
 
     fn new_view_bcast_threshold(&self) -> usize {
         let config = self.config.get();
         let n = config.consensus_config.node_list.len();
-        let u = config.consensus_config.liveness_u as usize;
 
-        // If I am the leader, New view after (N - u) view change messages.
-        n - u
+
+        #[cfg(not(feature = "platforms"))]
+        {
+            let f = n / 3;
+            n - f
+        }
+
+        #[cfg(feature = "platforms")]
+        {
+            let u = config.consensus_config.liveness_u as usize;
+    
+            // If I am the leader, New view after (N - u) view change messages.
+            n - u
+        }
     }
 
     pub async fn run(pacemaker: Arc<Mutex<Self>>) {

@@ -88,11 +88,8 @@ never_sign = []
 dynamic_sign = []
 # Other features
 storage = []
-quorum_diversity = []
 view_change = []
-no_pipeline = []
 no_qc = []
-reply_from_app = []
 fast_path = []
 platforms = []
 evil = []
@@ -100,18 +97,14 @@ evil = []
 # Applications
 app_logger = []
 app_kvs = []
-app_sql = ["reply_from_app"]
+app_sql = []
 # Protocols specs
-lucky_raft = ["fixed_leader", "never_sign"]         # QC never formed, so no_qc is implied
+lucky_raft = ["fixed_leader", "never_sign", "no_qc"]
 signed_raft = ["fixed_leader", "dynamic_sign", "no_qc"]
-diverse_raft = ["fixed_leader", "dynamic_sign", "quorum_diversity"]
-jolteon = ["round_robin_leader", "always_sign", "view_change", "no_pipeline"]
 chained_pbft = ["round_robin_leader", "always_sign", "view_change"]
-pirateship = ["round_robin_leader", "dynamic_sign", "quorum_diversity", "view_change"]
+pirateship = ["round_robin_leader", "dynamic_sign", "view_change"]
 
 default = ["pirateship", "app_logger", "storage", "fast_path", "platforms"]
-# default = ["signed_raft", "app_logger", "storage"]
-# default = ["pirateship", "app_logger", "storage", "evil", "fast_path", "platforms"]
 
 
 [profile.release]

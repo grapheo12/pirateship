@@ -84,8 +84,17 @@ pub struct ConsensusConfig {
 
 impl ConsensusConfig {
     pub fn get_leader_for_view(&self, view: u64) -> String {
-        let n = self.node_list.len() as u64;
-        self.node_list[((view - 1) % n) as usize].clone()
+
+        #[cfg(feature = "round_robin_leader")]
+        {
+            let n = self.node_list.len() as u64;
+            self.node_list[((view - 1) % n) as usize].clone()
+        }
+
+        #[cfg(feature = "fixed_leader")]
+        {
+            self.node_list[0].clone()
+        }
     }
 }
 
