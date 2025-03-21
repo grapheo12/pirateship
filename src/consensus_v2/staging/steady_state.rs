@@ -725,6 +725,10 @@ impl Staging {
         #[cfg(not(feature = "no_qc"))]
         self.maybe_create_qcs().await?;
 
+        #[cfg(feature = "no_qc")]
+        self.do_byzantine_commit(self.bci, self.ci).await;
+        // This is needed to prevent a memory leak.
+
         Ok(())
     }
 
