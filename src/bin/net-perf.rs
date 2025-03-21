@@ -145,10 +145,11 @@ impl ProfilerNode
                 // I will broadcast
                 loop {
                     let mut profile = LatencyProfile::new();
+                    let min_success = send_list.len();
                     let _ = PinnedClient::broadcast(
                         &node2.client,
                         &send_list,
-                        &msg, &mut profile).await;
+                        &msg, &mut profile, min_success).await;
 
                     node2.ctx.0.bytes_completed_bcasts.fetch_add(payload_sz * send_list.len(), Ordering::SeqCst);
                 }

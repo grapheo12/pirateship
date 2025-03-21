@@ -788,3 +788,9 @@ async fn _test_null_app(config: Config, batch_proposer_rx: Receiver<TxWithAckCha
     println!("Errors appearing after this are inconsequential");
     std::fs::remove_dir_all(&storage_path).unwrap();
 }
+
+
+#[tokio::test]
+async fn test_logserver() {
+    // TODO
+}

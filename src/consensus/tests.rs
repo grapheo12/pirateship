@@ -52,7 +52,7 @@ fn gen_config() -> Config {
         max_backlog_batch_size: 1000,
         signature_max_delay_blocks: 128,
         signature_max_delay_ms: 100,
-        vote_processing_workers: 128,
+        num_crypto_workers: 128,
         view_timeout_ms: 150,
         batch_max_delay_ms: 10,
 

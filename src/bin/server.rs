@@ -1,18 +1,17 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use pft::config::{self, Config};
 use pft::consensus_v2;
 use tokio::{runtime, signal};
-use std::io::Write;
+use std::process::exit;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
 use pft::consensus_v2::engines::null_app::NullApp;
-use pft::consensus_v2::frontend; //change location
-use std::thread;
+use std::io::Write;
 
-// #[global_allocator]
-// static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 /// Fetch json config file from command line path.
 /// Panic if not found or parsed properly.
@@ -50,22 +49,11 @@ fn get_feature_set() -> (&'static str, &'static str) {
 
     #[cfg(feature = "lucky_raft")]{ protocol = "lucky_raft"; }
     #[cfg(feature = "signed_raft")]{ protocol = "signed_raft"; }
-    #[cfg(feature = "diverse_raft")]{ protocol = "diverse_raft"; }
-    #[cfg(feature = "jolteon")]{ protocol = "jolteon"; }
     #[cfg(feature = "chained_pbft")]{ protocol = "chained_pbft"; }
     #[cfg(feature = "pirateship")]{ protocol = "pirateship"; }
 
     (protocol, app)
 }
-
-async fn test_run() {
-    let v = &["apples", "cake", "coffee"];
-
-    for text in v {
-        println!("I like {}.", text);
-    }
-}
-
 
 async fn run_main(cfg: Config) -> io::Result<()> {
     #[cfg(feature = "app_logger")]
@@ -74,7 +62,7 @@ async fn run_main(cfg: Config) -> io::Result<()> {
     // let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
     
     #[cfg(feature = "app_kvs")]
-    let node = Arc::new(consensus::ConsensusNode::<PinnedKVStoreEngine>::new(&cfg));
+    let node = Arc::new(consensus_v2::ConsensusNode::<KVSAppEngine>::new(&cfg));
     
     #[cfg(feature = "app_sql")]
     let node = Arc::new(consensus::ConsensusNode::<PinnedSQLEngine>::new(&cfg));
@@ -86,6 +74,9 @@ async fn run_main(cfg: Config) -> io::Result<()> {
         Ok(_) => {
             info!("Received SIGINT. Shutting down.");
             handles.abort_all();
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            info!("Force shutdown.");
+            exit(0);
         },
         Err(e) => {
             error!("Signal: {:?}", e);
@@ -125,7 +116,6 @@ fn main() {
             num_threads = _num_cores - 1;
         }
     }
-    let num_threads = 4;
 
     let start_idx = start_idx * num_threads;
     
@@ -150,22 +140,6 @@ fn main() {
         })
         .build()
         .unwrap();
-    
-    //run front end server
-    let frontend_handle = thread::spawn(move || {
-        let frontend_runtime = runtime::Builder::new_multi_thread()
-            .enable_all()
-            .worker_threads(2) // adjust as needed
-            .build()
-            .unwrap();
-        match frontend_runtime.spawn(frontend::run_actix_server(cfg)) {
-            Ok(_) => println!("Frontend server ran successfully."),
-            Err(e) => eprintln!("Frontend server error: {:?}", e),
-        }
-    });
 
-    frontend_handle.join().unwrap();
-
-
-    let _ = runtime.block_on(test_run());
+    let _ = runtime.block_on(run_main(cfg));
 }
