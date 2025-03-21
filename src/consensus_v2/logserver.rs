@@ -1,10 +1,10 @@
 use std::{collections::{BTreeMap, HashMap, VecDeque}, sync::Arc};
 
-use log::warn;
+use log::{error, info, trace, warn};
 use prost::Message as _;
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::CachedBlock, proto::{checkpoint::{proto_backfill_nack::Origin, ProtoBackfillNack, ProtoBlockHint}, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork, ProtoViewChange}, rpc::{proto_payload::Message, ProtoPayload}}, rpc::{client::PinnedClient, MessageRef, PinnedMessage}, utils::{channel::Receiver, StorageServiceConnector}};
+use crate::{config::AtomicConfig, crypto::CachedBlock, proto::{checkpoint::{proto_backfill_nack::Origin, ProtoBackfillNack, ProtoBlockHint}, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork, ProtoViewChange}, rpc::{proto_payload::Message, ProtoPayload}}, rpc::{client::PinnedClient, MessageRef, PinnedMessage}, utils::{channel::{Receiver, Sender}, get_parent_hash_in_proto_block_ser, StorageServiceConnector}};
 
 
 /// Deletes older blocks in favor of newer ones.
@@ -64,15 +64,22 @@ impl ReadCache {
 
 
 pub enum LogServerQuery {
-    CheckHash(u64 /* block.n */, Vec<u8> /* block_hash */, oneshot::Sender<bool>),
-    GetHints(u64 /* last needed block.n */, oneshot::Sender<Vec<ProtoBlockHint>>),
+    CheckHash(u64 /* block.n */, Vec<u8> /* block_hash */, Sender<bool>),
+    GetHints(u64 /* last needed block.n */, Sender<Vec<ProtoBlockHint>>),
+}
+
+pub enum LogServerCommand {
+    NewBlock(CachedBlock),
+    Rollback(u64),
+    UpdateBCI(u64),
 }
 
 pub struct LogServer {
     config: AtomicConfig,
     client: PinnedClient,
+    bci: u64,
 
-    logserver_rx: Receiver<CachedBlock>,
+    logserver_rx: Receiver<LogServerCommand>,
     backfill_request_rx: Receiver<ProtoBackfillNack>,
     gc_rx: Receiver<u64>,
 
@@ -91,7 +98,7 @@ const LOGSERVER_READ_CACHE_WSS: usize = 100;
 impl LogServer {
     pub fn new(
         config: AtomicConfig, client: PinnedClient,
-        logserver_rx: Receiver<CachedBlock>, backfill_request_rx: Receiver<ProtoBackfillNack>,
+        logserver_rx: Receiver<LogServerCommand>, backfill_request_rx: Receiver<ProtoBackfillNack>,
         gc_rx: Receiver<u64>, query_rx: Receiver<LogServerQuery>,
         storage: StorageServiceConnector) -> Self {
         LogServer {
@@ -103,6 +110,7 @@ impl LogServer {
             storage,
             log: VecDeque::new(),
             read_cache: ReadCache::new(LOGSERVER_READ_CACHE_WSS),
+            bci: 0,
         }
     }
 
@@ -119,9 +127,24 @@ impl LogServer {
     async fn worker(&mut self) -> Result<(), ()> {
         tokio::select! {
             biased;
-            block = self.logserver_rx.recv() => {
-                if let Some(block) = block {
-                    self.log.push_back(block);
+            cmd = self.logserver_rx.recv() => {
+                match cmd {
+                    Some(LogServerCommand::NewBlock(block)) => {
+                        trace!("Received block {}", block.block.n);
+                        self.handle_new_block(block).await;
+                    },
+                    Some(LogServerCommand::Rollback(n)) => {
+                        trace!("Rolling back to block {}", n);
+                        self.handle_rollback(n).await;
+                    },
+                    Some(LogServerCommand::UpdateBCI(n)) => {
+                        trace!("Updating BCI to {}", n);
+                        self.bci = n;
+                    },
+                    None => {
+                        error!("LogServerCommand channel closed");
+                        return Err(());
+                    }
                 }
             },
 
@@ -245,6 +268,7 @@ impl LogServer {
                 ProtoPayload {
                     message: Some(Message::AppendEntries(ProtoAppendEntries {
                         fork: Some(new_fork),
+                        is_backfill_response: true,
                         ..ae
                     }))
                 }
@@ -317,19 +341,20 @@ impl LogServer {
         match query {
             LogServerQuery::CheckHash(n, hsh, sender) => {
                 if n == 0 {
-                    sender.send(true).unwrap();
+                    sender.send(true).await.unwrap();
                     return;
                 }
 
                 let block = match self.get_block(n).await {
                     Some(block) => block,
                     None => {
-                        sender.send(false).unwrap();
+                        error!("Block {} not found, last_n seen: {}", n, self.log.back().map_or(0, |block| block.block.n));
+                        sender.send(false).await.unwrap();
                         return;
                     }
                 };
 
-                sender.send(block.block_hash.eq(&hsh)).unwrap();
+                sender.send(block.block_hash.eq(&hsh)).await.unwrap();
             },
             LogServerQuery::GetHints(last_needed_n, sender) => {
                 // Starting from last_needed_n,
@@ -373,20 +398,54 @@ impl LogServer {
                 }
 
                 // Also add last_n.
-                let block = match self.get_block(last_n).await {
-                    Some(block) => block,
-                    None => {
-                        // This should never happen.
-                        panic!("Block {} not found", last_n);
-                    }
-                };
-                hints.push(ProtoBlockHint {
-                    block_n: block.block.n,
-                    digest: block.block_hash.clone(),
-                });
+                if last_n > 0 {
+                    let block = match self.get_block(last_n).await {
+                        Some(block) => block,
+                        None => {
+                            // This should never happen.
+                            panic!("Block {} not found", last_n);
+                        }
+                    };
+                    hints.push(ProtoBlockHint {
+                        block_n: block.block.n,
+                        digest: block.block_hash.clone(),
+                    });
+                }
 
-                sender.send(hints).unwrap();
-            },
+                let len = hints.len();
+
+                let res = sender.send(hints).await;
+                info!("Sent hints size {}, result = {:?}", len, res);
+            }
         }
+    }
+
+
+    /// Invariant: Log is continuous, increasing seq num and maintains hash chain continuity
+    async fn handle_new_block(&mut self, block: CachedBlock) {
+        let last_n = self.log.back().map_or(0, |block| block.block.n);
+        if block.block.n != last_n + 1 {
+            error!("Block {} is not the next block, last_n: {}", block.block.n, last_n);
+            return;
+        }
+
+        if last_n > 0 && !block.block.parent.eq(&self.log.back().unwrap().block_hash) {
+            error!("Parent hash mismatch for block {}", block.block.n);
+            return;
+        }
+
+        self.log.push_back(block);
+    }
+
+
+    async fn handle_rollback(&mut self, mut n: u64) {
+        if n <= self.bci {
+            n = self.bci + 1;
+        }
+
+        self.log.retain(|block| block.block.n <= n);
+
+        // Clean up read cache.
+        self.read_cache.cache.retain(|k, _| *k <= n);
     }
 }

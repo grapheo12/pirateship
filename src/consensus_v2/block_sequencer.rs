@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 use std::{pin::Pin, sync::Arc, time::Duration};
 
-use crate::crypto::FutureHash;
+use crate::crypto::{default_hash, FutureHash};
 use crate::utils::channel::{Receiver, Sender};
-use log::debug;
+use log::{debug, info, trace, warn};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{oneshot, Mutex};
 
@@ -95,7 +95,7 @@ impl BlockSequencer {
             client_reply_tx,
             crypto,
             parent_hash_rx: FutureHash::None,
-            seq_num: 1,
+            seq_num: 0,
             view: 0,
             config_num: 0,
             view_is_stable: false,
@@ -215,6 +215,18 @@ impl BlockSequencer {
                 _cmd = self.control_command_rx.recv() => {
                     self.handle_control_command(_cmd).await;
                 },
+                _batch_and_client_reply = self.batch_rx.recv() => {
+                    if let Some(_) = _batch_and_client_reply {
+                        let (_, client_reply) = _batch_and_client_reply.unwrap();
+                        let (tx, rx) = oneshot::channel();
+                        tx.send(vec![]).expect("Should be able to send hash");
+
+                        self.client_reply_tx
+                            .send((rx, client_reply))
+                            .await
+                            .expect("Should be able to send client_reply_tx");
+                    }
+                },
             }
         }
 
@@ -228,13 +240,21 @@ impl BlockSequencer {
         fork_validation: Vec<ProtoForkValidation>,
         perf_entry_id: u64,
     ) {
-        let n = self.seq_num;
         self.seq_num += 1;
+        let n = self.seq_num;
 
         let config = self.config.get();
 
+        #[cfg(feature = "dynamic_sign")]
         let must_sign = self.force_sign_next_batch
-            || (n - self.last_signed_seq_num) > config.consensus_config.signature_max_delay_blocks;
+            || (n - self.last_signed_seq_num) > config.consensus_config.signature_max_delay_blocks
+            || (self.i_am_leader() && !self.view_is_stable); // Always sign the NewView message.
+
+        #[cfg(feature = "never_sign")]
+        let must_sign = false;
+
+        #[cfg(feature = "always_sign")]
+        let must_sign = true;
 
         if must_sign {
             self.last_signed_seq_num = n;
@@ -288,7 +308,7 @@ impl BlockSequencer {
         self.perf_add_event(perf_entry_id, "Send to Block Broadcaster", must_sign);
 
         self.perf_deregister(perf_entry_id);
-        debug!("Sequenced: {}", n);
+        trace!("Sequenced: {}", n);
     }
 
     async fn add_qcs(&mut self, mut qcs: Vec<ProtoQuorumCertificate>) {
@@ -328,6 +348,7 @@ impl BlockSequencer {
                 new_parent_hash,
                 new_seq_num,
             ) => {
+                warn!("Request for new view message: view: {} config: {} new_seq_num: {}", v, c, new_seq_num);
                 self.view = v;
                 self.config_num = c;
                 self.view_is_stable = false;

@@ -1,14 +1,15 @@
-use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, pin::Pin, sync::Arc, time::Duration};
+use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, io::Error, pin::Pin, sync::Arc, time::Duration};
 
-use log::{debug, warn};
+use log::{debug, info, trace, warn};
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
 use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoVote}, rpc::{client::PinnedClient, SenderType}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer, PerfCounter, StorageAck}};
 
-use super::{app::AppCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}, pacemaker::PacemakerCommand};
+use super::{app::AppCommand, batch_proposal::BatchProposerCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}, logserver::{self, LogServerCommand}, pacemaker::PacemakerCommand};
 
 pub(super) mod steady_state;
-mod view_change;
+pub(super) mod view_change;
+pub(super) mod fork_choice;
 
 struct CachedBlockWithVotes {
     block: CachedBlock,
@@ -47,7 +48,7 @@ pub struct Staging {
 
     view_change_timer: Arc<Pin<Box<ResettableTimer>>>,
 
-    block_rx: Receiver<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats)>,
+    block_rx: Receiver<(CachedBlock, oneshot::Receiver<StorageAck>, AppendEntriesStats, bool /* this_is_final_block */)>,
     vote_rx: Receiver<VoteWithSender>,
     pacemaker_rx: Receiver<PacemakerCommand>,
     pacemaker_tx: Sender<PacemakerCommand>,
@@ -56,11 +57,17 @@ pub struct Staging {
     app_tx: Sender<AppCommand>,
     block_broadcaster_command_tx: Sender<BlockBroadcasterCommand>,
     block_sequencer_command_tx: Sender<BlockSequencerControlCommand>,
+    batch_proposer_command_tx: Sender<BatchProposerCommand>,
     fork_receiver_command_tx: Sender<ForkReceiverCommand>,
     qc_tx: UnboundedSender<ProtoQuorumCertificate>,
+    logserver_tx: Sender<LogServerCommand>,
 
     leader_perf_counter_unsigned: RefCell<PerfCounter<u64>>,
     leader_perf_counter_signed: RefCell<PerfCounter<u64>>,
+
+    __vc_retry_num: usize,
+    __storage_ack_buffer: VecDeque<oneshot::Receiver<Result<(), Error>>>,
+    __ae_seen_in_this_view: usize,
 }
 
 impl Staging {
@@ -72,6 +79,7 @@ impl Staging {
             CachedBlock,
             oneshot::Receiver<StorageAck>,
             AppendEntriesStats,
+            bool /* this_is_final_block */
         )>,
         vote_rx: Receiver<VoteWithSender>,
         pacemaker_rx: Receiver<PacemakerCommand>,
@@ -82,6 +90,8 @@ impl Staging {
         block_sequencer_command_tx: Sender<BlockSequencerControlCommand>,
         fork_receiver_command_tx: Sender<ForkReceiverCommand>,
         qc_tx: UnboundedSender<ProtoQuorumCertificate>,
+        batch_proposer_command_tx: Sender<BatchProposerCommand>,
+        logserver_tx: Sender<LogServerCommand>,
     ) -> Self {
         let _config = config.get();
         let _chan_depth = _config.rpc_config.channel_depth as usize;
@@ -130,6 +140,11 @@ impl Staging {
             qc_tx,
             leader_perf_counter_signed,
             leader_perf_counter_unsigned,
+            batch_proposer_command_tx,
+            logserver_tx,
+            __vc_retry_num: 0,
+            __storage_ack_buffer: VecDeque::new(),
+            __ae_seen_in_this_view: 0,
         }
     }
 
@@ -169,12 +184,13 @@ impl Staging {
                 if block.is_none() {
                     return Err(())
                 }
-                let (block, storage_ack, ae_stats) = block.unwrap();
-                debug!("Got {}", block.block.n);
+                let (block, storage_ack, ae_stats, this_is_final_block) = block.unwrap();
+                trace!("Got block {}", block.block.n);
                 if i_am_leader {
-                    self.process_block_as_leader(block, storage_ack, ae_stats).await?;
+                    self.process_block_as_leader(block, storage_ack, ae_stats, this_is_final_block).await?;
                 } else {
-                    self.process_block_as_follower(block, storage_ack, ae_stats).await?;
+                    // TODO: Send in bulk.
+                    self.process_block_as_follower(block, storage_ack, ae_stats, this_is_final_block).await?;
                 }
             },
             vote = self.vote_rx.recv() => {

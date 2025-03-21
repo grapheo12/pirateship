@@ -12,7 +12,10 @@ pub fn serialize_proto_block_nascent(block: &ProtoBlock) -> Result<Vec<u8>, Erro
     bytes.extend_from_slice(&[0u8; SIGNATURE_LENGTH]);
     bytes.extend_from_slice(&[0u8; DIGEST_LENGTH]);
     
-    if block.parent.len() != 0 && block.sig != Some(crate::proto::consensus::proto_block::Sig::NoSig(DefferedSignature{})) {
+    if block.parent.len() != 0
+    || (block.sig != None
+        && block.sig != Some(crate::proto::consensus::proto_block::Sig::NoSig(DefferedSignature{})))
+    {
         return Err(Error::new(ErrorKind::InvalidData, "Invalid new block"));
     }
     
@@ -25,7 +28,7 @@ pub fn serialize_proto_block_nascent(block: &ProtoBlock) -> Result<Vec<u8>, Erro
     Ok(bytes.to_vec())
 }
 
-pub fn serialize_proto_block_prefilled(block: &ProtoBlock) -> Vec<u8> {
+pub fn serialize_proto_block_prefilled(mut block: ProtoBlock) -> Vec<u8> {
     let mut bytes = BytesMut::with_capacity(DIGEST_LENGTH + SIGNATURE_LENGTH + block.encoded_len());
     // Serialized format: signature || parent_hash || block
  
@@ -41,7 +44,12 @@ pub fn serialize_proto_block_prefilled(block: &ProtoBlock) -> Vec<u8> {
         }
     }
 
+    
+    
     bytes.extend_from_slice(&block.parent);
+    
+    block.parent.clear();
+    block.sig = None; // Some(crate::proto::consensus::proto_block::Sig::NoSig(DefferedSignature{}));
 
     block.encode(&mut bytes).unwrap();
     // bytes.extend_from_slice(&bitcode::encode(block));
@@ -92,7 +100,7 @@ pub fn deserialize_proto_block(bytes: &[u8]) -> Result<ProtoBlock, DecodeError> 
 mod test {
     use rand::{thread_rng, Rng};
 
-    use crate::proto::{consensus::ProtoBlock, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}};
+    use crate::{crypto::hash, proto::{consensus::ProtoBlock, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}}};
 
     #[test]
     fn test_proto_block_serde() {
@@ -116,9 +124,16 @@ mod test {
 
         let ser = super::serialize_proto_block_nascent(&block).unwrap();
 
-        println!("Serialized size: {}", ser.len());
         let block2 = super::deserialize_proto_block(&ser).unwrap();
 
         assert_eq!(block.n, block2.n);
+
+        let ser2 = super::serialize_proto_block_prefilled(block2);
+        println!("Serialized sizes: {} {}", ser.len(), ser2.len());
+        
+        let hsh1 = hash(ser.as_slice());
+        let hsh2 = hash(ser2.as_slice());
+
+        assert_eq!(hsh1, hsh2);
     }
 }

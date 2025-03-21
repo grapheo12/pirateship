@@ -2,7 +2,7 @@ workdir = "deployment_artifacts"
 project_home = "https://github.com/grapheo12/pirateship"
 
 [deployment_config]
-mode = "lan-nontee-small"
+mode = "lan-nontee"
 ssh_key = "cluster_key.pem"
 ssh_user = "pftadmin"
 node_port_base = 3000
@@ -18,8 +18,9 @@ recv_buffer_size = 32768
 channel_depth = 1000
 
 [node_config.consensus_config]
-quorum_diversity_k = 3
-liveness_u = 1
+commit_index_gap_soft = 250
+commit_index_gap_hard = 500
+liveness_u = 2
 max_backlog_batch_size = 1000
 signature_max_delay_blocks = 50
 signature_max_delay_ms = 102 # roughly batch_max_delay_ms * signature_max_delay_blocks
@@ -57,64 +58,64 @@ max_concurrent_requests = 16
 name = "autobahn"
 type = "autobahn"
 repeats = 1
-num_nodes = 4
+num_nodes = 7
 node_distribution = "uniform"
 build_command = "make -C autobahn"
-duration = 120
+duration = 60
 
 [experiments.sweeping_parameters]
-num_clients = [200, 1000, 2000, 3000]
+num_clients = [2000, 3000, 6400]
 
 [[experiments]]
 name = "pirateship"
-git_hash = "9d85b9e007d4f05488fcefa06f379eef66976de1"
+# git_hash = "9d85b9e007d4f05488fcefa06f379eef66976de1"
 repeats = 1
-num_nodes = 4
+num_nodes = 7
 node_distribution = "uniform"
 build_command = "make"
-duration = 120
+duration = 60
 
 [experiments.sweeping_parameters]
-num_clients = [200, 300, 350, 500]
+num_clients = [400]
 
 
 [[experiments]]
 name = "pirateship_sig_1"
-git_hash = "9d85b9e007d4f05488fcefa06f379eef66976de1"
+# git_hash = "9d85b9e007d4f05488fcefa06f379eef66976de1"
 repeats = 1
-num_nodes = 4
+num_nodes = 7
 node_distribution = "uniform"
 build_command = "make"
-duration = 120
+duration = 60
 
 [experiments.node_config.consensus_config]
 signature_max_delay_blocks = 1
 
 [experiments.sweeping_parameters]
-num_clients = [200, 300, 350]
+num_clients = [400]
 
 
-# [[experiments]]
-# name = "pbft"
-# repeats = 3
-# num_nodes = 7
-# node_distribution = "uniform"
-# build_command = "make chained_pbft_logger"
-# duration = 120
+[[experiments]]
+name = "pbft"
+repeats = 1
+num_nodes = 7
+node_distribution = "uniform"
+build_command = "make chained_pbft_logger"
+duration = 60
 
-# [experiments.sweeping_parameters]
-# num_clients = [100, 200, 300, 500, 700, 1000, 2000]
+[experiments.sweeping_parameters]
+num_clients = [400]
 
-# [[experiments]]
-# name = "signed_raft"
-# repeats = 3
-# num_nodes = 5
-# node_distribution = "uniform"
-# build_command = "make signed_raft_logger"
-# duration = 120
+[[experiments]]
+name = "signed_raft"
+repeats = 1
+num_nodes = 5
+node_distribution = "uniform"
+build_command = "make signed_raft_logger"
+duration = 60
 
-# [experiments.sweeping_parameters]
-# num_clients = [100, 200, 300, 500, 700, 1000, 2000]
+[experiments.sweeping_parameters]
+num_clients = [400]
 
 
 
@@ -122,8 +123,8 @@ num_clients = [200, 300, 350]
 [[results]]
 name = "tput_latency_client_sweep"
 plotter = "tput_latency_sweep"
-ramp_up = 30
-ramp_down = 30
+ramp_up = 10
+ramp_down = 10
 output = "lan_experiment.pdf"
 force_parse = true
 # skip_indices = [0, 1, 2, 3]
@@ -133,8 +134,8 @@ force_parse = true
 pirateship = "pirateship+byz"
 autobahn = "autobahn"
 pirateship_sig_1 = "pirateship(sig=1)+byz"
-# pbft = "pbft+onlybyz"
-# signed_raft = "signed_raft"
+pbft = "pbft+onlybyz"
+signed_raft = "signed_raft"
 
 [results.font]
 size = 55

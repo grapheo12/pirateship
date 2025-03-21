@@ -18,7 +18,8 @@ recv_buffer_size = 32768
 channel_depth = 1000
 
 [node_config.consensus_config]
-quorum_diversity_k = 3
+commit_index_gap_soft = 250
+commit_index_gap_hard = 500
 liveness_u = 2
 max_backlog_batch_size = 1000
 signature_max_delay_blocks = 50
@@ -62,7 +63,9 @@ build_command = "make"
 duration = 60
 
 [experiments.sweeping_parameters]
-num_clients = [10, 20, 50, 100, 200, 250, 300, 350, 400]
+# num_clients = [10, 20, 50, 100, 200, 250, 300, 350, 400]
+# num_clients = [100, 200, 400, 500, 700, 800]
+num_clients = [400]
 
 
 # [[experiments]]
