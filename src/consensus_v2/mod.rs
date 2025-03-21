@@ -248,7 +248,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let block_broadcaster = BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_crypto2, block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, fork_receiver_command_tx.clone(), app_tx.clone());
         let staging = Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, pacemaker_cmd_rx, pacemaker_cmd_tx2, client_reply_command_tx.clone(), app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx, batch_proposer_command_tx, logserver_tx);
         let fork_receiver = ForkReceiver::new(config.clone(), fork_receiver_crypto, fork_receiver_client.into(), fork_rx, fork_receiver_command_rx, other_block_tx, logserver_query_tx.clone());
-        let app = Application::new(config.clone(), app_rx, unlogged_rx, client_reply_command_tx);
+        let app = Application::new(config.clone(), app_rx, unlogged_rx, client_reply_command_tx, gc_tx);
         let client_reply = ClientReplyHandler::new(config.clone(), client_reply_rx, client_reply_command_rx);
         let logserver = LogServer::new(config.clone(), logserver_client.into(), logserver_rx, backfill_request_rx, gc_rx, logserver_query_rx, logserver_storage);
         let pacemaker = Pacemaker::new(config.clone(), pacemaker_client.into(), pacemaker_crypto, view_change_rx, pacemaker_cmd_tx, pacemaker_cmd_rx2, logserver_query_tx);
@@ -258,7 +258,6 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
     
         handles.spawn(async move {
             let _tx = unlogged_tx.clone();
-            let _tx2 = gc_tx.clone();
 
             loop {
 

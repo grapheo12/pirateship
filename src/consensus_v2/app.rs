@@ -18,7 +18,7 @@ pub enum AppCommand {
 }
 
 pub trait AppEngine {
-    type State: std::fmt::Debug + Clone + Serialize + DeserializeOwned;
+    type State: std::fmt::Debug + Clone + Serialize + DeserializeOwned + Send;
 
     fn new(config: AtomicConfig) -> Self;
     fn handle_crash_commit(&mut self, blocks: Vec<CachedBlock>) -> Vec<Vec<ProtoTransactionResult>>;
@@ -96,6 +96,8 @@ pub struct Application<'a, E: AppEngine + Send + Sync + 'a> {
 
     perf_counter: RefCell<PerfCounter<u64>>,
 
+    gc_tx: Sender<u64>,
+
     phantom: PhantomData<&'a E>,
 }
 
@@ -104,7 +106,8 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
     pub fn new(
         config: AtomicConfig,
         staging_rx: Receiver<AppCommand>, unlogged_rx: Receiver<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)>,
-        client_reply_tx: Sender<ClientReplyCommand>) -> Self {
+        client_reply_tx: Sender<ClientReplyCommand>, gc_tx: Sender<u64>,
+    ) -> Self {
         let checkpoint_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.checkpoint_interval_ms));
         let log_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.logger_stats_report_ms));
         let engine = E::new(config.clone());
@@ -124,6 +127,7 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
             checkpoint_timer,
             log_timer,
             perf_counter,
+            gc_tx,
 
             phantom: PhantomData
         }
@@ -185,6 +189,18 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
         // TODO: Decide on checkpointing strategy
 
         info!("Current state checkpoint: {:?}", state);
+
+        // It should be safe to garbage collect all bcied + executed blocks.
+        // Since the application is single-threaded and self.bci is set inevitably during the execution,
+        // it is safe to gc till self.bci.
+
+        // However, if there is a view change, the policy is to send everything from self.bci onwards (inclusive of self.bci).
+        // So we only GC till self.bci - 1.
+
+        if self.stats.bci > 1 {
+            self.gc_tx.send(self.stats.bci - 1).await.unwrap();
+        } 
+
     }
 
     async fn handle_unlogged_request(&mut self, request: ProtoTransaction, reply_tx: oneshot::Sender<ProtoTransactionResult>) {
