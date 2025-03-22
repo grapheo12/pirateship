@@ -56,6 +56,9 @@ pub struct BlockSequencer {
 
     perf_counter_signed: RefCell<PerfCounter<u64>>,
     perf_counter_unsigned: RefCell<PerfCounter<u64>>,
+
+    __last_qc_n_seen: u64,
+    __blocks_proposed_in_this_view: u64,
 }
 
 impl BlockSequencer {
@@ -103,6 +106,8 @@ impl BlockSequencer {
             last_signed_seq_num: 0,
             perf_counter_signed,
             perf_counter_unsigned,
+            __last_qc_n_seen: 0,
+            __blocks_proposed_in_this_view: 0,
         };
 
         #[cfg(not(feature = "view_change"))]
@@ -192,7 +197,28 @@ impl BlockSequencer {
     }
 
     async fn worker(&mut self, chan_depth: usize) -> Result<(), ()> {
-        let listen_for_new_batch = self.view_is_stable && self.i_am_leader();
+        // The slow path needs 2-hop QCs to byz-commit.
+        // If we assume the head of the chain is crash committed immediately (best case),
+        // On average, need the 2-hop to happen within config.consensus_config.commit_index_gap_hard.
+        // Otherwise, this will cause a view change.
+
+        // So, we want to wait for QCs to appear if seq_num - last_qc_n_seen > commit_index_gap_hard / 2.
+        // This limits the depth of pipeline (ie, max number of inflight blocks).
+
+        let mut listen_for_new_batch = self.view_is_stable && self.i_am_leader();
+
+        #[cfg(not(feature = "no_qc"))]
+        {
+            let config = &self.config.get().consensus_config;
+            let hard_gap = config.commit_index_gap_hard;
+            let soft_gap = config.commit_index_gap_soft;
+
+            if self.__blocks_proposed_in_this_view > soft_gap {
+                listen_for_new_batch = listen_for_new_batch
+                && (self.seq_num as i64 - self.__last_qc_n_seen as i64) < (hard_gap / 2) as i64;
+                // This is to prevent the locking happen when the leader is new.
+            }
+        }
 
         let mut qc_buf = Vec::new();
 
@@ -207,6 +233,7 @@ impl BlockSequencer {
                 },
                 _batch_and_client_reply = self.batch_rx.recv() => {
                     if let Some(_) = _batch_and_client_reply {
+                        self.__blocks_proposed_in_this_view += 1;
                         let (batch, client_reply) = _batch_and_client_reply.unwrap();
                         self.perf_register(self.seq_num + 1); // Projected seq num is used as entry id for perf
                         self.handle_new_batch(batch, client_reply, vec![], self.seq_num + 1).await;
@@ -327,6 +354,11 @@ impl BlockSequencer {
             if qc.view != self.view {
                 continue;
             }
+            
+            if qc.n > self.__last_qc_n_seen {
+                self.__last_qc_n_seen = qc.n;
+            }
+
             self.current_qc_list.push(qc);
         }
     }
@@ -343,13 +375,17 @@ impl BlockSequencer {
                 self.view = v;
                 self.config_num = c;
                 self.view_is_stable = false;
-                self.current_qc_list.retain(|e| e.view == self.view);
+                self.current_qc_list.retain(|e| e.view >= self.view);
+                self.__blocks_proposed_in_this_view = 0;
+                self.__last_qc_n_seen = self.seq_num;
             }
             BlockSequencerControlCommand::ViewStabilised(v, c) => {
                 self.view = v;
                 self.config_num = c;
                 self.view_is_stable = true;
-                self.current_qc_list.retain(|e| e.view == self.view);
+                self.current_qc_list.retain(|e| e.view >= self.view);
+                self.__blocks_proposed_in_this_view = 0;
+                self.__last_qc_n_seen = self.seq_num;
             }
             BlockSequencerControlCommand::NewViewMessage(
                 v,
@@ -363,6 +399,10 @@ impl BlockSequencer {
                 self.config_num = c;
                 self.view_is_stable = false;
                 self.current_qc_list.retain(|e| e.view == self.view);
+
+                self.__last_qc_n_seen = new_seq_num;
+                self.__blocks_proposed_in_this_view = 0;
+
 
                 // Rest is only applicable if I am the leader.
                 if !self.i_am_leader() {
