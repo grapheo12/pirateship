@@ -54,17 +54,17 @@ num_requests = 100_000_000
 request_config = "Blanks"
 max_concurrent_requests = 16
 
-[[experiments]]
-name = "autobahn"
-type = "autobahn"
-repeats = 1
-num_nodes = 7
-node_distribution = "uniform"
-build_command = "make -C autobahn"
-duration = 60
+# [[experiments]]
+# name = "autobahn"
+# type = "autobahn"
+# repeats = 1
+# num_nodes = 7
+# node_distribution = "uniform"
+# build_command = "make -C autobahn"
+# duration = 60
 
-[experiments.sweeping_parameters]
-num_clients = [2000, 3000, 6400]
+# [experiments.sweeping_parameters]
+# num_clients = [2000, 3000, 6400]
 
 [[experiments]]
 name = "pirateship"
@@ -73,54 +73,54 @@ repeats = 1
 num_nodes = 7
 node_distribution = "uniform"
 build_command = "make"
-duration = 60
+duration = 300
 
 [experiments.sweeping_parameters]
 num_clients = [400]
 
 
-[[experiments]]
-name = "pirateship_sig_1"
-# git_hash = "9d85b9e007d4f05488fcefa06f379eef66976de1"
-repeats = 1
-num_nodes = 7
-node_distribution = "uniform"
-build_command = "make"
-duration = 60
+# [[experiments]]
+# name = "pirateship_sig_1"
+# # git_hash = "9d85b9e007d4f05488fcefa06f379eef66976de1"
+# repeats = 1
+# num_nodes = 7
+# node_distribution = "uniform"
+# build_command = "make"
+# duration = 60
 
-[experiments.node_config.consensus_config]
-signature_max_delay_blocks = 1
+# [experiments.node_config.consensus_config]
+# signature_max_delay_blocks = 1
 
-[experiments.sweeping_parameters]
-num_clients = [400]
+# [experiments.sweeping_parameters]
+# num_clients = [400]
 
 
-[[experiments]]
-name = "pbft"
-repeats = 1
-num_nodes = 7
-node_distribution = "uniform"
-build_command = "make chained_pbft_logger"
-duration = 60
+# [[experiments]]
+# name = "pbft"
+# repeats = 1
+# num_nodes = 7
+# node_distribution = "uniform"
+# build_command = "make chained_pbft_logger"
+# duration = 60
 
-[experiments.node_config.consensus_config]
-signature_max_delay_blocks = 1
-commit_index_gap_hard = 3
-commit_index_gap_soft = 1
+# [experiments.node_config.consensus_config]
+# signature_max_delay_blocks = 1
+# commit_index_gap_hard = 3
+# commit_index_gap_soft = 1
 
-[experiments.sweeping_parameters]
-num_clients = [400]
+# [experiments.sweeping_parameters]
+# num_clients = [400]
 
-[[experiments]]
-name = "signed_raft"
-repeats = 1
-num_nodes = 5
-node_distribution = "uniform"
-build_command = "make signed_raft_logger"
-duration = 60
+# [[experiments]]
+# name = "signed_raft"
+# repeats = 1
+# num_nodes = 5
+# node_distribution = "uniform"
+# build_command = "make signed_raft_logger"
+# duration = 300
 
-[experiments.sweeping_parameters]
-num_clients = [400]
+# [experiments.sweeping_parameters]
+# num_clients = [400]
 
 
 
@@ -128,19 +128,19 @@ num_clients = [400]
 [[results]]
 name = "tput_latency_client_sweep"
 plotter = "tput_latency_sweep"
-ramp_up = 10
-ramp_down = 10
-output = "lan_experiment.pdf"
+ramp_up = 30
+ramp_down = 30
+output = "lan_experiment2.pdf"
 force_parse = true
 # skip_indices = [0, 1, 2, 3]
 
 [results.legends]
 # Experiment group to legend mapping
 pirateship = "pirateship+byz"
-autobahn = "autobahn"
-pirateship_sig_1 = "pirateship(sig=1)+byz"
-pbft = "pbft"
-signed_raft = "signed_raft"
+# autobahn = "autobahn"
+# pirateship_sig_1 = "pirateship(sig=1)+byz"
+# pbft = "pbft"
+# signed_raft = "signed_raft"
 
 [results.font]
 size = 55
