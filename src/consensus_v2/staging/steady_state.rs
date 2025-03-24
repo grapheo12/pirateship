@@ -594,6 +594,8 @@ impl Staging {
         // Now crash commit blindly
         self.do_crash_commit(self.ci, ae_stats.ci).await;
 
+        let old_view_is_stable = self.view_is_stable;
+        
         let mut qc_list = self
             .pending_blocks
             .iter().last().unwrap()
@@ -601,7 +603,6 @@ impl Staging {
             .map(|e| e.clone())
             .collect::<Vec<_>>();
 
-        let old_view_is_stable = self.view_is_stable;
         for qc in qc_list.drain(..) {
             if !old_view_is_stable {
                 // Try to see if this QC can stabilize the view.
@@ -610,6 +611,14 @@ impl Staging {
             }
             
             self.maybe_byzantine_commit(qc).await?;
+        }
+
+        #[cfg(feature = "no_qc")]
+        {
+            if self.ci > 100 { // I don't know why just self.ci doesn't work.
+                               // But this seems to work somehow.
+                self.do_byzantine_commit(self.bci, self.ci - 100).await;
+            }   
         }
 
         // Reply vote to the leader.
