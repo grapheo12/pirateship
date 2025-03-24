@@ -74,8 +74,8 @@ build_command = "make pirateship_kvs"
 duration = 60
 
 [experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
-# read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
-read_ratio = [0.5]
+read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
+# read_ratio = [0.5]
 
 
 [[experiments]]
@@ -88,8 +88,8 @@ build_command = "make signed_raft_kvs"
 duration = 60
 
 [experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
-# read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
-read_ratio = [0.5]
+read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
+# read_ratio = [0.5]
 
 
 
@@ -100,7 +100,7 @@ plotter = "stacked_bar_graph"
 ramp_up = 10
 ramp_down = 10
 output = "ycsb.pdf"
-xlabels = ["0R-100W"] # , "25R-75W", "50R-50W", "75R-25W", "100R-0W"]
+xlabels = ["0R-100W", "25R-75W", "50R-50W", "75R-25W", "100R-0W"]
 force_parse = true
 
 [results.legends]

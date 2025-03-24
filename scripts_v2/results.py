@@ -30,7 +30,7 @@ node_rgx2 = re.compile(r"\[INFO\]\[.*\]\[(.*)\] num_reads = ([0-9]+)")
 client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Average Crash commit latency: ([0-9]+) us, Average Byz commit latency: ([0-9]+) us")
 
 
-def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, read_points=[[]]) -> List:
+def process_tput(points, duration, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, read_points=[[]]) -> List:
     '''
     Parses given points for throughput information.
     Skipping points before ramp_up and after ramp_down.
@@ -70,7 +70,7 @@ def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, 
     # Filter points, only keep if after ramp_up time and before ramp_down time
 
     start_time = points[0][0] + datetime.timedelta(seconds=ramp_up)
-    end_time = points[-1][0] - datetime.timedelta(seconds=ramp_down)
+    end_time = points[0][0] + datetime.timedelta(seconds=duration) - datetime.timedelta(seconds=ramp_down)
 
     points = [p for p in points if p[0] >= start_time and p[0] <= end_time]
     read_points = [
@@ -102,7 +102,7 @@ def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, 
     return points
 
 
-def process_latencies(points, ramp_up, ramp_down, latencies, byz=False):
+def process_latencies(points, duration, ramp_up, ramp_down, latencies, byz=False):
     points = [
         (
             isoparse(a[0]),      # ISO format is used in run_remote
@@ -117,7 +117,7 @@ def process_latencies(points, ramp_up, ramp_down, latencies, byz=False):
     # Filter points, only keep if after ramp_up time and before ramp_down time
 
     start_time = points[0][0] + datetime.timedelta(seconds=ramp_up)
-    end_time = points[-1][0] - datetime.timedelta(seconds=ramp_down)
+    end_time = points[0][0] + datetime.timedelta(seconds=duration) - datetime.timedelta(seconds=ramp_down)
 
     points = [p for p in points if p[0] >= start_time and p[0] <= end_time]
 
@@ -158,7 +158,7 @@ class Result:
     def default_output(self):
         print(f"Default output method: {self}")
 
-    def parse_node_logs(self, log_dir, node_log_names, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False):
+    def parse_node_logs(self, log_dir, node_log_names, duration, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False):
         '''
         Parse node logs for throughput information.
         Only uses the first log to get overall consensus throughput.
@@ -186,14 +186,14 @@ class Result:
             read_points.append(_rp)
 
         try:
-            _points = process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz, read_points)
+            _points = process_tput(points, duration, ramp_up, ramp_down, tputs, tputs_unbatched, byz, read_points)
         except:
             _points = []
 
         return _points
     
 
-    def parse_client_logs(self, log_dir, client_log_names, ramp_up, ramp_down, latencies, byz=False):
+    def parse_client_logs(self, log_dir, client_log_names, duration, ramp_up, ramp_down, latencies, byz=False):
         points = []
         for log_name in client_log_names:
             fname = os.path.join(log_dir, log_name)
@@ -207,7 +207,7 @@ class Result:
             except:
                 pass
         try:
-            process_latencies(points, ramp_up, ramp_down, latencies, byz=byz)
+            process_latencies(points, duration, ramp_up, ramp_down, latencies, byz=byz)
         except:
             pass
 
@@ -215,14 +215,15 @@ class Result:
         tputs = []
         tputs_unbatched = []
         latencies = []
+        duration = experiment.duration
         for repeat_num in range(experiment.repeats):
             log_dir = os.path.join(experiment.local_workdir, "logs", str(repeat_num))
             # Find the first node log file and all client log files in log_dir
             node_log_files = list(sorted([f for f in os.listdir(log_dir) if f.startswith("node") and f.endswith(".log")]))
             client_log_files = [f for f in os.listdir(log_dir) if f.startswith("client") and f.endswith(".log")]
 
-            self.parse_node_logs(log_dir, node_log_files, ramp_up, ramp_down, tputs, tputs_unbatched, byz=byz)
-            self.parse_client_logs(log_dir, client_log_files, ramp_up, ramp_down, latencies, byz=byz)
+            self.parse_node_logs(log_dir, node_log_files, duration, ramp_up, ramp_down, tputs, tputs_unbatched, byz=byz)
+            self.parse_client_logs(log_dir, client_log_files, duration, ramp_up, ramp_down, latencies, byz=byz)
         print(len(tputs), len(tputs_unbatched), len(latencies))
         if len(latencies) == 0:
             return None
@@ -976,6 +977,7 @@ class Result:
             log_dir = f"{expr[0].local_workdir}/logs/0"
             points = self.parse_node_logs(
                 log_dir, [f"{target_node}.log"],
+                expr.duration,
                 ramp_up, ramp_down, tputs, tputs_unbatched
             )
 
