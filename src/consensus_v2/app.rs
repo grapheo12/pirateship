@@ -77,7 +77,7 @@ impl LogStats {
             self.bci,
             self.total_requests - (self.total_crash_committed_txs + self.total_unlogged_txs),
             self.ci as i64 - self.bci as i64,
-            self.total_crash_committed_txs + self.total_unlogged_txs, // This is needed for log parser.
+            self.total_crash_committed_txs,
             self.total_byz_committed_txs,
             self.last_hash.encode_hex::<String>(),
             self.total_requests,
@@ -85,6 +85,8 @@ impl LogStats {
             self.view_is_stable,
             self.i_am_leader
         );
+
+        info!("Total unlogged txs: {}", self.total_unlogged_txs);
     }
 }
 

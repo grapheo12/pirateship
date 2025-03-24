@@ -24,7 +24,7 @@ from autobahn_experiments import AutobahnExperiment
 
 # Sample log: [INFO][pft::execution::engines::logger][2024-08-06T10:28:13.926997933+00:00] fork.last = 2172, fork.last_qc = 2169, commit_index = 2171, byz_commit_index = 2166, pending_acks = 200, pending_qcs = 1 num_crash_committed_txs = 100, num_byz_committed_txs = 100, fork.last_hash = b7da989badce213929ab457e5301b587593e0781e081ba7261d57cd7778e1b7b, total_client_request = 388706, view = 1, view_is_stable = true, i_am_leader: true
 node_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] fork\.last = ([0-9]+), fork\.last_qc = ([0-9]+), commit_index = ([0-9]+), byz_commit_index = ([0-9]+), pending_acks = ([0-9]+), pending_qcs = ([0-9]+) num_crash_committed_txs = ([0-9]+), num_byz_committed_txs = ([0-9]+), fork\.last_hash = (.+), total_client_request = ([0-9]+), view = ([0-9]+), view_is_stable = (.+), i_am_leader\: (.+)")
-node_rgx2 = re.compile(r"\[INFO\]\[.*\]\[(.*)\] num_reads = ([0-9]+)")
+node_rgx2 = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Total unlogged txs: ([0-9]+)")
 
 # Sample log: [INFO][pft::client::logger][2025-02-25T23:33:23.145307984+00:00] Average Crash commit latency: 104390 us, Average Byz commit latency: 29271247 us
 client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Average Crash commit latency: ([0-9]+) us, Average Byz commit latency: ([0-9]+) us")
