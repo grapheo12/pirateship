@@ -7,7 +7,7 @@ use pft::consensus_v2;
 use tokio::{runtime, signal};
 use std::process::exit;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
-use pft::consensus_v2::engines::null_app::NullApp;
+use pft::consensus_v2::engines::{null_app::NullApp, kvs::KVSAppEngine};
 use std::io::Write;
 
 #[global_allocator]
@@ -62,7 +62,7 @@ async fn run_main(cfg: Config) -> io::Result<()> {
     // let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
     
     #[cfg(feature = "app_kvs")]
-    let node = Arc::new(consensus_v2::ConsensusNode::<KVSAppEngine>::new(&cfg));
+    let mut node = consensus_v2::ConsensusNode::<KVSAppEngine>::new(cfg);
     
     #[cfg(feature = "app_sql")]
     let node = Arc::new(consensus::ConsensusNode::<PinnedSQLEngine>::new(&cfg));

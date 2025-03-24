@@ -104,7 +104,7 @@ signed_raft = ["fixed_leader", "dynamic_sign", "no_qc"]
 chained_pbft = ["round_robin_leader", "always_sign", "view_change"]
 pirateship = ["round_robin_leader", "dynamic_sign", "view_change"]
 
-default = ["pirateship", "app_logger", "storage", "fast_path", "platforms"]
+default = ["pirateship", "app_kvs", "storage", "fast_path", "platforms"]
 
 
 [profile.release]
