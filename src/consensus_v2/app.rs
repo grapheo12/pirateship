@@ -18,7 +18,7 @@ pub enum AppCommand {
 }
 
 pub trait AppEngine {
-    type State: std::fmt::Debug + Clone + Serialize + DeserializeOwned + Send;
+    type State: std::fmt::Debug + std::fmt::Display + Clone + Serialize + DeserializeOwned + Send;
 
     fn new(config: AtomicConfig) -> Self;
     fn handle_crash_commit(&mut self, blocks: Vec<CachedBlock>) -> Vec<Vec<ProtoTransactionResult>>;
@@ -196,7 +196,7 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
         let state = self.engine.get_current_state();
         // TODO: Decide on checkpointing strategy
 
-        info!("Current state checkpoint: {:?}", state);
+        info!("Current state checkpoint: {}", state);
 
         // It should be safe to garbage collect all bcied + executed blocks.
         // Since the application is single-threaded and self.bci is set inevitably during the execution,

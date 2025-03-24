@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Display;
 
 use log::{info, trace, warn};
 use serde::{Serialize, Deserialize};
@@ -21,6 +22,12 @@ use crate::proto::consensus::{
 pub struct KVSState {
     pub ci_state: HashMap<Vec<u8>, Vec<(u64, Vec<u8>) /* versions */>>,
     pub bci_state: HashMap<Vec<u8>, Vec<u8>>,
+}
+
+impl Display for KVSState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ci_state size: {}, bci_state size: {}", self.ci_state.len(), self.bci_state.len())
+    }
 }
 
 pub struct KVSAppEngine {
