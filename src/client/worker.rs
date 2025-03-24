@@ -170,7 +170,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             let _ = backpressure_tx.send(CheckerResponse::Success(req.id)).await;
                             let _ = stat_tx.send(ClientWorkerStat::CrashCommitLatency(req.start_time.elapsed())).await;
                             if req.executor_mode == Executor::Any {
-                                info!("Got reply for read request from {}!", req.wait_from);
+                                trace!("Got reply for read request from {}!", req.wait_from);
                             }
 
                             for byz_resp in receipt.byz_responses.iter() {
