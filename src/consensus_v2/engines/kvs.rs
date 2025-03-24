@@ -221,7 +221,7 @@ impl AppEngine for KVSAppEngine {
 
         let ops: &_ = match &request.on_receive {
             Some(ops) => &ops.ops,
-            None => return txn_result, //Not sure how to handle this case
+            None => return txn_result,
         };
 
         for op in ops {

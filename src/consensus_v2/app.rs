@@ -14,7 +14,7 @@ pub enum AppCommand {
     NewRequestBatch(u64 /* block.n */, u64 /* view */, bool /* view_is_stable */, bool /* i_am_leader */, usize /* length of new batch of request */, HashType /* hash of the last block */),
     CrashCommit(Vec<CachedBlock> /* all blocks from old_ci + 1 to new_ci */),
     ByzCommit(Vec<CachedBlock> /* all blocks from old_bci + 1 to new_bci */),
-    Rollback(u64 /* new last block */)
+    Rollback(u64 /* new last block */),
 }
 
 pub trait AppEngine {

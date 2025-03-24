@@ -13,11 +13,13 @@ pub enum ClientReplyCommand {
     StopCancelling,
     CrashCommitAck(HashMap<HashType, (u64, Vec<ProtoTransactionResult>)>),
     ByzCommitAck(HashMap<HashType, (u64, Vec<ProtoByzResponse>)>),
+    UnloggedRequestAck(oneshot::Receiver<ProtoTransactionResult>, MsgAckChanWithTag),
 }
 
 enum ReplyProcessorCommand {
     CrashCommit(u64 /* block_n */, u64 /* tx_n */, HashType, ProtoTransactionResult /* result */, MsgAckChanWithTag, Vec<ProtoByzResponse>),
     ByzCommit(u64 /* block_n */, u64 /* tx_n */, ProtoTransactionResult /* result */, MsgAckChanWithTag),
+    Unlogged(oneshot::Receiver<ProtoTransactionResult>, MsgAckChanWithTag),
 }
 pub struct ClientReplyHandler {
     config: AtomicConfig,
@@ -94,6 +96,33 @@ impl ClientReplyHandler {
                         ReplyProcessorCommand::ByzCommit(_, _, result, sender) => {
 
                         },
+
+                        ReplyProcessorCommand::Unlogged(res_rx, (reply_chan, tag, sender)) => {
+                            let reply = res_rx.await.unwrap();
+                            let reply = ProtoClientReply {
+                                reply: Some(
+                                    crate::proto::client::proto_client_reply::Reply::Receipt(
+                                        ProtoTransactionReceipt {
+                                            req_digest: vec![],
+                                            block_n: 0,
+                                            tx_n: 0,
+                                            results: Some(reply),
+                                            await_byz_response: false,
+                                            byz_responses: vec![],
+                                        },
+                                    ),
+                                ),
+                                client_tag: tag,
+                            };
+
+
+                            let reply_ser = reply.encode_to_vec();
+                            let _sz = reply_ser.len();
+                            let reply_msg = PinnedMessage::from(reply_ser, _sz, crate::rpc::SenderType::Anon);
+                            let latency_profile = LatencyProfile::new();
+                            
+                            let _ = reply_chan.send((reply_msg, latency_profile)).await;
+                        }
                     }
                 }
             });
@@ -218,6 +247,12 @@ impl ClientReplyHandler {
             ClientReplyCommand::StopCancelling => {
                 self.must_cancel = false;
             },
+            ClientReplyCommand::UnloggedRequestAck(res_rx, sender) => {
+                let reply_chan = sender.0;
+                let client_tag = sender.1;
+                let sender = sender.2;
+                self.reply_processor_queue.0.send(ReplyProcessorCommand::Unlogged(res_rx, (reply_chan, client_tag, sender))).await.unwrap();
+            }
         }
     }
 
