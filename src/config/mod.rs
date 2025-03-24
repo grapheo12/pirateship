@@ -151,7 +151,7 @@ pub struct ClientRpcConfig {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkloadConfig {
     pub num_clients: usize,
-    pub num_requests: usize,
+    pub duration: u64,
     pub max_concurrent_requests: usize,
     pub request_config: RequestConfig
 }

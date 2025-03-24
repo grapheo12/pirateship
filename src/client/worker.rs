@@ -244,7 +244,8 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         let mut outstanding_requests = HashMap::<u64, OutstandingRequest>::new();
 
         let mut total_requests = 0;
-        let max_requests = self.config.workload_config.num_requests;
+        
+        let duration = Duration::from_secs(self.config.workload_config.duration);
         let mut node_list = self.config.net_config.nodes.keys().map(|e| e.clone()).collect::<Vec<_>>();
         node_list.sort();
 
@@ -259,7 +260,8 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         let mut curr_complaining_requests = 0;
         let max_inflight_requests = self.config.workload_config.max_concurrent_requests;
 
-        while total_requests < max_requests {
+        let experiment_global_start = Instant::now();
+        while experiment_global_start.elapsed() < duration {
             // Wait for the checker task to give a go-ahead.
             match backpressure_rx.recv().await {
                 Some(CheckerResponse::Success(id)) => {
@@ -340,6 +342,8 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                 }
             }
         }
+
+        info!("Experiment completed. Total requests: {} Total runtime: {} s", total_requests, experiment_global_start.elapsed().as_secs());
     }
 
     /// Sets the req.last_sent_to.

@@ -192,6 +192,7 @@ class Experiment:
             config["rpc_config"] = {"signing_priv_key_path": signing_priv_key_path}
 
             config["workload_config"]["num_clients"] = num_clients_per_vm[client_num]
+            config["workload_config"]["duration"] = self.duration
 
             self.binary_mapping[client_vms[client_num]].append(client)
 
@@ -211,6 +212,7 @@ class Experiment:
         config["rpc_config"] = {"signing_priv_key_path": signing_priv_key_path}
 
         config["workload_config"]["num_clients"] = 1
+        config["workload_config"]["duration"] = self.duration
 
         with open(os.path.join(config_dir, f"{name}_config.json"), "w") as f:
             json.dump(config, f, indent=4)
