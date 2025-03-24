@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::process::exit;
 use std::time::{Duration, Instant};
-
+use futures::FutureExt;
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use actix_web::rt::spawn;
 use core_affinity::CoreId;
-use log::{error, info};
+use log::{debug, error, info, warn};
 use prost::Message;
+use tokio::runtime::Runtime;
 use tokio::signal;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::Mutex;
@@ -18,6 +20,7 @@ use crate::consensus_v2::block_broadcaster::BlockBroadcaster;
 use crate::consensus_v2::block_sequencer::BlockSequencer;
 use crate::consensus_v2::client_reply::ClientReplyHandler;
 use crate::consensus_v2::engines::null_app::NullApp;
+use crate::consensus_v2::engines::kvs::KVSAppEngine;
 use crate::consensus_v2::staging::Staging;
 use crate::crypto::{AtomicKeyStore, CryptoService, KeyStore};
 use crate::proto::client::proto_client_reply::Reply;
@@ -28,10 +31,13 @@ use crate::utils::channel::make_channel;
 use crate::utils::{RocksDBStorageEngine, StorageService};
 use crate::{config::Config, consensus_v2::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}, utils::channel::{Receiver, Sender}};
 
+// use crate::consensus_v2::tests::frontend::run_server;
+
+use actix_web::{put, get, web, App, HttpResponse, HttpServer, Responder};
 
 const PAYLOAD_SIZE: usize = 512;
 const RUNTIME: Duration = Duration::from_secs(30);
-const NUM_CLIENTS: usize = 200;
+const NUM_CLIENTS: usize = 0;
 const NUM_CONCURRENT_REQUESTS: usize = 100;
 const TEST_CRYPTO_NUM_TASKS: usize = 3;
 
@@ -137,7 +143,7 @@ async fn load_close_loop(batch_proposer_tx: Sender<TxWithAckChanTag>, client_id:
 }
 
 macro_rules! pinned_runtime {
-    ($fn_name: expr) => {
+    ($fn_name: expr) => {{
         // Generate configs first
         let cfg_path = "configs/node1_config.json";
         let cfg_contents = std::fs::read_to_string(cfg_path).expect("Invalid file path");
@@ -182,10 +188,10 @@ macro_rules! pinned_runtime {
         client_rt.block_on(async move {
             client_handle.await.unwrap();
         });
-    };
+    }};
 }
 
-async fn client_runner(batch_proposer_tx: Sender<TxWithAckChanTag>, num_clients: usize) {
+async fn client_runner(batch_proposer_tx: Sender<TxWithAckChanTag>, num_clients: usize) { return;
     let mut handles = Vec::new();
     for client_id in 0..num_clients {
         let batch_proposer_tx = batch_proposer_tx.clone();
@@ -213,6 +219,8 @@ async fn client_runner(batch_proposer_tx: Sender<TxWithAckChanTag>, num_clients:
     println!("Average crash commit latency: {} us", latencies_total.div_f64(latencies_total_num as f64).as_micros());
     println!("Average byzantine commit latency: {} us", byz_latencies_total.div_f64(byz_latencies_total_num as f64).as_micros());
 }
+
+
 
 
 #[test]
@@ -341,4 +349,111 @@ async fn _test_client_reply(config: Config, batch_proposer_rx: Receiver<TxWithAc
     std::fs::remove_dir_all(&storage_path).unwrap();
 
     exit(0);
+}
+
+#[test]
+fn run_test_2() {
+    pinned_runtime!(run_test)
+}
+async fn run_test(config: Config, batch_proposer_rx: Receiver<TxWithAckChanTag>, num_clients: usize) {
+    println!("start");
+    _test_client_reply2().await;
+    println!("finished");
+}
+
+async fn _test_client_reply2() {
+    println!("into here");
+    let result = HttpServer::new( || {
+        App::new()
+            .service(set_key)
+            .service(get_key)
+            .service(home)
+    })
+    .bind(("127.0.0.1", 8080)).unwrap().run();
+    let srv_handle = result.handle();
+    tokio::spawn(result);
+}   
+
+
+
+// #[test]
+// fn run_test() {
+//     println!("start");
+//     let rt = tokio::runtime::Runtime::new().unwrap();
+//     rt.block_on(async {
+//         _test_client_reply2().await;
+//     });
+//     println!("finished");
+
+// }
+
+
+// async fn _test_client_reply2() {
+//     println!("into here");
+//     tokio::spawn(async {
+//         run_server()
+//     });
+//     println!("out of here");
+
+//     ()
+//         // let handle = tokio::spawn(async {
+//     //     run_server();
+//     //     "return value"
+//     // });
+// }
+
+
+
+
+#[put("/set/{key}")]
+async fn set_key(key: web::Path<String>, value: web::Json<String>) -> impl Responder {
+    let key_str = key.into_inner();
+    let value_str = value.into_inner();
+
+    ProtoTransactionOp {
+        op_type: crate::proto::execution::ProtoTransactionOpType::Write.into(),
+        operands: vec![key_str.clone().into_bytes(), value_str.clone().into_bytes()],
+    };
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "message": "Key set successfully",
+        "key": key_str,
+        "value": value_str
+    }))
+}
+
+#[get("/get/{key}")]
+async fn get_key(key: web::Path<String>) -> impl Responder {
+    let key_str = key.into_inner();
+
+    ProtoTransactionOp {
+        op_type: crate::proto::execution::ProtoTransactionOpType::Read.into(),
+        operands: vec![key_str.clone().into_bytes()],
+    };
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "message": "Key found successfully",
+        "key": key_str,
+    }))
+}
+
+#[get("/")]
+async fn home() -> impl Responder {
+    HttpResponse::Ok().json(serde_json::json!({
+        "message": "hi"
+    }))
+}
+
+#[actix_web::main]
+pub async fn run_server() -> std::io::Result<()> {
+    println!("server is starting!");
+    HttpServer::new( || {
+        App::new()
+            .service(set_key)
+            .service(get_key)
+            .service(home)
+    })
+    .bind(("127.0.0.1", 8080))?
+    .run()
+    .await
 }
