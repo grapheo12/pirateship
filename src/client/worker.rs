@@ -136,9 +136,16 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             error!("Byzantine response received before the request was sent. This is a bug.");
                         }
                     } else {
-                        waiting_for_byz_response.insert(req.id, req.clone());
+
+                        if req.executor_mode == Executor::Leader {
+                            // If it is Executor::Any, it it probably a read request. There will be no byz commit.
+                            waiting_for_byz_response.insert(req.id, req.clone());
+                        }
                     }
-                    let _ = stat_tx.send(ClientWorkerStat::ByzCommitPending(id, waiting_for_byz_response.len())).await;
+
+                    if req.executor_mode == Executor::Leader {
+                        let _ = stat_tx.send(ClientWorkerStat::ByzCommitPending(id, waiting_for_byz_response.len())).await;
+                    }
                     
                     // We will wait for the response.
                     let res = PinnedClient::await_reply(&client, &req.wait_from).await;
@@ -162,6 +169,9 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                         Some(client::proto_client_reply::Reply::Receipt(receipt)) => {
                             let _ = backpressure_tx.send(CheckerResponse::Success(req.id)).await;
                             let _ = stat_tx.send(ClientWorkerStat::CrashCommitLatency(req.start_time.elapsed())).await;
+                            if req.executor_mode == Executor::Any {
+                                info!("Got reply for read request from {}!", req.wait_from);
+                            }
 
                             for byz_resp in receipt.byz_responses.iter() {
                                 if let Some(task) = waiting_for_byz_response.remove(&byz_resp.client_tag) {
