@@ -152,13 +152,16 @@ fn main() {
         .unwrap();
     
     //run front end server
+
+    let _ = runtime.spawn(run_main(cfg.clone()));
+    
     let frontend_handle = thread::spawn(move || {
         let frontend_runtime = runtime::Builder::new_multi_thread()
             .enable_all()
-            .worker_threads(2) // adjust as needed
+            .worker_threads(1) 
             .build()
             .unwrap();
-        match frontend_runtime.spawn(frontend::run_actix_server(cfg)) {
+        match frontend_runtime.block_on(frontend::run_actix_server(cfg)) {
             Ok(_) => println!("Frontend server ran successfully."),
             Err(e) => eprintln!("Frontend server error: {:?}", e),
         }
@@ -167,5 +170,5 @@ fn main() {
     frontend_handle.join().unwrap();
 
 
-    let _ = runtime.block_on(test_run());
+
 }
