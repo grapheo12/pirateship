@@ -192,6 +192,7 @@ class Experiment:
             config["rpc_config"] = {"signing_priv_key_path": signing_priv_key_path}
 
             config["workload_config"]["num_clients"] = num_clients_per_vm[client_num]
+            config["workload_config"]["duration"] = self.duration
 
             self.binary_mapping[client_vms[client_num]].append(client)
 
@@ -211,6 +212,7 @@ class Experiment:
         config["rpc_config"] = {"signing_priv_key_path": signing_priv_key_path}
 
         config["workload_config"]["num_clients"] = 1
+        config["workload_config"]["duration"] = self.duration
 
         with open(os.path.join(config_dir, f"{name}_config.json"), "w") as f:
             json.dump(config, f, indent=4)
@@ -257,7 +259,7 @@ class Experiment:
 
         cmds = [
             f"cd {remote_repo} && git checkout main",       # Move out of DETACHED HEAD state
-            f"cd {remote_repo} && git fetch --all && git pull --all"
+            f"cd {remote_repo} && git fetch --all --recurse-submodules && git pull --all --recurse-submodules",
         ]
         try:
             run_remote_public_ip(cmds, self.dev_ssh_user, self.dev_ssh_key, self.dev_vm)
@@ -275,6 +277,7 @@ class Experiment:
         cmds = [
             f"cd {remote_repo} && git reset --hard",
             f"cd {remote_repo} && git checkout {git_hash}",
+            f"cd {remote_repo} && git submodule update --init --recursive",
             f"cd {remote_repo} && git apply --allow-empty --reject --whitespace=fix diff.patch",
         ]
         
@@ -427,6 +430,10 @@ sleep 1
 
         # Save myself (again)
         with open(os.path.join(workdir, "experiment.pkl"), "wb") as f:
+            pickle.dump(self, f)
+
+        # Save myself (again) to keep the pristine state
+        with open(os.path.join(workdir, "experiment_pristine.pkl"), "wb") as f:
             pickle.dump(self, f)
 
         # Save myself in text (again)

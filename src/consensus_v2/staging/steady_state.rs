@@ -594,6 +594,8 @@ impl Staging {
         // Now crash commit blindly
         self.do_crash_commit(self.ci, ae_stats.ci).await;
 
+        let old_view_is_stable = self.view_is_stable;
+        
         let mut qc_list = self
             .pending_blocks
             .iter().last().unwrap()
@@ -601,7 +603,6 @@ impl Staging {
             .map(|e| e.clone())
             .collect::<Vec<_>>();
 
-        let old_view_is_stable = self.view_is_stable;
         for qc in qc_list.drain(..) {
             if !old_view_is_stable {
                 // Try to see if this QC can stabilize the view.
@@ -610,6 +611,14 @@ impl Staging {
             }
             
             self.maybe_byzantine_commit(qc).await?;
+        }
+
+        #[cfg(feature = "no_qc")]
+        {
+            if self.ci > 100 { // I don't know why just self.ci doesn't work.
+                               // But this seems to work somehow.
+                self.do_byzantine_commit(self.bci, self.ci - 100).await;
+            }   
         }
 
         // Reply vote to the leader.
@@ -626,7 +635,7 @@ impl Staging {
 
         if old_view_is_stable && self.__ae_seen_in_this_view > soft_gap as usize
         /* don't trigger unnecessarily on new view messages */
-        && self.ci - self.bci > hard_gap {
+        && self.ci as i64 - self.bci as i64 > hard_gap as i64 {
             // Trigger a view change
             warn!("Triggering view change due to too much gap between CI and BCI: {} {}", self.ci, self.bci);
             self.view_change_timer.fire_now().await;
@@ -725,6 +734,10 @@ impl Staging {
         #[cfg(not(feature = "no_qc"))]
         self.maybe_create_qcs().await?;
 
+        #[cfg(feature = "no_qc")]
+        self.do_byzantine_commit(self.bci, self.ci).await;
+        // This is needed to prevent a memory leak.
+
         Ok(())
     }
 
@@ -771,13 +784,13 @@ impl Staging {
             let config = &self.config.get().consensus_config;
             config.commit_index_gap_soft
         };
-        let non_bcied = self.ci - self.bci;
+        let non_bcied = self.ci as i64 - self.bci as i64;
 
         #[cfg(feature = "no_qc")]
         let thresh = self.crash_commit_threshold();
 
         #[cfg(not(feature = "no_qc"))]
-        let thresh = if non_bcied > soft_gap {
+        let thresh = if non_bcied > soft_gap as i64 {
             self.byzantine_commit_threshold()
         } else {
             self.crash_commit_threshold()

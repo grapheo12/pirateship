@@ -136,9 +136,16 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             error!("Byzantine response received before the request was sent. This is a bug.");
                         }
                     } else {
-                        waiting_for_byz_response.insert(req.id, req.clone());
+
+                        if req.executor_mode == Executor::Leader {
+                            // If it is Executor::Any, it it probably a read request. There will be no byz commit.
+                            waiting_for_byz_response.insert(req.id, req.clone());
+                        }
                     }
-                    let _ = stat_tx.send(ClientWorkerStat::ByzCommitPending(id, waiting_for_byz_response.len())).await;
+
+                    if req.executor_mode == Executor::Leader {
+                        let _ = stat_tx.send(ClientWorkerStat::ByzCommitPending(id, waiting_for_byz_response.len())).await;
+                    }
                     
                     // We will wait for the response.
                     let res = PinnedClient::await_reply(&client, &req.wait_from).await;
@@ -162,6 +169,9 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                         Some(client::proto_client_reply::Reply::Receipt(receipt)) => {
                             let _ = backpressure_tx.send(CheckerResponse::Success(req.id)).await;
                             let _ = stat_tx.send(ClientWorkerStat::CrashCommitLatency(req.start_time.elapsed())).await;
+                            if req.executor_mode == Executor::Any {
+                                trace!("Got reply for read request from {}!", req.wait_from);
+                            }
 
                             for byz_resp in receipt.byz_responses.iter() {
                                 if let Some(task) = waiting_for_byz_response.remove(&byz_resp.client_tag) {
@@ -234,7 +244,8 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         let mut outstanding_requests = HashMap::<u64, OutstandingRequest>::new();
 
         let mut total_requests = 0;
-        let max_requests = self.config.workload_config.num_requests;
+        
+        let duration = Duration::from_secs(self.config.workload_config.duration);
         let mut node_list = self.config.net_config.nodes.keys().map(|e| e.clone()).collect::<Vec<_>>();
         node_list.sort();
 
@@ -249,7 +260,8 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         let mut curr_complaining_requests = 0;
         let max_inflight_requests = self.config.workload_config.max_concurrent_requests;
 
-        while total_requests < max_requests {
+        let experiment_global_start = Instant::now();
+        while experiment_global_start.elapsed() < duration {
             // Wait for the checker task to give a go-ahead.
             match backpressure_rx.recv().await {
                 Some(CheckerResponse::Success(id)) => {
@@ -330,6 +342,8 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                 }
             }
         }
+
+        info!("Experiment completed. Total requests: {} Total runtime: {} s", total_requests, experiment_global_start.elapsed().as_secs());
     }
 
     /// Sets the req.last_sent_to.

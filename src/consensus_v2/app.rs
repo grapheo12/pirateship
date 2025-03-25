@@ -14,11 +14,11 @@ pub enum AppCommand {
     NewRequestBatch(u64 /* block.n */, u64 /* view */, bool /* view_is_stable */, bool /* i_am_leader */, usize /* length of new batch of request */, HashType /* hash of the last block */),
     CrashCommit(Vec<CachedBlock> /* all blocks from old_ci + 1 to new_ci */),
     ByzCommit(Vec<CachedBlock> /* all blocks from old_bci + 1 to new_bci */),
-    Rollback(u64 /* new last block */)
+    Rollback(u64 /* new last block */),
 }
 
 pub trait AppEngine {
-    type State: std::fmt::Debug + Clone + Serialize + DeserializeOwned + Send;
+    type State: std::fmt::Debug + std::fmt::Display + Clone + Serialize + DeserializeOwned + Send;
 
     fn new(config: AtomicConfig) -> Self;
     fn handle_crash_commit(&mut self, blocks: Vec<CachedBlock>) -> Vec<Vec<ProtoTransactionResult>>;
@@ -45,7 +45,7 @@ struct LogStats {
 
 impl LogStats {
     fn new() -> Self {
-        Self {
+        let mut res = Self {
             ci: 0,
             bci: 0,
             view: 0,
@@ -58,7 +58,15 @@ impl LogStats {
             total_crash_committed_txs: 0,
             total_byz_committed_txs: 0,
             total_unlogged_txs: 0,
+        };
+
+        #[cfg(not(feature = "view_change"))]
+        {
+            res.view_is_stable = true;
+            res.view = 1;
         }
+
+        res
     }
 
     fn print(&self) {
@@ -68,7 +76,7 @@ impl LogStats {
             self.ci,
             self.bci,
             self.total_requests - (self.total_crash_committed_txs + self.total_unlogged_txs),
-            self.ci - self.bci,
+            self.ci as i64 - self.bci as i64,
             self.total_crash_committed_txs,
             self.total_byz_committed_txs,
             self.last_hash.encode_hex::<String>(),
@@ -77,6 +85,8 @@ impl LogStats {
             self.view_is_stable,
             self.i_am_leader
         );
+
+        info!("Total unlogged txs: {}", self.total_unlogged_txs);
     }
 }
 
@@ -188,7 +198,7 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
         let state = self.engine.get_current_state();
         // TODO: Decide on checkpointing strategy
 
-        info!("Current state checkpoint: {:?}", state);
+        info!("Current state checkpoint: {}", state);
 
         // It should be safe to garbage collect all bcied + executed blocks.
         // Since the application is single-threaded and self.bci is set inevitably during the execution,

@@ -6,16 +6,18 @@ use log::{info, warn};
 use prost::Message as _;
 use crate::config::NodeInfo;
 use crate::proto::client::{ProtoClientReply, ProtoCurrentLeader};
+use crate::proto::execution::ProtoTransactionResult;
 use crate::proto::rpc::ProtoPayload;
 use crate::rpc::server::LatencyProfile;
 use crate::rpc::{PinnedMessage, SenderType};
 use crate::utils::channel::{Sender, Receiver};
 use crate::utils::PerfCounter;
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 
 use crate::{config::AtomicConfig, utils::timer::ResettableTimer, proto::execution::ProtoTransaction, rpc::server::MsgAckChan};
 
 use super::app::AppCommand;
+use super::client_reply::ClientReplyCommand;
 
 pub type RawBatch = Vec<ProtoTransaction>;
 
@@ -33,7 +35,8 @@ pub struct BatchProposer {
     batch_proposer_rx: Receiver<TxWithAckChanTag>,
     block_maker_tx: Sender<(RawBatch, Vec<MsgAckChanWithTag>)>,
 
-    app_tx: Sender<AppCommand>,
+    reply_tx: Sender<ClientReplyCommand>,
+    unlogged_tx: Sender<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)>,
 
     current_raw_batch: Option<RawBatch>, // So that I can take()
     current_reply_vec: Vec<MsgAckChanWithTag>,
@@ -52,7 +55,7 @@ impl BatchProposer {
         config: AtomicConfig,
         batch_proposer_rx: Receiver<TxWithAckChanTag>,
         block_maker_tx: Sender<(RawBatch, Vec<MsgAckChanWithTag>)>,
-        app_tx: Sender<AppCommand>,
+        reply_tx: Sender<ClientReplyCommand>, unlogged_tx: Sender<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)>,
         cmd_rx: Receiver<BatchProposerCommand>,
     ) -> Self {
         let batch_timer = ResettableTimer::new(
@@ -68,18 +71,28 @@ impl BatchProposer {
 
         let perf_counter = RefCell::new(PerfCounter::new("BatchProposer", &event_order));
 
-        Self {
+        #[allow(unused_mut)]
+        let mut ret = Self {
             config,
             batch_proposer_rx, block_maker_tx,
             current_raw_batch: Some(RawBatch::with_capacity(max_batch_size)),
             batch_timer,
             current_reply_vec: Vec::with_capacity(max_batch_size),
-            app_tx,
+            reply_tx, unlogged_tx,
             perf_counter,
             make_new_batches: false,
             current_leader: String::new(),
             cmd_rx,
+        };
+
+        #[cfg(not(feature = "view_change"))]
+        {
+            let leader = ret.config.get().consensus_config.get_leader_for_view(1);
+            ret.make_new_batches = leader == ret.config.get().net_config.name;
+            ret.current_leader = leader;
         }
+
+        ret
     }
 
     pub async fn run(batch_proposer: Arc<Mutex<Self>>) {
@@ -172,8 +185,14 @@ impl BatchProposer {
 
         
         if new_tx.is_some() {
-            // TODO: Filter read-only transactions that do not need to go through consensus.
+            // Filter read-only transactions that do not need to go through consensus.
             // Forward them directly to execution.
+            let new_tx = self.filter_unlogged_request(new_tx.unwrap()).await;
+
+            if new_tx.is_none() {
+                return Ok(());
+            }
+
             if !self.i_am_leader() {
                 self.reply_leader(new_tx.unwrap()).await;
                 return Ok(());
@@ -246,6 +265,31 @@ impl BatchProposer {
 
     fn i_am_leader(&self) -> bool {
         self.config.get().net_config.name == self.current_leader
+    }
+
+    /// None implies don't process the transaction forward!
+    /// Either the transaction is malformed or it is a read-only transaction.
+    async fn filter_unlogged_request(&mut self, tx: TxWithAckChanTag) -> Option<TxWithAckChanTag> {
+        let (tx, ack_chan) = tx;
+        let tx = tx.unwrap();
+        
+        if tx.on_receive.is_some() {
+            if !(tx.on_crash_commit.is_none() && tx.on_byzantine_commit.is_none()) {
+                warn!("Malformed transaction");
+            }
+
+            let (res_tx, res_rx) = oneshot::channel();
+
+            self.unlogged_tx.send((tx, res_tx)).await.unwrap();
+
+            self.reply_tx.send(ClientReplyCommand::UnloggedRequestAck(res_rx, ack_chan)).await.unwrap();
+
+            return None;
+        }
+
+
+        Some((Some(tx), ack_chan))
+
     }
 
 }

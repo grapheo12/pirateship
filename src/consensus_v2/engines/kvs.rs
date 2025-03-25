@@ -1,16 +1,11 @@
 use std::collections::HashMap;
+use std::fmt::Display;
 
-use gluesql::sled_storage::sled::transaction::TransactionResult;
-use log::info;
-use nix::libc::qos_class_t;
+use log::{info, trace, warn};
 use serde::{Serialize, Deserialize};
-use sha2::digest::consts::True;
 
-use crate::proto;
 use crate::{config::AtomicConfig, consensus_v2::app::AppEngine};
-use crate::config::{AppConfig, ClientConfig, ClientNetConfig, ClientRpcConfig, Config, ConsensusConfig, EvilConfig, KVReadWriteUniform, NetConfig, NodeNetInfo, RocksDBConfig, RpcConfig, WorkloadConfig};
 
-use crate::crypto::CachedBlock;
 use crate::proto::execution::{
     ProtoTransaction, ProtoTransactionPhase, ProtoTransactionOp, ProtoTransactionOpType,
     ProtoTransactionResult, ProtoTransactionOpResult,
@@ -27,6 +22,12 @@ use crate::proto::consensus::{
 pub struct KVSState {
     pub ci_state: HashMap<Vec<u8>, Vec<(u64, Vec<u8>) /* versions */>>,
     pub bci_state: HashMap<Vec<u8>, Vec<u8>>,
+}
+
+impl Display for KVSState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ci_state size: {}, bci_state size: {}", self.ci_state.len(), self.bci_state.len())
+    }
 }
 
 pub struct KVSAppEngine {
@@ -73,13 +74,15 @@ impl AppEngine for KVSAppEngine {
             self.last_ci = proto_block.n;
             let mut block_result: Vec<ProtoTransactionResult> = Vec::new();
             for tx in proto_block.tx_list.iter() {
-                let ops: &_ = match &tx.on_crash_commit {
-                    Some(ops) => &ops.ops,
-                    None => continue,
-                };
-
                 let mut txn_result = ProtoTransactionResult {
                     result: Vec::new(),
+                };
+                let ops = match &tx.on_crash_commit {
+                    Some(ops) => &ops.ops,
+                    None => {
+                        block_result.push(txn_result);
+                        continue;
+                    },
                 };
 
                 for op in ops.iter() {
@@ -114,7 +117,7 @@ impl AppEngine for KVSAppEngine {
                             }
                         }
                     } else {
-                        info!("Invalid operation type: {}", op.op_type);
+                        warn!("Invalid operation type: {}", op.op_type);
                         continue;
                     }
 
@@ -129,8 +132,8 @@ impl AppEngine for KVSAppEngine {
             //test
             block_count += 1;
         }
-        info!("block count:{}", block_count);
-        info!("transaction count{}", txn_count);
+        trace!("block count:{}", block_count);
+        trace!("transaction count{}", txn_count);
         return final_result;
     }
 
@@ -149,15 +152,17 @@ impl AppEngine for KVSAppEngine {
             let mut block_result: Vec<ProtoByzResponse> = Vec::new(); 
 
             for (tx_n, tx) in proto_block.tx_list.iter().enumerate() {
-                let ops: &_ = match &tx.on_byzantine_commit{
-                    Some(ops) => &ops.ops,
-                    None => continue,
-                };
-
                 let mut byz_result = ProtoByzResponse {
                     block_n: proto_block.n,
                     tx_n: tx_n as u64,
                     client_tag: 0,
+                };
+                let ops: &_ = match &tx.on_byzantine_commit{
+                    Some(ops) => &ops.ops,
+                    None => {
+                        block_result.push(byz_result);
+                        continue;
+                    },
                 };
 
                 for op in ops.iter() {
@@ -167,11 +172,11 @@ impl AppEngine for KVSAppEngine {
                     if let Some(op_type) = ProtoTransactionOpType::from_i32(op.op_type) {
                         if op_type == ProtoTransactionOpType::Write {
                             let key = &op.operands[0];
-                            let val: &_ = &op.operands[1];
+                            let val = &op.operands[1];
                             self.state.bci_state.insert(key.clone(), val.clone());
                         }
                     } else {
-                        info!("Invalid operation type: {}", op.op_type);
+                        warn!("Invalid operation type: {}", op.op_type);
                         continue;
                     }
                 }
@@ -195,8 +200,8 @@ impl AppEngine for KVSAppEngine {
             val_versions.retain(|v| v.0 > self.last_bci);
         }
         self.state.ci_state.retain(|_, v| v.len() > 0);
-        info!("block count:{}", block_count);
-        info!("transaction count{}", txn_count);
+        trace!("block count:{}", block_count);
+        trace!("transaction count{}", txn_count);
         final_result
     }
 
@@ -216,7 +221,7 @@ impl AppEngine for KVSAppEngine {
 
         let ops: &_ = match &request.on_receive {
             Some(ops) => &ops.ops,
-            None => return txn_result, //Not sure how to handle this case
+            None => return txn_result,
         };
 
         for op in ops {

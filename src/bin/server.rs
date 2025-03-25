@@ -7,12 +7,11 @@ use pft::consensus_v2;
 use tokio::{runtime, signal};
 use std::process::exit;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
-use pft::consensus_v2::engines::null_app::NullApp;
-use pft::consensus_v2::frontend; //change location
-use std::thread;
+use pft::consensus_v2::engines::{null_app::NullApp, kvs::KVSAppEngine};
+use std::io::Write;
 
-// #[global_allocator]
-// static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 /// Fetch json config file from command line path.
 /// Panic if not found or parsed properly.
@@ -56,15 +55,6 @@ fn get_feature_set() -> (&'static str, &'static str) {
     (protocol, app)
 }
 
-async fn test_run() {
-    let v = &["apples", "cake", "coffee"];
-
-    for text in v {
-        println!("I like {}.", text);
-    }
-}
-
-
 async fn run_main(cfg: Config) -> io::Result<()> {
     #[cfg(feature = "app_logger")]
     let mut node = consensus_v2::ConsensusNode::<NullApp>::new(cfg);
@@ -72,7 +62,7 @@ async fn run_main(cfg: Config) -> io::Result<()> {
     // let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
     
     #[cfg(feature = "app_kvs")]
-    let node = Arc::new(consensus_v2::ConsensusNode::<KVSAppEngine>::new(&cfg));
+    let mut node = consensus_v2::ConsensusNode::<KVSAppEngine>::new(cfg);
     
     #[cfg(feature = "app_sql")]
     let node = Arc::new(consensus::ConsensusNode::<PinnedSQLEngine>::new(&cfg));
@@ -126,7 +116,6 @@ fn main() {
             num_threads = _num_cores - 1;
         }
     }
-    let num_threads = 4;
 
     let start_idx = start_idx * num_threads;
     
@@ -151,25 +140,5 @@ fn main() {
         })
         .build()
         .unwrap();
-    
-    //run front end server
-
-    let _ = runtime.spawn(run_main(cfg.clone()));
-    
-    let frontend_handle = thread::spawn(move || {
-        let frontend_runtime = runtime::Builder::new_multi_thread()
-            .enable_all()
-            .worker_threads(1) 
-            .build()
-            .unwrap();
-        match frontend_runtime.block_on(frontend::run_actix_server(cfg)) {
-            Ok(_) => println!("Frontend server ran successfully."),
-            Err(e) => eprintln!("Frontend server error: {:?}", e),
-        }
-    });
-
-    frontend_handle.join().unwrap();
-
-
-
+    let _ = runtime.block_on(test_run());
 }

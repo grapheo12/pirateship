@@ -5,6 +5,12 @@ use crate::{consensus_v2::app::AppEngine, proto::{client::ProtoByzResponse, exec
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NullApp;
 
+impl std::fmt::Display for NullApp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NullApp")
+    }
+}
+
 impl AppEngine  for NullApp {
     type State = Self;
 
