@@ -1,11 +1,11 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use pft::config::{self, Config};
 use pft::consensus_v2;
 use tokio::{runtime, signal};
-use std::io::Write;
+use std::process::exit;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
 use pft::consensus_v2::engines::null_app::NullApp;
 use pft::consensus_v2::frontend; //change location
@@ -50,8 +50,6 @@ fn get_feature_set() -> (&'static str, &'static str) {
 
     #[cfg(feature = "lucky_raft")]{ protocol = "lucky_raft"; }
     #[cfg(feature = "signed_raft")]{ protocol = "signed_raft"; }
-    #[cfg(feature = "diverse_raft")]{ protocol = "diverse_raft"; }
-    #[cfg(feature = "jolteon")]{ protocol = "jolteon"; }
     #[cfg(feature = "chained_pbft")]{ protocol = "chained_pbft"; }
     #[cfg(feature = "pirateship")]{ protocol = "pirateship"; }
 
@@ -74,7 +72,7 @@ async fn run_main(cfg: Config) -> io::Result<()> {
     // let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
     
     #[cfg(feature = "app_kvs")]
-    let node = Arc::new(consensus::ConsensusNode::<PinnedKVStoreEngine>::new(&cfg));
+    let node = Arc::new(consensus_v2::ConsensusNode::<KVSAppEngine>::new(&cfg));
     
     #[cfg(feature = "app_sql")]
     let node = Arc::new(consensus::ConsensusNode::<PinnedSQLEngine>::new(&cfg));
@@ -86,6 +84,9 @@ async fn run_main(cfg: Config) -> io::Result<()> {
         Ok(_) => {
             info!("Received SIGINT. Shutting down.");
             handles.abort_all();
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            info!("Force shutdown.");
+            exit(0);
         },
         Err(e) => {
             error!("Signal: {:?}", e);

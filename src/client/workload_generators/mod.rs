@@ -1,5 +1,6 @@
 use crate::proto::execution::{ProtoTransaction, ProtoTransactionResult};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Executor {
     Leader = 1,
     Any = 2

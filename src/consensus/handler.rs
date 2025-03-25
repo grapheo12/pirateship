@@ -695,7 +695,7 @@ pub async fn handle_node_messages<Engine>(
     let mut vote_worker_chans = Vec::new();
     let mut vote_worker_rr_cnt = 1u16;
     let cfg = ctx.config.get();
-    for _ in 1..cfg.consensus_config.vote_processing_workers {
+    for _ in 1..cfg.consensus_config.num_crypto_workers {
         // 0th index is for this thread
         let (tx, mut rx) = mpsc::unbounded_channel();
         vote_worker_chans.push(tx);
@@ -823,7 +823,7 @@ pub async fn handle_node_messages<Engine>(
             if let crate::proto::rpc::proto_payload::Message::Vote(_) = req.0.as_ref() {
                 let cfg = ctx.config.get();
                 let rr_cnt =
-                    vote_worker_rr_cnt % cfg.consensus_config.vote_processing_workers;
+                    vote_worker_rr_cnt % cfg.consensus_config.num_crypto_workers;
                 vote_worker_rr_cnt += 1;
                 if rr_cnt == 0 {
                     // Let this thread process it.
@@ -838,7 +838,7 @@ pub async fn handle_node_messages<Engine>(
             // else if let crate::proto::rpc::proto_payload::Message::BackfillRequest(_) = req.0 {
             //     let cfg = ctx.config.get();
             //     let mut rr_cnt =
-            //         vote_worker_rr_cnt % cfg.consensus_config.vote_processing_workers;
+            //         vote_worker_rr_cnt % cfg.consensus_config.num_crypto_workers;
             //     vote_worker_rr_cnt += 1;
             //     if rr_cnt == 0 {
             //         rr_cnt = 1;

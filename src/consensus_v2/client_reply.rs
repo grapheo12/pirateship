@@ -1,15 +1,16 @@
 use std::{collections::HashMap, sync::Arc};
 
-use log::{info, warn};
+use log::info;
 use prost::Message as _;
 use tokio::{sync::{oneshot, Mutex}, task::JoinSet};
 
-use crate::{config::AtomicConfig, crypto::HashType, proto::{client::{ProtoByzResponse, ProtoClientReply, ProtoTransactionReceipt}, execution::ProtoTransactionResult, rpc::ProtoPayload}, rpc::{server::LatencyProfile, PinnedMessage, SenderType}, utils::channel::{Receiver, Sender}};
+use crate::{config::{AtomicConfig, NodeInfo}, crypto::HashType, proto::{client::{ProtoByzResponse, ProtoClientReply, ProtoTransactionReceipt, ProtoTryAgain}, execution::ProtoTransactionResult, rpc::ProtoPayload}, rpc::{server::LatencyProfile, PinnedMessage, SenderType}, utils::channel::{Receiver, Sender}};
 
 use super::batch_proposal::MsgAckChanWithTag;
 
 pub enum ClientReplyCommand {
     CancelAllRequests,
+    StopCancelling,
     CrashCommitAck(HashMap<HashType, (u64, Vec<ProtoTransactionResult>)>),
     ByzCommitAck(HashMap<HashType, (u64, Vec<ProtoByzResponse>)>),
 }
@@ -34,6 +35,8 @@ pub struct ClientReplyHandler {
 
     reply_processors: JoinSet<()>,
     reply_processor_queue: (async_channel::Sender<ReplyProcessorCommand>, async_channel::Receiver<ReplyProcessorCommand>),
+
+    must_cancel: bool,
 }
 
 impl ClientReplyHandler {
@@ -54,6 +57,7 @@ impl ClientReplyHandler {
             reply_processors: JoinSet::new(),
             reply_processor_queue: async_channel::bounded(_chan_depth),
             byz_response_store: HashMap::new(),
+            must_cancel: false,
         }
     }
 
@@ -109,8 +113,27 @@ impl ClientReplyHandler {
                     return Ok(());
                 }
 
-                let (batch_hash_chan, reply_vec) = batch.unwrap();
+                let (batch_hash_chan, mut reply_vec) = batch.unwrap();
                 let batch_hash = batch_hash_chan.await.unwrap();
+
+                if batch_hash.is_empty() || self.must_cancel {
+                    // This is called when !listen_on_new_batch
+                    // This must be cancelled.
+                    if reply_vec.len() > 0 {
+                        info!("Clearing out queued replies of size {}", reply_vec.len());
+                        let node_infos = NodeInfo {
+                            nodes: self.config.get().net_config.nodes.clone()
+                        };
+                        for (chan, tag, _) in reply_vec.drain(..) {
+                            let reply = Self::get_try_again_message(tag, &node_infos);
+                            let reply_ser = reply.encode_to_vec();
+                            let _sz = reply_ser.len();
+                            let reply_msg = PinnedMessage::from(reply_ser, _sz, crate::rpc::SenderType::Anon);
+                            let _ = chan.send((reply_msg, LatencyProfile::new())).await;
+                        }
+                    }
+                    return Ok(());
+                }
 
                 self.byz_reply_map.insert(batch_hash.clone(), reply_vec.iter().map(|(_, client_tag, sender)| (*client_tag, sender.clone())).collect());
                 self.reply_map.insert(batch_hash.clone(), reply_vec);
@@ -157,7 +180,21 @@ impl ClientReplyHandler {
     async fn handle_reply_command(&mut self, cmd: ClientReplyCommand) {
         match cmd {
             ClientReplyCommand::CancelAllRequests => {
-                self.reply_map.clear();
+                let node_infos = NodeInfo {
+                    nodes: self.config.get().net_config.nodes.clone()
+                };
+                for (_, mut vec) in self.reply_map.drain() {
+                    for (chan, tag, _) in vec.drain(..) {
+                        let reply = Self::get_try_again_message(tag, &node_infos);
+                        let reply_ser = reply.encode_to_vec();
+                        let _sz = reply_ser.len();
+                        let reply_msg = PinnedMessage::from(reply_ser, _sz, crate::rpc::SenderType::Anon);
+                        let _ = chan.send((reply_msg, LatencyProfile::new())).await;
+                    }
+                }
+
+                self.must_cancel = true;
+                
             },
             ClientReplyCommand::CrashCommitAck(crash_commit_ack) => {
                 for (hash, (n, reply_vec)) in crash_commit_ack {
@@ -178,6 +215,20 @@ impl ClientReplyHandler {
                     }
                 }
             },
+            ClientReplyCommand::StopCancelling => {
+                self.must_cancel = false;
+            },
+        }
+    }
+
+    fn get_try_again_message(client_tag: u64, node_infos: &NodeInfo) -> ProtoClientReply {
+        ProtoClientReply {
+            reply: Some(
+                crate::proto::client::proto_client_reply::Reply::TryAgain(ProtoTryAgain {
+                    serialized_node_infos: node_infos.serialize(),
+                }),
+            ),
+            client_tag,
         }
     }
 
