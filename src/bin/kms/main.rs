@@ -69,9 +69,7 @@ async fn test_run() {
 
 
 async fn run_main(cfg: Config) -> io::Result<()> {
-    #[cfg(feature = "app_logger")]
     let mut node = consensus_v2::ConsensusNode::<KVSAppEngine>::new(cfg);
-
     // let mut handles = consensus::ConsensusNode::run(node);
     let mut handles = node.run().await;
 

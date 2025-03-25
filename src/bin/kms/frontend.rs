@@ -26,22 +26,17 @@
         curr_round_robin_id: Arc<Mutex<usize>>
     }
 
+    // GET /auth
+    // POST /refresh
+    // GET /pubkey
+    // GET /listpubkeys
+    // GET/PrivKey
+
     #[put("/set/{key}")]
     async fn set_key(key: web::Path<String>, value: web::Json<String>, data: web::Data<AppState>) -> impl Responder {
         let key_str = key.into_inner();
         let value_str = value.into_inner();
         let client = &data.client;
-        let node_list = &data.node_list;
-        let mut curr_leader_id: usize = {
-            let guard = data.curr_leader_id.lock().await;
-            *guard // dereference the guard to get the inner usize value
-        };
-        
-        let mut curr_round_robin_id: usize = {
-            let guard = data.curr_round_robin_id.lock().await;
-            *guard
-        };
-
 
         let transaction_op = ProtoTransactionOp {
             op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
@@ -59,19 +54,6 @@
             is_reconfiguration: false,
         };
 
-        // let client_request = ProtoPayload {
-        //     message: Some(crate::proto::rpc::proto_payload::Message::ClientRequest(ProtoClientRequest {
-        //         tx: Some(transaction),
-        //         origin: "name".to_string(), //temp
-        //         sig: vec![0u8; 1],
-        //         client_tag: (0 + 1) as u64, //temp
-        //     }))
-        // };
-
-        // let mut req = OutstandingRequest::default();
-        // req.id = (0 + 1) as u64;
-        // req.payload = client_request.encode_to_vec();
-
         let rpc_msg_body = ProtoPayload {
             message: Some(pft::proto::rpc::proto_payload::Message::ClientRequest(ProtoClientRequest {
                 tx: Some(transaction),
@@ -84,17 +66,14 @@
         let mut buf = Vec::new();
         let sz = buf.len();
 
-        // Try to encode the request payload into a buffer.
         if let Err(e) = rpc_msg_body.encode(&mut buf) {
             warn!("Error encoding request: {}", e);
         }
 
-        // Construct the request message.
         let sz = buf.len();
         let request = PinnedMessage::from(buf, sz, pft::rpc::SenderType::Anon);
 
-        // Send the request and await the reply.
-        let resp = match PinnedClient::send_and_await_reply(&data.client, &"node1".to_string(), request.as_ref()).await {
+        let resp = match PinnedClient::send_and_await_reply(client, &"node1".to_string(), request.as_ref()).await {
             Ok(resp) => resp,
             Err(e) => {
                 warn!("Error sending request: {}", e);
@@ -104,7 +83,6 @@
 
         let resp = resp.as_ref();
 
-        // Decode the response payload.
         let decoded_payload  = match ProtoClientReply::decode(&resp.0.as_slice()[0..resp.1]) {
             Ok(payload) => payload,
             Err(e) => {
@@ -113,7 +91,6 @@
             }
         };
 
-        // Return the HTTP response including any desired data.
         HttpResponse::Ok().json(serde_json::json!({
             "message": "Key set successfully",
             "key": key_str,
@@ -121,20 +98,102 @@
             "node list": data.node_list,
             "payload": decoded_payload
         }))
+
     }
 
     #[get("/get/{key}")]
-    async fn get_key(key: web::Path<String>) -> impl Responder {
+    async fn get_key(key: web::Path<String>,  data: web::Data<AppState>) -> impl Responder {
         let key_str = key.into_inner();
+        let client = &data.client;
 
-        ProtoTransactionOp {
+
+        let transaction_op = ProtoTransactionOp {
             op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
             operands: vec![key_str.clone().into_bytes()],
         };
 
+        let transaction_phase = ProtoTransactionPhase {
+            ops: vec![transaction_op.clone()],
+        };
+
+        let transaction = ProtoTransaction {
+            on_receive:None,
+            on_crash_commit: Some(transaction_phase.clone()),
+            on_byzantine_commit: None,
+            is_reconfiguration: false,
+        };
+
+        let rpc_msg_body = ProtoPayload {
+            message: Some(pft::proto::rpc::proto_payload::Message::ClientRequest(ProtoClientRequest {
+                tx: Some(transaction),
+                origin: "name".to_string(), //change? doesn't really matter
+                sig: vec![0u8; 1],
+                client_tag: (0 + 1) as u64, //change to counter
+            })),
+        };
+
+        let mut buf = Vec::new();
+        let sz = buf.len();
+
+        if let Err(e) = rpc_msg_body.encode(&mut buf) {
+            warn!("Error encoding request: {}", e);
+        }
+
+        let sz = buf.len();
+        let request = PinnedMessage::from(buf, sz, pft::rpc::SenderType::Anon);
+
+        let resp = match PinnedClient::send_and_await_reply(client, &"node1".to_string(), request.as_ref()).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                warn!("Error sending request: {}", e);
+                return HttpResponse::InternalServerError().body(format!("Error sending request: {}", e));
+            }
+        };
+
+        let resp = resp.as_ref();
+
+        let decoded_payload  = match ProtoClientReply::decode(&resp.0.as_slice()[0..resp.1]) {
+            Ok(payload) => payload,
+            Err(e) => {
+                warn!("Error decoding response: {}", e);
+                return HttpResponse::InternalServerError().body("Error decoding response");
+            }
+        };
+
+        let client_tag = decoded_payload.client_tag;
+        let mut result = Vec::new();
+        match decoded_payload.reply.unwrap() {
+            pft::proto::client::proto_client_reply::Reply::Receipt(receipt) => {
+                if let Some(tx_result) = receipt.results {
+                    for op_result in tx_result.result {
+                        for value in op_result.values {
+                            match String::from_utf8(value) {
+                                Ok(string) => result.push(string),
+                                Err(e) => return HttpResponse::Ok().json(serde_json::json!({
+                                    "message": "error: could not convert bytes to string",
+                                    "result": result,
+                                }))
+                            }
+                        }
+                    }
+                } else {
+                    println!("No transaction results found in the receipt.");
+                }
+            },
+            _ => {
+                return HttpResponse::Ok().json(serde_json::json!({
+                    "message": "error, no Receipt found",
+                    "result": result,
+                }))
+            },
+        };
+
+
+
         HttpResponse::Ok().json(serde_json::json!({
-            "message": "Key found successfully",
+            "message": "Value found successfully",
             "key": key_str,
+            "result": result,
         }))
     }
 
@@ -145,20 +204,6 @@
             "message": "hi",
             "data": nodes
         }))
-    }
-
-    pub async fn setup_frontend(config: Config) -> String {
-        // let _ = run_actix_server(config).await;
-        "hello".to_string()
-    }
-
-    pub async fn test_actix_server() -> std::io::Result<()> {
-        HttpServer::new(|| {
-            App::new()
-        })
-        .bind("127.0.0.1:8080")? 
-        .run()                
-        .await
     }
 
     pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
@@ -191,25 +236,26 @@
         Ok(())
     }
 
-    struct OutstandingRequest {
-        id: u64,
-        payload: Vec<u8>,
-        executor_mode: Executor,
-        last_sent_to: String,
-        start_time: Instant
-    }
 
-    impl OutstandingRequest {
-        pub fn default() -> Self {
-            Self {
-                id: 0,
-                payload: Vec::new(),
-                last_sent_to: String::new(),
-                start_time: Instant::now(),
-                executor_mode: Executor::Any,
-            }
-        }
-    }
+    // struct OutstandingRequest {
+    //     id: u64,
+    //     payload: Vec<u8>,
+    //     executor_mode: Executor,
+    //     last_sent_to: String,
+    //     start_time: Instant
+    // }
+
+    // impl OutstandingRequest {
+    //     pub fn default() -> Self {
+    //         Self {
+    //             id: 0,
+    //             payload: Vec::new(),
+    //             last_sent_to: String::new(),
+    //             start_time: Instant::now(),
+    //             executor_mode: Executor::Any,
+    //         }
+    //     }
+    // }
 
     // async fn send_request(client: &PinnedClient, req: &mut OutstandingRequest, node_list: &Vec<String>, curr_leader_id: &mut usize, curr_round_robin_id: &mut usize) {
     //     let buf = &req.payload;
