@@ -10,8 +10,8 @@ use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
 use pft::consensus_v2::engines::{null_app::NullApp, kvs::KVSAppEngine};
 use std::io::Write;
 
-#[global_allocator]
-static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+// #[global_allocator]
+// static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 /// Fetch json config file from command line path.
 /// Panic if not found or parsed properly.
@@ -128,17 +128,16 @@ fn main() {
             let lcores = _cids.lock().unwrap();
             let id = (start_idx + i.fetch_add(1, std::sync::atomic::Ordering::SeqCst)) % lcores.len();
             let res = core_affinity::set_for_current(lcores[id]);
-            
+    
             if res {
                 debug!("Thread pinned to core {:?}", id);
             }else{
                 debug!("Thread pinning to core {:?} failed", id);
             }
-
             std::io::stdout().flush()
                 .unwrap();
         })
         .build()
         .unwrap();
-    let _ = runtime.block_on(test_run());
+    let _ = runtime.block_on(run_main(cfg));
 }
