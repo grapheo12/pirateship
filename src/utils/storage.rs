@@ -67,7 +67,7 @@ impl StorageEngine for RocksDBStorageEngine {
 
     fn put_block(&self, block_ser: &Vec<u8>, block_hash: &Vec<u8>) -> Result<(), Error> {
         let mut wopts = WriteOptions::default();
-        // wopts.disable_wal(true);
+        wopts.disable_wal(true);
         
         let res = // self.db.put(block_hash, block_ser);
             self.db.put_opt(block_hash, block_ser, &wopts);
