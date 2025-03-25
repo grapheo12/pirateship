@@ -592,7 +592,9 @@ impl Staging {
         self.pending_blocks.push_back(block_with_votes);
 
         // Now crash commit blindly
-        self.do_crash_commit(self.ci, ae_stats.ci).await;
+        if this_is_final_block {
+            self.do_crash_commit(self.ci, ae_stats.ci).await;
+        }
 
         let old_view_is_stable = self.view_is_stable;
         
@@ -615,8 +617,8 @@ impl Staging {
 
         #[cfg(feature = "no_qc")]
         {
-            if self.ci > 100 { // I don't know why just self.ci doesn't work.
-                               // But this seems to work somehow.
+            if this_is_final_block && self.ci > 100 { // I don't know why just self.ci doesn't work.
+                                                      // But this seems to work somehow.
                 self.do_byzantine_commit(self.bci, self.ci - 100).await;
             }   
         }

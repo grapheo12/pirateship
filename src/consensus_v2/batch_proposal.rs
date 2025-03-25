@@ -187,11 +187,10 @@ impl BatchProposer {
         if new_tx.is_some() {
             // Filter read-only transactions that do not need to go through consensus.
             // Forward them directly to execution.
-            let new_tx = self.filter_unlogged_request(new_tx.unwrap()).await;
+            new_tx = self.filter_unlogged_request(new_tx.unwrap()).await;
+        }
 
-            if new_tx.is_none() {
-                return Ok(());
-            }
+        if new_tx.is_some() {
 
             if !self.i_am_leader() {
                 self.reply_leader(new_tx.unwrap()).await;
