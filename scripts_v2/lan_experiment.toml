@@ -84,7 +84,7 @@ commit_index_gap_hard = 3
 [experiments.sweeping_parameters]
 # num_clients = [10, 20, 50, 100, 200, 250, 300, 350, 400]
 # num_clients = [100, 200, 400, 500, 700, 800]
-num_clients = [400]
+num_clients = [400, 1000]
 
 
 [[experiments]]
@@ -101,7 +101,7 @@ commit_index_gap_soft = 2
 commit_index_gap_hard = 3
 
 [experiments.sweeping_parameters]
-num_clients = [400]
+num_clients = [400, 1000]
 # num_clients = [100, 200, 300, 500, 700, 1000, 2000]
 
 # [[experiments]]
