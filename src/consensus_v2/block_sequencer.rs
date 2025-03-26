@@ -210,17 +210,25 @@ impl BlockSequencer {
 
         #[cfg(not(feature = "no_qc"))]
         {
-            // let config = &self.config.get().consensus_config;
-            // let hard_gap = config.commit_index_gap_hard;
-            // let soft_gap = config.commit_index_gap_soft;
+            // Is there a QC I can get?
+            if self.qc_rx.len() > 0 {
+                let mut qc_buf = Vec::new();
+                self.qc_rx.recv_many(&mut qc_buf, self.qc_rx.len()).await;
+                self.add_qcs(qc_buf).await;
+            }
 
-            // if !self.force_sign_next_batch && self.__blocks_proposed_in_this_view > soft_gap {
-            //     listen_for_new_batch = listen_for_new_batch
-            //     && (self.seq_num as i64 - self.__last_qc_n_seen as i64) < (hard_gap / 2) as i64;
-            //     // This is to prevent the locking happen when the leader is new.
 
-            //     blocked_for_qc_pass = true;
-            // }
+            let config = &self.config.get().consensus_config;
+            let hard_gap = config.commit_index_gap_hard;
+            let soft_gap = config.commit_index_gap_soft;
+
+            if !self.force_sign_next_batch && self.__blocks_proposed_in_this_view > soft_gap {
+                listen_for_new_batch = listen_for_new_batch
+                && (self.seq_num as i64 - self.__last_qc_n_seen as i64) < (hard_gap / 2) as i64;
+                // This is to prevent the locking happen when the leader is new.
+
+                blocked_for_qc_pass = true;
+            }
         }
 
         let mut qc_buf = Vec::new();

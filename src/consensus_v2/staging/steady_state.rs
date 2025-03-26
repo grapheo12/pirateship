@@ -304,9 +304,9 @@ impl Staging {
         let sz = data.len();
         let data = PinnedMessage::from(data, sz, SenderType::Anon);
 
-        PinnedClient::send(&self.client, &leader, data.as_ref())
-            .await
-            .unwrap();
+        let _ = PinnedClient::send(&self.client, &leader, data.as_ref())
+            .await;
+            // .unwrap();
 
         if last_block.block.block.view_is_stable {
             trace!("Sent vote to {} for {}", leader, last_block.block.block.n);

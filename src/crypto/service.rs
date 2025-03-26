@@ -314,6 +314,7 @@ impl CryptoService {
                                 match _sig {
                                     Ok(_sig) => {
                                         if !keystore.verify(&leader_for_view, &_sig, &partial_hsh) {
+                                            warn!("Invalid signature");
                                             block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid signature"))).unwrap();
                                             hash_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid signature")));
                                             
@@ -330,8 +331,10 @@ impl CryptoService {
 
                                 // Verify QCs
                                 let mut all_qcs_valid = true;
+                                warn!("QC len: {}", block.qc.len());
                                 for qc in &block.qc {
                                     if !verify_qc(&keystore, qc, min_qc_len) {
+                                        warn!("Invalid QC");
                                         all_qcs_valid = false;
                                         break;
                                     }
