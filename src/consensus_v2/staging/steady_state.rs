@@ -446,6 +446,7 @@ impl Staging {
             block,
             vote_sigs: HashMap::new(),
             replication_set: HashSet::new(),
+            qc_is_proposed: false,
         };
 
         self.pending_blocks.push_back(block_with_votes);
@@ -588,6 +589,7 @@ impl Staging {
             block,
             vote_sigs: HashMap::new(),
             replication_set: HashSet::new(),
+            qc_is_proposed: false,
         };
         self.pending_blocks.push_back(block_with_votes);
 
@@ -817,8 +819,12 @@ impl Staging {
     async fn maybe_create_qcs(&mut self) -> Result<(), ()> {
         let mut qcs = Vec::new();
 
-        for block in &self.pending_blocks {
-            if block.vote_sigs.len() >= self.byzantine_commit_threshold() {
+        let thresh = self.byzantine_commit_threshold();
+        for block in &mut self.pending_blocks {
+            if block.qc_is_proposed {
+                continue;
+            }
+            if block.vote_sigs.len() >= thresh {
                 let qc = ProtoQuorumCertificate {
                     n: block.block.block.n,
                     view: self.view,
@@ -833,6 +839,7 @@ impl Staging {
                     digest: block.block.block_hash.clone(),
                 };
                 qcs.push(qc);
+                block.qc_is_proposed = true;
 
             }
         }

@@ -15,7 +15,9 @@ struct CachedBlockWithVotes {
     block: CachedBlock,
     
     vote_sigs: HashMap<String, ProtoSignatureArrayEntry>,
-    replication_set: HashSet<String>
+    replication_set: HashSet<String>,
+
+    qc_is_proposed: bool,
 }
 
 pub type VoteWithSender = (SenderType /* Sender */, ProtoVote);
