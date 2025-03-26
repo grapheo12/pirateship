@@ -6,21 +6,18 @@
     use nix::libc::passwd;
     use prost::Message;
     use serde::Deserialize;
-    use sha2::digest::typenum::Integer;
-    use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::Mutex;
     use std::time::Instant;
 
 
-    use pft::client::workload_generators::Executor;
     use pft::config::Config;
     use pft::crypto::{KeyStore, hash};
-    use pft::proto::checkpoint::{ProtoBackFillRequest, ProtoBackFillResponse};
     use pft::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase};
     use pft::rpc::client::Client;
     use pft::rpc::{MessageRef, PinnedMessage};
     use pft::{config::ClientConfig, proto::{client::{self, ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::channel::{make_channel, Receiver, Sender}};
+    use crate::payloads::{RegisterPayload};
 
     #[derive(Clone)]
     struct AppState {
@@ -30,20 +27,9 @@
         curr_round_robin_id: Arc<Mutex<usize>>
     }
 
-    // GET /auth
-    // POST /refresh
-    // GET /pubkey
-    // GET /listpubkeys
-    // GET/PrivKey
-
-    #[derive(Deserialize)]
-    struct RegisterPayload {
-        username: String,
-        password: String,
-    }
 
     #[get ("/register")]
-    async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState> ) -> impl Responder {
+    async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
         let username = payload.username.clone();
         let password = payload.password.clone();
         let client = &data.client;
@@ -86,6 +72,7 @@
             Ok(response) => response,
             Err(e) => return e
         }; //add client tag
+        //check if payload is submitted correct
 
         HttpResponse::Ok().json(serde_json::json!({
             "message": "user created",
@@ -93,10 +80,59 @@
         }))
     }
 
-    // #[get ("/auth")]
-    // async fn auth(username, password) -> impl Responder {
+    #[get ("/auth")]
+    async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
+        let username = payload.username.clone();
+        let password = payload.password.clone();
+        let client = &data.client;
 
-    // }
+        let transaction_op = ProtoTransactionOp {
+            op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+            operands: vec![username.clone().into_bytes()],
+        };
+
+        let decoded_payload = match send(transaction_op, 0, client).await {
+            Ok(response) => response,
+            Err(e) => return e
+        }; //add client tag
+
+        let mut result = Vec::new();
+        match decoded_payload.reply.unwrap() {
+            pft::proto::client::proto_client_reply::Reply::Receipt(receipt) => {
+                if let Some(tx_result) = receipt.results {
+                    if tx_result.result.is_empty()  {
+                        return HttpResponse::Ok().json(serde_json::json!({
+                            "message": "username does not exist",
+                            "result": result,
+                        }))
+                    }
+                    for op_result in tx_result.result {
+                        for value in op_result.values {
+                            result.push(value)
+                        }
+                    }
+                }
+            },
+            _ => {
+                return HttpResponse::Ok().json(serde_json::json!({
+                    "message": "error, no Receipt found",
+                    "result": result,
+                }))
+            },
+        }
+            
+        //check hash(password) matches
+        if hash(&password.clone().into_bytes()) == result[0] {
+            return HttpResponse::Ok().json(serde_json::json!({
+                "message": "correct username and password",
+                "user": username,
+            }))
+        }
+        HttpResponse::Ok().json(serde_json::json!({
+            "message": "incorrect password",
+            "user": username,
+        }))
+    }
 
     // #[get("/pubkey")]
     // #[get("/listpubkeys")]
@@ -215,6 +251,7 @@
             .service(set_key)
             .service(get_key)
             .service(register)
+            .service(auth)
             .service(home)
         })
         .bind("127.0.0.1:8080")? 
@@ -273,6 +310,10 @@
         };
         Ok(decoded_payload)
     }
+
+    // def authenticate_user(username, password) {
+
+    // }
 
     // struct OutstandingRequest {
     //     id: u64,
