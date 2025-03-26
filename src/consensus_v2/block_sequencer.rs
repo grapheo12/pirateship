@@ -251,7 +251,14 @@ impl BlockSequencer {
                 biased;
                 _ = self.qc_rx.recv_many(&mut qc_buf, chan_depth) => {
                     self.add_qcs(qc_buf).await;
-                }
+                },
+                _tick = self.signature_timer.wait() => {
+                    self.force_sign_next_batch = true;
+
+                    // Force a new block.
+                    self.handle_new_batch(RawBatch::new(), vec![], vec![], self.seq_num + 1).await;
+
+                },
                 _cmd = self.control_command_rx.recv() => {
                     self.handle_control_command(_cmd).await;
                 }
