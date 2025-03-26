@@ -18,8 +18,8 @@ recv_buffer_size = 32768
 channel_depth = 1000
 
 [node_config.consensus_config]
-commit_index_gap_soft = 500
-commit_index_gap_hard = 1000
+commit_index_gap_soft = 250
+commit_index_gap_hard = 500
 liveness_u = 2
 max_backlog_batch_size = 1000
 signature_max_delay_blocks = 50
@@ -51,20 +51,20 @@ client_max_retry = 10
 
 [client_config.workload_config]
 request_config = "Blanks"
-max_concurrent_requests = 1000
+max_concurrent_requests = 16
 
-# [[experiments]]
-# name = "pirateship"
-# repeats = 1
-# num_nodes = 7
-# node_distribution = "uniform"
-# build_command = "make"
-# duration = 60
+[[experiments]]
+name = "pirateship"
+repeats = 1
+num_nodes = 7
+node_distribution = "uniform"
+build_command = "make"
+duration = 60
 
-# [experiments.sweeping_parameters]
-# # num_clients = [10, 20, 50, 100, 200, 250, 300, 350, 400]
-# # num_clients = [100, 200, 400, 500, 700, 800]
-# num_clients = [400]
+[experiments.sweeping_parameters]
+# num_clients = [10, 20, 50, 100, 200, 250, 300, 350, 400]
+# num_clients = [100, 200, 400, 500, 700, 800]
+num_clients = [400]
 
 [[experiments]]
 name = "pirateship_sig_1"
@@ -76,9 +76,6 @@ duration = 60
 
 [experiments.node_config.consensus_config]
 signature_max_delay_blocks = 1
-signature_max_delay_ms = 10 # roughly batch_max_delay_ms * signature_max_delay_blocks
-# commit_index_gap_soft = 10
-# commit_index_gap_hard = 30
 
 [experiments.sweeping_parameters]
 # num_clients = [10, 20, 50, 100, 200, 250, 300, 350, 400]
@@ -94,25 +91,20 @@ node_distribution = "uniform"
 build_command = "make chained_pbft_logger"
 duration = 60
 
-[experiments.node_config.consensus_config]
-signature_max_delay_ms = 10 # roughly batch_max_delay_ms * signature_max_delay_blocks
-# commit_index_gap_soft = 10
-# commit_index_gap_hard = 30
-
 [experiments.sweeping_parameters]
 num_clients = [400]
 # num_clients = [100, 200, 300, 500, 700, 1000, 2000]
 
-# [[experiments]]
-# name = "signed_raft"
-# repeats = 1
-# num_nodes = 5
-# node_distribution = "uniform"
-# build_command = "make signed_raft_logger"
-# duration = 60
+[[experiments]]
+name = "signed_raft"
+repeats = 1
+num_nodes = 5
+node_distribution = "uniform"
+build_command = "make signed_raft_logger"
+duration = 60
 
-# [experiments.sweeping_parameters]
-# num_clients = [400]
+[experiments.sweeping_parameters]
+num_clients = [400]
 
 
 
@@ -128,10 +120,10 @@ force_parse = true
 
 [results.legends]
 # Experiment group to legend mapping
-# pirateship = "pirateship+byz"
+pirateship = "pirateship+byz"
 pirateship_sig_1 = "pirateship(sig=1)+byz"
 pbft = "pbft+onlybyz"
-# signed_raft = "signed_raft"
+signed_raft = "signed_raft"
 
 [results.font]
 size = 55
