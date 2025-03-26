@@ -206,6 +206,7 @@ impl BlockSequencer {
         // This limits the depth of pipeline (ie, max number of inflight blocks).
 
         let mut listen_for_new_batch = self.view_is_stable && self.i_am_leader();
+        let mut blocked_for_qc_pass = false;
 
         #[cfg(not(feature = "no_qc"))]
         {
@@ -217,6 +218,8 @@ impl BlockSequencer {
                 listen_for_new_batch = listen_for_new_batch
                 && (self.seq_num as i64 - self.__last_qc_n_seen as i64) < (hard_gap / 2) as i64;
                 // This is to prevent the locking happen when the leader is new.
+
+                blocked_for_qc_pass = true;
             }
         }
 
@@ -242,6 +245,19 @@ impl BlockSequencer {
                 _cmd = self.control_command_rx.recv() => {
                     self.handle_control_command(_cmd).await;
                 },
+            }
+        } else if blocked_for_qc_pass {
+            tokio::select! {
+                biased;
+                _ = self.qc_rx.recv_many(&mut qc_buf, chan_depth) => {
+                    self.add_qcs(qc_buf).await;
+                }
+                _cmd = self.control_command_rx.recv() => {
+                    self.handle_control_command(_cmd).await;
+                }
+
+                // I am not listening to new batch because I am blocked for a new QC.
+                // There is no need to cancel requests here.
             }
         } else {
             tokio::select! {
