@@ -447,6 +447,7 @@ impl Staging {
             vote_sigs: HashMap::new(),
             replication_set: HashSet::new(),
             qc_is_proposed: false,
+            fast_qc_is_proposed: false,
         };
 
         self.pending_blocks.push_back(block_with_votes);
@@ -590,6 +591,7 @@ impl Staging {
             vote_sigs: HashMap::new(),
             replication_set: HashSet::new(),
             qc_is_proposed: false,
+            fast_qc_is_proposed: false,
         };
         self.pending_blocks.push_back(block_with_votes);
 
@@ -820,10 +822,25 @@ impl Staging {
         let mut qcs = Vec::new();
 
         let thresh = self.byzantine_commit_threshold();
+        let fast_thresh = self.byzantine_fast_path_threshold();
         for block in &mut self.pending_blocks {
-            if block.qc_is_proposed {
+            if block.qc_is_proposed && block.fast_qc_is_proposed {
                 continue;
             }
+
+            // We only want to propose a QC at max twice.
+            // Once when the slow path threshold is reached.
+            // Once when the fast path threshold is reached.
+            // If we already have proposed a slow path QC,
+            // there is no need to propose another until we can safely do the fast path.
+            
+            let thresh = if block.qc_is_proposed {
+                fast_thresh
+            } else {
+                thresh
+            };
+
+
             if block.vote_sigs.len() >= thresh {
                 let qc = ProtoQuorumCertificate {
                     n: block.block.block.n,
@@ -840,6 +857,10 @@ impl Staging {
                 };
                 qcs.push(qc);
                 block.qc_is_proposed = true;
+
+                if block.vote_sigs.len() >= fast_thresh {
+                    block.fast_qc_is_proposed = true;
+                }
 
             }
         }

@@ -18,6 +18,7 @@ struct CachedBlockWithVotes {
     replication_set: HashSet<String>,
 
     qc_is_proposed: bool,
+    fast_qc_is_proposed: bool,
 }
 
 pub type VoteWithSender = (SenderType /* Sender */, ProtoVote);
