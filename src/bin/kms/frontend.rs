@@ -40,28 +40,16 @@
             operands: vec![username.clone().into_bytes()],
         };
 
-        let decoded_payload = match send(transaction_op, 0, client).await {
+        let result = match send(transaction_op, 0, client).await {
             Ok(response) => response,
             Err(e) => return e
         }; //add client tag
 
-        match decoded_payload.reply.unwrap() {
-            pft::proto::client::proto_client_reply::Reply::Receipt(receipt) => {
-                if let Some(tx_result) = receipt.results {
-                    if !tx_result.result.is_empty()  {
-                        return HttpResponse::Ok().json(serde_json::json!({
-                            "message": "username already exists",
-                        }))
-                    }
-                }
-            },
-            _ => {
-                return HttpResponse::Ok().json(serde_json::json!({
-                    "message": "error, no Receipt found",
-                }))
-            },
-        };
-
+       if !result.is_empty() {
+        return HttpResponse::Ok().json(serde_json::json!({
+            "message": "username already exists",
+        }))
+       }
         //assume at this point username does not exist --> create new username and password
         let transaction_op = ProtoTransactionOp {
             op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
@@ -91,35 +79,17 @@
             operands: vec![username.clone().into_bytes()],
         };
 
-        let decoded_payload = match send(transaction_op, 0, client).await {
+        let result = match send(transaction_op, 0, client).await {
             Ok(response) => response,
             Err(e) => return e
         }; //add client tag
 
-        let mut result = Vec::new();
-        match decoded_payload.reply.unwrap() {
-            pft::proto::client::proto_client_reply::Reply::Receipt(receipt) => {
-                if let Some(tx_result) = receipt.results {
-                    if tx_result.result.is_empty()  {
-                        return HttpResponse::Ok().json(serde_json::json!({
-                            "message": "username does not exist",
-                            "result": result,
-                        }))
-                    }
-                    for op_result in tx_result.result {
-                        for value in op_result.values {
-                            result.push(value)
-                        }
-                    }
-                }
-            },
-            _ => {
-                return HttpResponse::Ok().json(serde_json::json!({
-                    "message": "error, no Receipt found",
-                    "result": result,
-                }))
-            },
-        }
+        if result.is_empty() {
+            return return HttpResponse::Ok().json(serde_json::json!({
+                "message": "username does not exist",
+                "user": username,
+            }))
+        };
             
         //check hash(password) matches
         if hash(&password.clone().into_bytes()) == result[0] {
@@ -138,86 +108,86 @@
     // #[get("/listpubkeys")]
     // #[get("/privkey")]
 
-    #[put("/set/{key}")]
-    async fn set_key(key: web::Path<String>, value: web::Json<String>, data: web::Data<AppState>) -> impl Responder {
-        let key_str = key.into_inner();
-        let value_str = value.into_inner();
-        let client = &data.client;
+    // #[put("/set/{key}")]
+    // async fn set_key(key: web::Path<String>, value: web::Json<String>, data: web::Data<AppState>) -> impl Responder {
+    //     let key_str = key.into_inner();
+    //     let value_str = value.into_inner();
+    //     let client = &data.client;
 
-        let transaction_op = ProtoTransactionOp {
-            op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-            operands: vec![key_str.clone().into_bytes(), value_str.clone().into_bytes()],
-        };
+    //     let transaction_op = ProtoTransactionOp {
+    //         op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
+    //         operands: vec![key_str.clone().into_bytes(), value_str.clone().into_bytes()],
+    //     };
 
-        let decoded_payload = match send(transaction_op, 0, client).await {
-            Ok(response) => response,
-            Err(e) => return e
-        }; //add client tag
+    //     let decoded_payload = match send(transaction_op, 0, client).await {
+    //         Ok(response) => response,
+    //         Err(e) => return e
+    //     }; //add client tag
         
-        HttpResponse::Ok().json(serde_json::json!({
-            "message": "Key set successfully",
-            "key": key_str,
-            "value": value_str,
-            "node list": data.node_list,
-            "payload": decoded_payload
-        }))
+    //     HttpResponse::Ok().json(serde_json::json!({
+    //         "message": "Key set successfully",
+    //         "key": key_str,
+    //         "value": value_str,
+    //         "node list": data.node_list,
+    //         "payload": decoded_payload
+    //     }))
 
-    }
+    // }
 
-    #[get("/get/{key}")]
-    async fn get_key(key: web::Path<String>,  data: web::Data<AppState>) -> impl Responder {
-        let key_str = key.into_inner();
-        let client = &data.client;
+    // #[get("/get/{key}")]
+    // async fn get_key(key: web::Path<String>,  data: web::Data<AppState>) -> impl Responder {
+    //     let key_str = key.into_inner();
+    //     let client = &data.client;
 
-        let transaction_op = ProtoTransactionOp {
-            op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
-            operands: vec![key_str.clone().into_bytes()],
-        };
+    //     let transaction_op = ProtoTransactionOp {
+    //         op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+    //         operands: vec![key_str.clone().into_bytes()],
+    //     };
 
-        let decoded_payload = match send(transaction_op, 0, client).await {
-            Ok(response) => response,
-            Err(e) => return e
-        }; //add client tag
+    //     let decoded_payload = match send(transaction_op, 0, client).await {
+    //         Ok(response) => response,
+    //         Err(e) => return e
+    //     }; //add client tag
 
-        let mut result = Vec::new();
-        match decoded_payload.reply.unwrap() {
-            pft::proto::client::proto_client_reply::Reply::Receipt(receipt) => {
-                if let Some(tx_result) = receipt.results {
-                    if tx_result.result.is_empty()  {
-                        return HttpResponse::Ok().json(serde_json::json!({
-                            "message": "key could not be found",
-                            "result": result,
-                        }))
-                    }
-                    for op_result in tx_result.result {
-                        for value in op_result.values {
-                            match String::from_utf8(value) {
-                                Ok(string) => result.push(string),
-                                Err(e) => return HttpResponse::Ok().json(serde_json::json!({
-                                    "message": "error: could not convert bytes to string",
-                                    "result": result,
-                                }))
-                            }
-                        }
-                    }
-                }
-            },
-            _ => {
-                return HttpResponse::Ok().json(serde_json::json!({
-                    "message": "error, no Receipt found",
-                    "result": result,
-                }))
-            },
-        };
+    //     let mut result = Vec::new();
+    //     match decoded_payload.reply.unwrap() {
+    //         pft::proto::client::proto_client_reply::Reply::Receipt(receipt) => {
+    //             if let Some(tx_result) = receipt.results {
+    //                 if tx_result.result.is_empty()  {
+    //                     return HttpResponse::Ok().json(serde_json::json!({
+    //                         "message": "key could not be found",
+    //                         "result": result,
+    //                     }))
+    //                 }
+    //                 for op_result in tx_result.result {
+    //                     for value in op_result.values {
+    //                         match String::from_utf8(value) {
+    //                             Ok(string) => result.push(string),
+    //                             Err(e) => return HttpResponse::Ok().json(serde_json::json!({
+    //                                 "message": "error: could not convert bytes to string",
+    //                                 "result": result,
+    //                             }))
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //         },
+    //         _ => {
+    //             return HttpResponse::Ok().json(serde_json::json!({
+    //                 "message": "error, no Receipt found",
+    //                 "result": result,
+    //             }))
+    //         },
+    //     };
 
 
 
-        HttpResponse::Ok().json(serde_json::json!({
-            "message": "Value found successfully",
-            "key": key_str,
-            "result": result,
-        }))
-    }
+    //     HttpResponse::Ok().json(serde_json::json!({
+    //         "message": "Value found successfully",
+    //         "key": key_str,
+    //         "result": result,
+    //     }))
+    // }
 
     #[get("/")]
     async fn home(data: web::Data<AppState>) -> impl Responder {
@@ -248,8 +218,8 @@
                     curr_round_robin_id: curr_round_robin_id.clone()
                 }
             ))
-            .service(set_key)
-            .service(get_key)
+            // .service(set_key)
+            // .service(get_key)
             .service(register)
             .service(auth)
             .service(home)
@@ -260,7 +230,7 @@
         Ok(())
     }
 
-    async fn send(transaction_op: ProtoTransactionOp, client_tag: u64, client:&Arc<PinnedClient>) -> Result<ProtoClientReply, HttpResponse> {
+    async fn send(transaction_op: ProtoTransactionOp, client_tag: u64, client:&Arc<PinnedClient>) -> Result<Vec<Vec<u8>>, HttpResponse> {
         let transaction_phase = ProtoTransactionPhase {
             ops: vec![transaction_op.clone()],
         };
@@ -300,7 +270,7 @@
         };
 
         let resp = resp.as_ref();
-
+        let mut result: Vec<Vec<u8>> = Vec::new();
         let decoded_payload  = match ProtoClientReply::decode(&resp.0.as_slice()[0..resp.1]) {
             Ok(payload) => payload,
             Err(e) => {
@@ -308,78 +278,36 @@
                 return Err(HttpResponse::InternalServerError().body("Error decoding response"));
             }
         };
-        Ok(decoded_payload)
+
+        match decoded_payload.reply.unwrap() {
+            pft::proto::client::proto_client_reply::Reply::Receipt(receipt) => {
+                if let Some(tx_result) = receipt.results {
+                    if tx_result.result.is_empty()  {
+                        return Ok(result);
+                    }
+                    for op_result in tx_result.result {
+                        for value in op_result.values {
+                            result.push(value);
+                        }
+                    }
+                }
+            },
+            _ => {
+                return Err(HttpResponse::Ok().json(serde_json::json!({
+                    "message": "error, no Receipt found",
+                    "result": result,
+                })))
+            },
+        };
+        Ok(result)
     }
 
-    // def authenticate_user(username, password) {
-
-    // }
-
-    // struct OutstandingRequest {
-    //     id: u64,
-    //     payload: Vec<u8>,
-    //     executor_mode: Executor,
-    //     last_sent_to: String,
-    //     start_time: Instant
-    // }
-
-    // impl OutstandingRequest {
-    //     pub fn default() -> Self {
-    //         Self {
-    //             id: 0,
-    //             payload: Vec::new(),
-    //             last_sent_to: String::new(),
-    //             start_time: Instant::now(),
-    //             executor_mode: Executor::Any,
-    //         }
-    //     }
-    // }
-
-    // async fn send_request(client: &PinnedClient, req: &mut OutstandingRequest, node_list: &Vec<String>, curr_leader_id: &mut usize, curr_round_robin_id: &mut usize) {
-    //     let buf = &req.payload;
-    //     let sz = buf.len();
-    //     loop {
-    //         let res = match req.executor_mode {
-    //             Executor::Leader => {
-    //                 let curr_leader = &node_list[*curr_leader_id];
-    //                 req.last_sent_to = curr_leader.clone();
-
-                    
-    //                 PinnedClient::send(
-    //                     client,
-    //                     &curr_leader,
-    //                     MessageRef(buf, sz, &crate::rpc::SenderType::Anon),
-    //                 ).await
-    //             },
-    //             Executor::Any => {
-    //                 let recv_node = &node_list[(*curr_round_robin_id) % node_list.len()];
-    //                 *curr_round_robin_id = *curr_round_robin_id + 1;
-    //                 req.last_sent_to = recv_node.clone();
-
-    //                 PinnedClient::send(
-    //                     client,
-    //                     recv_node,
-    //                     MessageRef(&buf, buf.len(), &crate::rpc::SenderType::Anon),
-    //                 ).await
-    //             },
-    //         };
-
-    //         if res.is_err() {
-    //             debug!("Error: {:?}", res);
-    //             *curr_leader_id = (*curr_leader_id + 1) % node_list.len();
-    //             // outstanding_requests.clear(); // Clear it out because I am not going to listen on that socket again
-    //             // info!("Retrying with leader {} Backoff: {} ms: Error: {:?}", curr_leader, current_backoff_ms, res);
-    //             // backoff!(*current_backoff_ms);
-    //             continue;
-    //         }
-    //         break;
-    //     }
-    // }
     // Tests
     /*
     curl -X GET "http://localhost:8080/"
 
     curl -X GET "http://localhost:8080/register" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"min"}'
+    curl -X GET "http://localhost:8080/auth" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"min"}'
 
     curl -X GET "http://localhost:8080/get/username"
 
