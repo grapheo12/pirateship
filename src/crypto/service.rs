@@ -331,7 +331,7 @@ impl CryptoService {
 
                                 // Verify QCs
                                 let mut all_qcs_valid = true;
-                                warn!("QC len: {}", block.qc.len());
+                                trace!("QC len: {}", block.qc.len());
                                 for qc in &block.qc {
                                     if !verify_qc(&keystore, qc, min_qc_len) {
                                         warn!("Invalid QC");
