@@ -5,6 +5,7 @@
     use log::{debug, warn};
     use nix::libc::passwd;
     use prost::Message;
+    use serde::Deserialize;
     use sha2::digest::typenum::Integer;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -14,7 +15,7 @@
 
     use pft::client::workload_generators::Executor;
     use pft::config::Config;
-    use pft::crypto::KeyStore;
+    use pft::crypto::{KeyStore, hash};
     use pft::proto::checkpoint::{ProtoBackFillRequest, ProtoBackFillResponse};
     use pft::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase};
     use pft::rpc::client::Client;
@@ -34,16 +35,63 @@
     // GET /pubkey
     // GET /listpubkeys
     // GET/PrivKey
-    // #[get ("/register")]
-    // async fn register(username: web::Json<String> , password: web::Json<String>, data: web::Data<AppState> ) -> impl Responder {
-    //     let username = username.into_inner();
-    //     let password = password.into_inner();
 
+    #[derive(Deserialize)]
+    struct RegisterPayload {
+        username: String,
+        password: String,
+    }
 
-    //     HttpResponse::Ok().json(serde_json::json!({
-    //         "message": "Key set successfully"
-    //     }))
-    // }
+    #[get ("/register")]
+    async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState> ) -> impl Responder {
+        let username = payload.username.clone();
+        let password = payload.password.clone();
+        let client = &data.client;
+
+        //query kms for username
+        let transaction_op = ProtoTransactionOp {
+            op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+            operands: vec![username.clone().into_bytes()],
+        };
+
+        let decoded_payload = match send(transaction_op, 0, client).await {
+            Ok(response) => response,
+            Err(e) => return e
+        }; //add client tag
+
+        match decoded_payload.reply.unwrap() {
+            pft::proto::client::proto_client_reply::Reply::Receipt(receipt) => {
+                if let Some(tx_result) = receipt.results {
+                    if !tx_result.result.is_empty()  {
+                        return HttpResponse::Ok().json(serde_json::json!({
+                            "message": "username already exists",
+                        }))
+                    }
+                }
+            },
+            _ => {
+                return HttpResponse::Ok().json(serde_json::json!({
+                    "message": "error, no Receipt found",
+                }))
+            },
+        };
+
+        //assume at this point username does not exist --> create new username and password
+        let transaction_op = ProtoTransactionOp {
+            op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
+            operands: vec![username.clone().into_bytes(), hash(&password.clone().into_bytes())],
+        };
+
+        let decoded_payload = match send(transaction_op, 0, client).await {
+            Ok(response) => response,
+            Err(e) => return e
+        }; //add client tag
+
+        HttpResponse::Ok().json(serde_json::json!({
+            "message": "user created",
+            "user": username,
+        }))
+    }
 
     // #[get ("/auth")]
     // async fn auth(username, password) -> impl Responder {
@@ -65,54 +113,7 @@
             operands: vec![key_str.clone().into_bytes(), value_str.clone().into_bytes()],
         };
 
-        // let transaction_phase = ProtoTransactionPhase {
-        //     ops: vec![transaction_op.clone()],
-        // };
-
-        // let transaction = ProtoTransaction {
-        //     on_receive:None,
-        //     on_crash_commit: Some(transaction_phase.clone()),
-        //     on_byzantine_commit: None,
-        //     is_reconfiguration: false,
-        // };
-
-        // let rpc_msg_body = ProtoPayload {
-        //     message: Some(pft::proto::rpc::proto_payload::Message::ClientRequest(ProtoClientRequest {
-        //         tx: Some(transaction),
-        //         origin: "name".to_string(), //temp
-        //         sig: vec![0u8; 1],
-        //         client_tag: (0 + 1) as u64, //temp
-        //     })),
-        // };
-        
-        // let mut buf = Vec::new();
-        // let sz = buf.len();
-
-        // if let Err(e) = rpc_msg_body.encode(&mut buf) {
-        //     warn!("Error encoding request: {}", e);
-        // }
-
-        // let sz = buf.len();
-        // let request = PinnedMessage::from(buf, sz, pft::rpc::SenderType::Anon);
-
-        // let resp = match PinnedClient::send_and_await_reply(client, &"node1".to_string(), request.as_ref()).await {
-        //     Ok(resp) => resp,
-        //     Err(e) => {
-        //         warn!("Error sending request: {}", e);
-        //         return HttpResponse::InternalServerError().body(format!("Error sending request: {}", e));
-        //     }
-        // };
-
-        // let resp = resp.as_ref();
-
-        // let decoded_payload  = match ProtoClientReply::decode(&resp.0.as_slice()[0..resp.1]) {
-        //     Ok(payload) => payload,
-        //     Err(e) => {
-        //         warn!("Error decoding response: {}", e);
-        //         return HttpResponse::InternalServerError().body("Error decoding response");
-        //     }
-        // };
-        let reply = match send(transaction_op, 0, client).await {
+        let decoded_payload = match send(transaction_op, 0, client).await {
             Ok(response) => response,
             Err(e) => return e
         }; //add client tag
@@ -122,7 +123,7 @@
             "key": key_str,
             "value": value_str,
             "node list": data.node_list,
-            "payload": reply
+            "payload": decoded_payload
         }))
 
     }
@@ -132,64 +133,26 @@
         let key_str = key.into_inner();
         let client = &data.client;
 
-
         let transaction_op = ProtoTransactionOp {
             op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
             operands: vec![key_str.clone().into_bytes()],
         };
 
-        let transaction_phase = ProtoTransactionPhase {
-            ops: vec![transaction_op.clone()],
-        };
-
-        let transaction = ProtoTransaction {
-            on_receive:None,
-            on_crash_commit: Some(transaction_phase.clone()),
-            on_byzantine_commit: None,
-            is_reconfiguration: false,
-        };
-
-        let rpc_msg_body = ProtoPayload {
-            message: Some(pft::proto::rpc::proto_payload::Message::ClientRequest(ProtoClientRequest {
-                tx: Some(transaction),
-                origin: "name".to_string(), //change? doesn't really matter
-                sig: vec![0u8; 1],
-                client_tag: (0 + 1) as u64, //change to counter
-            })),
-        };
-
-        let mut buf = Vec::new();
-        let sz = buf.len();
-
-        if let Err(e) = rpc_msg_body.encode(&mut buf) {
-            warn!("Error encoding request: {}", e);
-        }
-
-        let sz = buf.len();
-        let request = PinnedMessage::from(buf, sz, pft::rpc::SenderType::Anon);
-
-        let resp = match PinnedClient::send_and_await_reply(client, &"node1".to_string(), request.as_ref()).await {
-            Ok(resp) => resp,
-            Err(e) => {
-                warn!("Error sending request: {}", e);
-                return HttpResponse::InternalServerError().body(format!("Error sending request: {}", e));
-            }
-        };
-
-        let resp = resp.as_ref();
-
-        let decoded_payload  = match ProtoClientReply::decode(&resp.0.as_slice()[0..resp.1]) {
-            Ok(payload) => payload,
-            Err(e) => {
-                warn!("Error decoding response: {}", e);
-                return HttpResponse::InternalServerError().body("Error decoding response");
-            }
-        };
+        let decoded_payload = match send(transaction_op, 0, client).await {
+            Ok(response) => response,
+            Err(e) => return e
+        }; //add client tag
 
         let mut result = Vec::new();
         match decoded_payload.reply.unwrap() {
             pft::proto::client::proto_client_reply::Reply::Receipt(receipt) => {
                 if let Some(tx_result) = receipt.results {
+                    if tx_result.result.is_empty()  {
+                        return HttpResponse::Ok().json(serde_json::json!({
+                            "message": "key could not be found",
+                            "result": result,
+                        }))
+                    }
                     for op_result in tx_result.result {
                         for value in op_result.values {
                             match String::from_utf8(value) {
@@ -201,8 +164,6 @@
                             }
                         }
                     }
-                } else {
-                    println!("No transaction results found in the receipt.");
                 }
             },
             _ => {
@@ -253,6 +214,7 @@
             ))
             .service(set_key)
             .service(get_key)
+            .service(register)
             .service(home)
         })
         .bind("127.0.0.1:8080")? 
@@ -375,6 +337,8 @@
     // Tests
     /*
     curl -X GET "http://localhost:8080/"
+
+    curl -X GET "http://localhost:8080/register" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"min"}'
 
     curl -X GET "http://localhost:8080/get/username"
 
