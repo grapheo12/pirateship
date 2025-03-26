@@ -67,28 +67,42 @@ duration = 60
 # num_clients = [100, 200, 400, 500, 700, 800]
 num_clients = [400]
 
+[[experiments]]
+name = "pirateship_sig_1"
+repeats = 1
+num_nodes = 7
+node_distribution = "uniform"
+build_command = "make"
+duration = 60
 
-# [[experiments]]
-# name = "pbft"
-# repeats = 3
-# num_nodes = 7
-# node_distribution = "uniform"
-# build_command = "make chained_pbft_logger"
-# duration = 120
+[experiments.sweeping_parameters]
+# num_clients = [10, 20, 50, 100, 200, 250, 300, 350, 400]
+# num_clients = [100, 200, 400, 500, 700, 800]
+num_clients = [400]
 
-# [experiments.sweeping_parameters]
+
+[[experiments]]
+name = "pbft"
+repeats = 1
+num_nodes = 7
+node_distribution = "uniform"
+build_command = "make chained_pbft_logger"
+duration = 60
+
+[experiments.sweeping_parameters]
+num_clients = [400]
 # num_clients = [100, 200, 300, 500, 700, 1000, 2000]
 
-# [[experiments]]
-# name = "signed_raft"
-# repeats = 3
-# num_nodes = 5
-# node_distribution = "uniform"
-# build_command = "make signed_raft_logger"
-# duration = 120
+[[experiments]]
+name = "signed_raft"
+repeats = 1
+num_nodes = 5
+node_distribution = "uniform"
+build_command = "make signed_raft_logger"
+duration = 60
 
-# [experiments.sweeping_parameters]
-# num_clients = [100, 200, 300, 500, 700, 1000, 2000]
+[experiments.sweeping_parameters]
+num_clients = [400]
 
 
 
@@ -96,8 +110,8 @@ num_clients = [400]
 [[results]]
 name = "tput_latency_client_sweep"
 plotter = "tput_latency_sweep"
-ramp_up = 10
-ramp_down = 10
+ramp_up = 15
+ramp_down = 15
 output = "lan_experiment.pdf"
 force_parse = true
 # skip_indices = [0, 1, 2, 3]
@@ -105,8 +119,9 @@ force_parse = true
 [results.legends]
 # Experiment group to legend mapping
 pirateship = "pirateship+byz"
-# pbft = "pbft+onlybyz"
-# signed_raft = "signed_raft"
+pirateship_sig_1 = "pirateship(sig=1)+byz"
+pbft = "pbft+onlybyz"
+signed_raft = "signed_raft"
 
 [results.font]
 size = 55

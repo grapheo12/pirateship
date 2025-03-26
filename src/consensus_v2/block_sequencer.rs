@@ -284,7 +284,7 @@ impl BlockSequencer {
 
         #[cfg(feature = "dynamic_sign")]
         let must_sign = self.force_sign_next_batch
-            || (n - self.last_signed_seq_num) > config.consensus_config.signature_max_delay_blocks
+            || (n - self.last_signed_seq_num) >= config.consensus_config.signature_max_delay_blocks
             || (self.i_am_leader() && !self.view_is_stable); // Always sign the NewView message.
 
         #[cfg(feature = "never_sign")]
