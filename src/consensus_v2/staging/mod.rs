@@ -1,11 +1,12 @@
 use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, io::Error, pin::Pin, sync::Arc, time::Duration};
 
+use futures::{future::BoxFuture, stream::FuturesOrdered};
 use log::{debug, info, trace, warn};
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
 use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoVote}, rpc::{client::PinnedClient, SenderType}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer, PerfCounter, StorageAck}};
 
-use super::{app::AppCommand, batch_proposal::BatchProposerCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, extra_2pc::TwoPCCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}, logserver::{self, LogServerCommand}, pacemaker::PacemakerCommand};
+use super::{app::AppCommand, batch_proposal::BatchProposerCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, extra_2pc::{EngraftTwoPCFuture, TwoPCCommand}, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}, logserver::{self, LogServerCommand}, pacemaker::PacemakerCommand};
 
 pub(super) mod steady_state;
 pub(super) mod view_change;
@@ -74,6 +75,9 @@ pub struct Staging {
 
     #[cfg(feature = "extra_2pc")]
     two_pc_command_tx: Sender<TwoPCCommand>,
+
+    #[cfg(feature = "extra_2pc")]
+    pending_2pc_results: VecDeque<EngraftTwoPCFuture>,
 }
 
 impl Staging {
@@ -157,6 +161,9 @@ impl Staging {
 
             #[cfg(feature = "extra_2pc")]
             two_pc_command_tx,
+
+            #[cfg(feature = "extra_2pc")]
+            pending_2pc_results: VecDeque::new(),
         };
 
         #[cfg(not(feature = "view_change"))]
@@ -231,6 +238,34 @@ impl Staging {
                 }
                 let cmd = cmd.unwrap();
                 self.process_view_change_message(cmd).await?;
+            }
+        }
+
+        #[cfg(feature = "extra_2pc")]
+        {
+            // See if any of the 2pc results are ready.
+            // If yes, we consider them Byz committed.
+
+            let mut new_bci = self.bci;
+            while let Some(res) = self.pending_2pc_results.front_mut() {
+                if !res.is_ready() {
+                    break;
+                }
+
+                let block_n = res.block_n;
+                if block_n > new_bci {
+                    new_bci = block_n;
+                }
+
+                self.pending_2pc_results.pop_front();
+            }
+
+            if new_bci > self.ci {
+                new_bci = self.ci;
+            }
+
+            if new_bci > self.bci {
+                self.do_byzantine_commit(self.bci, new_bci).await;
             }
         }
         Ok(())

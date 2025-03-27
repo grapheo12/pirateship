@@ -300,3 +300,45 @@ impl TwoPCHandler {
         success_acks >= majority
     }
 }
+
+pub struct EngraftTwoPCFuture {
+    pub block_n: u64,
+    pub raft_meta_res_rx: oneshot::Receiver<u64>,
+    pub log_meta_res_rx: oneshot::Receiver<u64>,
+    pub raft_meta_received_val: Option<u64>,
+    pub log_meta_received_val: Option<u64>,
+}
+
+impl EngraftTwoPCFuture {
+    pub fn new(block_n: u64, raft_meta_res_rx: oneshot::Receiver<u64>, log_meta_res_rx: oneshot::Receiver<u64>) -> Self {
+        Self {
+            block_n,
+            raft_meta_res_rx,
+            log_meta_res_rx,
+            raft_meta_received_val: None,
+            log_meta_received_val: None,
+        }
+    }
+
+    pub fn is_ready(&mut self) -> bool {
+        if self.raft_meta_received_val.is_none() {
+            match self.raft_meta_res_rx.try_recv() {
+                Ok(val) => {
+                    self.raft_meta_received_val = Some(val);
+                },
+                _ => {}
+            };
+        }
+
+        if self.log_meta_received_val.is_none() {
+            match self.log_meta_res_rx.try_recv() {
+                Ok(val) => {
+                    self.log_meta_received_val = Some(val);
+                },
+                _ => {}
+            };
+        }
+
+        self.raft_meta_received_val.is_some() && self.log_meta_received_val.is_some()
+    }
+}

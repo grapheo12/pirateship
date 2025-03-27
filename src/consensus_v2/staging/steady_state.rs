@@ -1,12 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use async_recursion::async_recursion;
+use bytes::{BufMut as _, BytesMut};
 use futures::future::try_join_all;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
 use tokio::sync::oneshot;
 
 use crate::{
-    consensus_v2::{logserver::LogServerCommand, pacemaker::PacemakerCommand}, crypto::CachedBlock, proto::{
+    consensus_v2::{extra_2pc::{EngraftTwoPCFuture, TwoPCCommand}, logserver::LogServerCommand, pacemaker::PacemakerCommand}, crypto::{CachedBlock, DIGEST_LENGTH}, proto::{
         consensus::{
             proto_block::Sig, ProtoNameWithSignature, ProtoQuorumCertificate,
             ProtoSignatureArrayEntry, ProtoVote,
@@ -226,6 +227,9 @@ impl Staging {
             config_num: self.config_num,
         };
 
+        #[cfg(feature = "extra_2pc")]
+        let (_vote_n, _vote_view, _vote_digest) = (vote.n, vote.view, vote.fork_digest.clone());
+
         // If this block is signed, need a signature for the vote.
         if let Some(Sig::ProposerSig(_)) = last_block.block.block.sig {
             let vote_sig = self.crypto.sign(&last_block.block.block_hash).await;
@@ -239,6 +243,30 @@ impl Staging {
         self.perf_add_event(&last_block.block, "Vote to Self");
 
         let res = self.process_vote(name, vote).await;
+
+
+        #[cfg(feature = "extra_2pc")]
+        {
+            // This is for Engraft.
+            // Need to store Raft meta file which is vote.n || vote.view
+            // And hash of last block.
+            let mut raft_meta_file = BytesMut::with_capacity(16);
+            raft_meta_file.put_u64(_vote_n);
+            raft_meta_file.put_u64(_vote_view);
+
+            let mut log_meta_file = BytesMut::with_capacity(DIGEST_LENGTH);
+            log_meta_file.put_slice(&_vote_digest);
+
+            let (raft_meta_2pc_cmd, raft_meta_2pc_res) = TwoPCCommand::new("raft_meta".to_string(), raft_meta_file.to_vec());
+            let (log_meta_2pc_cmd, log_meta_2pc_res) = TwoPCCommand::new("log_meta".to_string(), log_meta_file.to_vec());
+
+
+            self.two_pc_command_tx.send(raft_meta_2pc_cmd).await.unwrap();
+            self.two_pc_command_tx.send(log_meta_2pc_cmd).await.unwrap();
+
+            self.pending_2pc_results.push_back(EngraftTwoPCFuture::new(_vote_n, raft_meta_2pc_res, log_meta_2pc_res));
+            
+        }
 
         res
     }
@@ -278,6 +306,9 @@ impl Staging {
             config_num: self.config_num,
         };
 
+        #[cfg(feature = "extra_2pc")]
+        let (_vote_n, _vote_view, _vote_digest) = (vote.n, vote.view, vote.fork_digest.clone());
+
         // If this block is signed, need a signature for the vote.
         if let Some(Sig::ProposerSig(_)) = last_block.block.block.sig {
             let vote_sig = self.crypto.sign(&last_block.block.block_hash).await;
@@ -312,6 +343,29 @@ impl Staging {
             trace!("Sent vote to {} for {}", leader, last_block.block.block.n);
         } else {
             info!("Sent vote to {} for {}", leader, last_block.block.block.n);
+        }
+
+        #[cfg(feature = "extra_2pc")]
+        {
+            // This is for Engraft.
+            // Need to store Raft meta file which is vote.n || vote.view
+            // And hash of last block.
+            let mut raft_meta_file = BytesMut::with_capacity(16);
+            raft_meta_file.put_u64(_vote_n);
+            raft_meta_file.put_u64(_vote_view);
+
+            let mut log_meta_file = BytesMut::with_capacity(DIGEST_LENGTH);
+            log_meta_file.put_slice(&_vote_digest);
+
+            let (raft_meta_2pc_cmd, raft_meta_2pc_res) = TwoPCCommand::new("raft_meta".to_string(), raft_meta_file.to_vec());
+            let (log_meta_2pc_cmd, log_meta_2pc_res) = TwoPCCommand::new("log_meta".to_string(), log_meta_file.to_vec());
+
+
+            self.two_pc_command_tx.send(raft_meta_2pc_cmd).await.unwrap();
+            self.two_pc_command_tx.send(log_meta_2pc_cmd).await.unwrap();
+
+            self.pending_2pc_results.push_back(EngraftTwoPCFuture::new(_vote_n, raft_meta_2pc_res, log_meta_2pc_res));
+            
         }
 
         Ok(())
@@ -619,7 +673,7 @@ impl Staging {
             self.maybe_byzantine_commit(qc).await?;
         }
 
-        #[cfg(feature = "no_qc")]
+        #[cfg(all(feature = "no_qc", not(feature = "extra_2pc")))]
         {
             if this_is_final_block && self.ci > 100 { // I don't know why just self.ci doesn't work.
                                                       // But this seems to work somehow.
@@ -941,7 +995,7 @@ impl Staging {
         Ok(())
     }
 
-    async fn do_byzantine_commit(&mut self, old_bci: u64, new_bci: u64) {
+    pub(crate) async fn do_byzantine_commit(&mut self, old_bci: u64, new_bci: u64) {
         if new_bci <= old_bci {
             return;
         }

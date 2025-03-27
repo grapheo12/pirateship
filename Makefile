@@ -46,6 +46,11 @@ signed_raft_logger:
 	CC=clang CXX=clang++ cargo build --release --features signed_raft,app_logger,storage --no-default-features
 
 
+.PHONY: engraft_logger
+engraft_logger:
+	CC=clang CXX=clang++ cargo build --release --features engraft,app_logger,storage --no-default-features
+
+
 .PHONY: diverse_raft_logger
 diverse_raft_logger:
 	CC=clang CXX=clang++ cargo build --release --features diverse_raft,app_logger,storage --no-default-features
