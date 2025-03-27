@@ -1,6 +1,8 @@
     use actix_web::{put, get, web, App, HttpResponse, HttpServer, Responder};
     use bitcode::decode;
     use crossbeam::deque::Worker;
+    use ed25519_dalek::pkcs8::spki::der::asn1::SetOfVec;
+    use gluesql::core::ast_builder::function::sign;
     use gluesql::core::sqlparser::keywords::USER;
     use log::{debug, warn};
     use nix::libc::passwd;
@@ -17,10 +19,10 @@
     use pft::rpc::client::Client;
     use pft::rpc::{MessageRef, PinnedMessage};
     use pft::{config::ClientConfig, proto::{client::{self, ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::channel::{make_channel, Receiver, Sender}};
-    use crate::payloads::{RegisterPayload};
+    use crate::payloads::{RegisterPayload, PubKeyPayload};
 
-    use rand::{thread_rng, Rng};
-    use ed25519_dalek::{ed25519, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH};
+    use rand_chacha::ChaCha20Rng;
+    use ed25519_dalek::{ed25519, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SigningKey, SecretKey, VerifyingKey};
     #[derive(Clone)]
     struct AppState {
         client: Arc<PinnedClient>,
@@ -42,7 +44,7 @@
             operands: vec![username.clone().into_bytes()],
         }; 
 
-        let result = match send(transaction_op, 0, client).await {
+        let result = match send(vec![transaction_op], 0, client).await {
             Ok(response) => response,
             Err(e) => return e
         }; //add client tag
@@ -58,7 +60,7 @@
             operands: vec![username.clone().into_bytes(), hash(&password.clone().into_bytes())],
         };
 
-        let create_user_result = match send(create_user_op, 0, client).await {
+        let create_user_result = match send(vec![create_user_op], 0, client).await {
             Ok(response) => response,
             Err(e) => return e
         }; //add client tag
@@ -69,7 +71,7 @@
             operands: vec!["user".as_bytes().to_vec()],
         };
 
-        let get_user_result = match send(get_user_op, 0, client).await {
+        let get_user_result = match send(vec![get_user_op], 0, client).await {
             Ok(response) => response,
             Err(e) => return e
         }; //add client tag
@@ -87,7 +89,7 @@
             operands: vec!["user".as_bytes().to_vec(), serialized_users],
         };
 
-        let update_users_result = match send(update_users_op, 0, client).await {
+        let update_users_result = match send(vec![update_users_op], 0, client).await {
             Ok(response) => response,
             Err(e) => return e
         }; //add client tag
@@ -99,18 +101,152 @@
     }
 
 
-    // POST /key → Retrieves the latest private key, supports attestation and key wrapping.
+    // POST /key → Retrieves the user's private key, supports attestation and key wrapping.
     // POST /refresh → Generates a new key pair and stores it.
     // GET /pubkey → Retrieves a public key by kid.
     // GET /listpubkeys → Lists all public keys.
 
+    #[put("/refresh")]
+    async fn refresh(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
+        let client = &data.client;
+        let mut csprng = rand::rngs::OsRng;
+        let signing_key: SigningKey = SigningKey::generate(&mut csprng);
 
-    #[get("/pubkey")]
-    async fn pubkey(data: web::Data<AppState>) -> impl Responder {
-        let nodes = data.node_list.clone();
+        match authenticate_user(payload.username.clone(), payload.password.clone(), client).await {
+            Ok(valid) => valid,
+            Err(e) => return e
+        };
+
+        let private_key = signing_key.verifying_key().to_bytes();
+        let public_key = signing_key.to_bytes();
+        
+        let mut public_insert_key = "pub:".to_string();
+        public_insert_key.push_str(&payload.username);
+        
+        let mut priv_insert_key = "priv:".to_string();
+        priv_insert_key.push_str(&payload.username);
+
+
+        let write_pub_key_op = ProtoTransactionOp {
+            op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
+            operands: vec![ public_insert_key.into_bytes(), public_key.to_vec()],
+        };
+
+        let write_priv_key_op = ProtoTransactionOp {
+            op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+            operands: vec![priv_insert_key.into_bytes(), private_key.to_vec()],
+        };
+
+        let result = match send(vec![write_pub_key_op, write_priv_key_op], 0, client).await {
+            Ok(response) => response,
+            Err(e) => return e
+        }; //add client tag
+        
         HttpResponse::Ok().json(serde_json::json!({
             "message": "hi",
-            "data": nodes
+            "public key": public_key,
+            "priv key": private_key
+        }))
+    }
+
+    #[get("/listpubkeys")]
+    async fn listpubkeys(data: web::Data<AppState>) -> impl Responder {
+        let client = &data.client;
+
+        let get_user_op = ProtoTransactionOp {
+            op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+            operands: vec!["user".as_bytes().to_vec()],
+        };
+
+        let get_user_result = match send(vec![get_user_op], 0, client).await {
+            Ok(response) => response,
+            Err(e) => return e
+        }; //add client tag
+
+        let mut users: Vec<String> = Vec::new();   
+        if !get_user_result.is_empty() {
+            users = serde_json::from_slice(&get_user_result).expect("Deserialization failed");
+        }
+        let mut public_keys = Vec::new();
+        //get public key of each user
+        for user in users {
+            let mut key = "pub:".to_string();
+            key.push_str(&user);
+
+            let get_user_op = ProtoTransactionOp {
+            op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+            operands: vec![key.into_bytes()],
+            };
+
+            let user_public_key_result = match send(vec![get_user_op], 0, client).await {
+                Ok(response) => response,
+                Err(e) => return e
+            };
+
+            let pub_key_arr:[u8; PUBLIC_KEY_LENGTH] = user_public_key_result.try_into().expect("Vec has incorrect length");
+            public_keys.push(pub_key_arr);
+        }
+        
+        HttpResponse::Ok().json(serde_json::json!({
+            "message": "hi",
+            "public keys": public_keys
+        }))
+    }
+
+    #[get("/pubkey")]
+    async fn pubkey(payload: web::Json<PubKeyPayload>, data: web::Data<AppState>) -> impl Responder {
+        let client = &data.client;
+
+        let mut key = "pub:".to_string();
+        key.push_str(&payload.username);
+
+        let transaction_op = ProtoTransactionOp {
+            op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+            operands: vec![key.into_bytes()],
+        }; 
+
+        let user_public_key_result = match send(vec![transaction_op], 0, client).await {
+            Ok(response) => response,
+            Err(e) => return e
+        }; //add client tag
+        
+        let pub_key_arr:[u8; PUBLIC_KEY_LENGTH] = user_public_key_result.try_into().expect("Vec has incorrect length");
+
+        HttpResponse::Ok().json(serde_json::json!({
+            "message": "public key of user",
+            "username": &payload.username,
+            "public key": pub_key_arr
+        }))
+    }
+
+    #[get("/privkey")]
+    async fn privkey(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
+        let client = &data.client;
+
+        match authenticate_user(payload.username.clone(), payload.password.clone(), client).await {
+            Ok(valid) => valid,
+            Err(e) => return e
+        };
+
+        let mut key = "priv:".to_string();
+        key.push_str(&payload.username);
+
+        let transaction_op = ProtoTransactionOp {
+            op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+            operands: vec![key.into_bytes()],
+        }; 
+
+        let user_priv_key_result = match send(vec![transaction_op], 0, client).await {
+            Ok(response) => response,
+            Err(e) => return e
+        };
+        
+        let priv_key_arr:[u8; PUBLIC_KEY_LENGTH] = user_priv_key_result.try_into().expect("Vec has incorrect length");
+
+        HttpResponse::Ok().json(serde_json::json!({
+            "message": "private key of user",
+            "username": &payload.username,
+            "public key": priv_key_arr
         }))
     }
 
@@ -143,6 +279,10 @@
                 }
             ))
             .service(register)
+            .service(pubkey)
+            .service(listpubkeys)
+            .service(refresh)
+            .service(privkey)
             .service(home)
         })
         .bind("127.0.0.1:8080")? 
@@ -151,9 +291,9 @@
         Ok(())
     }
 
-    async fn send(transaction_op: ProtoTransactionOp, client_tag: u64, client:&Arc<PinnedClient>) -> Result<Vec<u8>, HttpResponse> {
+    async fn send(transaction_ops: Vec<ProtoTransactionOp>, client_tag: u64, client:&Arc<PinnedClient>) -> Result<Vec<u8>, HttpResponse> {
         let transaction_phase = ProtoTransactionPhase {
-            ops: vec![transaction_op.clone()],
+            ops: transaction_ops,
         };
 
         let transaction = ProtoTransaction {
@@ -229,7 +369,7 @@
             operands: vec![username.clone().into_bytes()],
         };
 
-        let result = match send(transaction_op, 0, client).await {
+        let result = match send(vec![transaction_op], 0, client).await {
             Ok(response) => response,
             Err(e) => return Err(e)
         }; //add client tag
@@ -255,11 +395,23 @@
     /*
     curl -X GET "http://localhost:8080/"
 
-    curl -X GET "http://localhost:8080/register" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"min"}'
-    curl -X GET "http://localhost:8080/auth" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"min"}'
+    curl -X GET "http://localhost:8080/register" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"hi"}'
 
-    curl -X GET "http://localhost:8080/get/username"
 
-    curl -X PUT "http://localhost:8080/set/username" -H "Content-Type: application/json" -d '"john_doe"'
+    curl -X PUT "http://localhost:8080/refresh" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"hi"}'
+
+
+    curl -X GET "http://localhost:8080/pubkey" -H "Content-Type: application/json" -d '{"username":"teddy"}'
+    curl -X GET "http://localhost:8080/privkey" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"hi"}'
+    curl -X GET "http://localhost:8080/privkey" -H "Content-Type: application/json" -d '{"username":"teddy2", "password":"hi"}'
+
+
+
+
+    
+    curl -X PUT "http://localhost:8080/refresh" -H "Content-Type: application/json" -d '{"username":"teddy2", "password":"hi"}'
+    curl -X GET "http://localhost:8080/listpubkeys" -H "Content-Type: application/json"
+
+
     */
 
