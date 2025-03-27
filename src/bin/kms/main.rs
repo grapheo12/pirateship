@@ -12,6 +12,8 @@ use pft::consensus_v2::engines::kvs::KVSAppEngine;
 mod frontend;
 use std::thread;
 
+mod payloads;
+
 // #[global_allocator]
 // static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
