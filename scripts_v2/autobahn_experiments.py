@@ -663,7 +663,7 @@ class AutobahnExperiment(Experiment):
             client_vms = deployment.get_all_client_vms_in_region(self.client_region)
 
         total_nodes = self.num_nodes
-        clients_per_node = self.num_clients // total_nodes
+        clients_per_node = self.num_clients
         num_clients_per_vm = [clients_per_node // len(client_vms) for _ in range(len(client_vms))]
         num_clients_per_vm[-1] += (clients_per_node - sum(num_clients_per_vm))
 
@@ -732,7 +732,7 @@ SCP_CMD="rsync -avz -e 'ssh -o StrictHostKeyChecking=no -i {self.dev_ssh_key}'"
                             binary_name=binary_name
                         )
                         _script += f"""
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'RUST_LOG=debug {primary_cmd}' > {self.remote_workdir}/logs/{repeat_num}/primary-{bin}.err 2> {self.remote_workdir}/logs/{repeat_num}/primary-{bin}.log &
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '{primary_cmd}' > {self.remote_workdir}/logs/{repeat_num}/primary-{bin}.err 2> {self.remote_workdir}/logs/{repeat_num}/primary-{bin}.log &
 PID="$PID $!"
 """
                         worker_cmds = []
@@ -752,7 +752,7 @@ PID="$PID $!"
 
                         for k, worker_cmd in enumerate(worker_cmds):
                             _script += f"""
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'RUST_LOG=debug {worker_cmd}' > {self.remote_workdir}/logs/{repeat_num}/worker{k}-{bin}.err 2> {self.remote_workdir}/logs/{repeat_num}/worker{k}-{bin}.log &
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '{worker_cmd}' > {self.remote_workdir}/logs/{repeat_num}/worker{k}-{bin}.err 2> {self.remote_workdir}/logs/{repeat_num}/worker{k}-{bin}.log &
 PID="$PID $!"
 """
                     
@@ -770,7 +770,7 @@ PID="$PID $!"
                                     binary_name=binary_name
                                 )
                                 _script += f"""
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'RUST_LOG=debug {cmd}' > {self.remote_workdir}/logs/{repeat_num}/{bin}-{i}-{id}.err 2> {self.remote_workdir}/logs/{repeat_num}/{bin}-{i}-{id}.log &
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '{cmd}' > {self.remote_workdir}/logs/{repeat_num}/{bin}-{i}-{id}.err 2> {self.remote_workdir}/logs/{repeat_num}/{bin}-{i}-{id}.log &
 PID="$PID $!"
 """
 
