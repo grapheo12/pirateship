@@ -99,6 +99,8 @@ impl TwoPCHandler {
             return;
         }
 
+        
+
         // Second: Broadcast to all nodes and collect majority acks.
         while !self.phase1(&final_key_name, &val).await {
             // Retry until success.
@@ -294,7 +296,7 @@ impl TwoPCHandler {
                     false
                 }
             }
-        }).filter(|x| *x).count();
+        }).filter(|x| *x).count() + 1 /* for myself */;
 
         let majority = self.config.get().consensus_config.node_list.len() / 2 + 1;
         success_acks >= majority
