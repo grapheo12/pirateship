@@ -784,7 +784,7 @@ sleep {self.duration}
 echo -n $PID | xargs -d' ' -I{{}} kill -2 {{}} || true
 echo -n $PID | xargs -d' ' -I{{}} kill -15 {{}} || true
 echo -n $PID | xargs -d' ' -I{{}} kill -9 {{}} || true
-sleep 1
+sleep 10
 
 # Kill the binaries in SSHed VMs as well. Calling SIGKILL on the local SSH process might have left them orphaned.
 # Make sure not to kill the tmux server.
@@ -805,7 +805,7 @@ $SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_n
 """
                 
             _script += f"""
-sleep 1
+sleep 10
 """
                 
             # pkill -9 -c server also kills tmux-server. So we can't run a server on the dev VM.
