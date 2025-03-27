@@ -5,7 +5,7 @@ use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
 use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoVote}, rpc::{client::PinnedClient, SenderType}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer, PerfCounter, StorageAck}};
 
-use super::{app::AppCommand, batch_proposal::BatchProposerCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}, logserver::{self, LogServerCommand}, pacemaker::PacemakerCommand};
+use super::{app::AppCommand, batch_proposal::BatchProposerCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, extra_2pc::TwoPCCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}, logserver::{self, LogServerCommand}, pacemaker::PacemakerCommand};
 
 pub(super) mod steady_state;
 pub(super) mod view_change;
@@ -71,6 +71,9 @@ pub struct Staging {
     __vc_retry_num: usize,
     __storage_ack_buffer: VecDeque<oneshot::Receiver<Result<(), Error>>>,
     __ae_seen_in_this_view: usize,
+
+    #[cfg(feature = "extra_2pc")]
+    two_pc_command_tx: Sender<TwoPCCommand>,
 }
 
 impl Staging {
@@ -95,6 +98,9 @@ impl Staging {
         qc_tx: UnboundedSender<ProtoQuorumCertificate>,
         batch_proposer_command_tx: Sender<BatchProposerCommand>,
         logserver_tx: Sender<LogServerCommand>,
+
+        #[cfg(feature = "extra_2pc")]
+        two_pc_command_tx: Sender<TwoPCCommand>,
     ) -> Self {
         let _config = config.get();
         let _chan_depth = _config.rpc_config.channel_depth as usize;
@@ -148,6 +154,9 @@ impl Staging {
             __vc_retry_num: 0,
             __storage_ack_buffer: VecDeque::new(),
             __ae_seen_in_this_view: 0,
+
+            #[cfg(feature = "extra_2pc")]
+            two_pc_command_tx,
         };
 
         #[cfg(not(feature = "view_change"))]

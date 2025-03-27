@@ -579,6 +579,15 @@ impl PinnedClient {
         Ok(result)
     }
 
+    // pub async fn broadcast_and_await_quorum_reply<'b>(
+    //     client: &PinnedClient,
+    //     send_list: &Vec<String>,
+    //     data: &PinnedMessage,
+    //     quorum: usize,
+    // ) -> Result<Vec<PinnedMessage>, Error> {
+    //     Ok(vec![])
+    // }
+
 
     pub async fn reliable_send<'b>(
         client: &PinnedClient,

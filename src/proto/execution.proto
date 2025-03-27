@@ -35,6 +35,7 @@ message ProtoTransaction {
     ProtoTransactionPhase on_crash_commit = 2;
     ProtoTransactionPhase on_byzantine_commit = 3;
     bool is_reconfiguration = 4;
+    bool is_2pc = 5;
 }
 
 message ProtoTransactionOpResult {

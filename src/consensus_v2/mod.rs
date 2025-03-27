@@ -8,6 +8,7 @@ pub mod engines;
 pub mod client_reply;
 mod logserver;
 mod pacemaker;
+pub mod extra_2pc;
 
 // #[cfg(test)]
 // mod tests;
@@ -19,6 +20,7 @@ use batch_proposal::{BatchProposer, TxWithAckChanTag};
 use block_broadcaster::BlockBroadcaster;
 use block_sequencer::BlockSequencer;
 use client_reply::ClientReplyHandler;
+use extra_2pc::TwoPCHandler;
 use fork_receiver::{ForkReceiver, ForkReceiverCommand};
 use log::{debug, info, warn};
 use logserver::LogServer;
@@ -171,6 +173,10 @@ pub struct ConsensusNode<E: AppEngine + Send + Sync + 'static> {
     logserver: Arc<Mutex<LogServer>>,
     pacemaker: Arc<Mutex<Pacemaker>>,
 
+    #[cfg(feature = "extra_2pc")]
+    extra_2pc: Arc<Mutex<TwoPCHandler>>,
+
+
 
     /// TODO: When all wiring is done, this will be empty.
     __sink_handles: JoinSet<()>,
@@ -205,6 +211,9 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let logserver_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
         let pacemaker_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
         let fork_receiver_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
+
+        #[cfg(feature = "extra_2pc")]
+        let extra_2pc_client = Client::new_atomic(config.clone(), keystore.clone(), true, 0);
 
         let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
         let (batch_proposer_command_tx, batch_proposer_command_rx) = make_channel(_chan_depth);
@@ -242,16 +251,33 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let fork_receiver_crypto = crypto.get_connector();
         let pacemaker_crypto = crypto.get_connector();
 
+        #[cfg(feature = "extra_2pc")]
+        let (extra_2pc_command_tx, extra_2pc_command_rx) = make_channel(_chan_depth);
+        #[cfg(feature = "extra_2pc")]
+        let (extra_2pc_phase_message_tx, extra_2pc_phase_message_rx) = make_channel(_chan_depth);
+
+
         let ctx = PinnedConsensusServerContext::new(config.clone(), keystore.clone(), batch_proposer_tx, fork_tx, fork_receiver_command_tx.clone(), vote_tx, view_change_tx, backfill_request_tx);
         let batch_proposer = BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, client_reply_command_tx.clone(), unlogged_tx, batch_proposer_command_rx);
         let block_sequencer = BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto);
         let block_broadcaster = BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_crypto2, block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, fork_receiver_command_tx.clone(), app_tx.clone());
-        let staging = Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, pacemaker_cmd_rx, pacemaker_cmd_tx2, client_reply_command_tx.clone(), app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx, batch_proposer_command_tx, logserver_tx);
+        let staging = Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, pacemaker_cmd_rx, pacemaker_cmd_tx2, client_reply_command_tx.clone(), app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx, batch_proposer_command_tx, logserver_tx,
+
+            #[cfg(feature = "extra_2pc")]
+            extra_2pc_command_tx,
+        );
         let fork_receiver = ForkReceiver::new(config.clone(), fork_receiver_crypto, fork_receiver_client.into(), fork_rx, fork_receiver_command_rx, other_block_tx, logserver_query_tx.clone());
-        let app = Application::new(config.clone(), app_rx, unlogged_rx, client_reply_command_tx, gc_tx);
+        let app = Application::new(config.clone(), app_rx, unlogged_rx, client_reply_command_tx, gc_tx,
+            
+            #[cfg(feature = "extra_2pc")]
+            extra_2pc_phase_message_tx,
+        );
         let client_reply = ClientReplyHandler::new(config.clone(), client_reply_rx, client_reply_command_rx);
         let logserver = LogServer::new(config.clone(), logserver_client.into(), logserver_rx, backfill_request_rx, gc_rx, logserver_query_rx, logserver_storage);
         let pacemaker = Pacemaker::new(config.clone(), pacemaker_client.into(), pacemaker_crypto, view_change_rx, pacemaker_cmd_tx, pacemaker_cmd_rx2, logserver_query_tx);
+
+        #[cfg(feature = "extra_2pc")]
+        let extra_2pc = extra_2pc::TwoPCHandler::new(config.clone(), extra_2pc_client.into(), storage.get_connector(crypto.get_connector()), extra_2pc_command_rx, extra_2pc_phase_message_rx);
         
         let mut handles = JoinSet::new();
 
@@ -268,6 +294,9 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
             client_reply: Arc::new(Mutex::new(client_reply)),
             logserver: Arc::new(Mutex::new(logserver)),
             pacemaker: Arc::new(Mutex::new(pacemaker)),
+
+            #[cfg(feature = "extra_2pc")]
+            extra_2pc: Arc::new(Mutex::new(extra_2pc)),
 
             crypto,
             storage: Arc::new(Mutex::new(storage)),
@@ -337,6 +366,14 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         handles.spawn(async move {
             Pacemaker::run(pacemaker).await;
         });
+
+        #[cfg(feature = "extra_2pc")]
+        {
+            let extra_2pc = self.extra_2pc.clone();
+            handles.spawn(async move {
+                extra_2pc::TwoPCHandler::run(extra_2pc).await;
+            });
+        }
     
         handles
     }

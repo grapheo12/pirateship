@@ -98,6 +98,9 @@ pub struct Application<'a, E: AppEngine + Send + Sync + 'a> {
 
     staging_rx: Receiver<AppCommand>,
     unlogged_rx: Receiver<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)>,
+    
+    #[cfg(feature = "extra_2pc")]
+    twopc_tx: Sender<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)>,
 
     client_reply_tx: Sender<ClientReplyCommand>,
 
@@ -117,6 +120,9 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
         config: AtomicConfig,
         staging_rx: Receiver<AppCommand>, unlogged_rx: Receiver<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)>,
         client_reply_tx: Sender<ClientReplyCommand>, gc_tx: Sender<u64>,
+
+        #[cfg(feature = "extra_2pc")]
+        twopc_tx: Sender<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)>,
     ) -> Self {
         let checkpoint_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.checkpoint_interval_ms));
         let log_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.logger_stats_report_ms));
@@ -138,6 +144,9 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
             log_timer,
             perf_counter,
             gc_tx,
+
+            #[cfg(feature = "extra_2pc")]
+            twopc_tx,
 
             phantom: PhantomData
         }
@@ -214,6 +223,14 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
     }
 
     async fn handle_unlogged_request(&mut self, request: ProtoTransaction, reply_tx: oneshot::Sender<ProtoTransactionResult>) {
+        #[cfg(feature = "extra_2pc")]
+        {
+            if request.is_2pc {
+                self.twopc_tx.send((request, reply_tx)).await.unwrap();
+                return;
+            }
+        }
+        
         let result = self.engine.handle_unlogged_request(request);
         self.stats.total_requests += 1;
         self.stats.total_unlogged_txs += 1;

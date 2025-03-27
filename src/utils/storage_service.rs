@@ -79,4 +79,18 @@ impl StorageServiceConnector {
 
         rx
     }
+
+    pub async fn put_raw(&self, key: String, val: Vec<u8>) -> oneshot::Receiver<StorageAck> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx.send(StorageServiceCommand::Put(key.into_bytes(), val, tx)).await.unwrap();
+
+        rx
+    }
+
+    pub async fn get_raw(&self, key: String) -> Result<Vec<u8>, Error> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx.send(StorageServiceCommand::Get(key.into_bytes(), tx)).await.unwrap();
+
+        rx.await.unwrap()
+    }
 }

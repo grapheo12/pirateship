@@ -169,6 +169,7 @@ impl KVReadWriteYCSBGenerator {
                 }),
                 on_byzantine_commit: None,
                 is_reconfiguration: false,
+                is_2pc: false,
             },
             executor: Executor::Leader
         }
@@ -211,6 +212,7 @@ impl KVReadWriteYCSBGenerator {
             on_crash_commit: Some(ops),
             on_byzantine_commit: None,
             is_reconfiguration: false,
+            is_2pc: false,
         }
     }
 
@@ -221,6 +223,7 @@ impl KVReadWriteYCSBGenerator {
             on_crash_commit: None,
             on_byzantine_commit: Some(ops),
             is_reconfiguration: false,
+            is_2pc: false,
         }
     }
 
@@ -231,6 +234,7 @@ impl KVReadWriteYCSBGenerator {
             on_crash_commit: None,
             on_byzantine_commit: None,
             is_reconfiguration: false,
+            is_2pc: false,
         }
     }
 
@@ -241,6 +245,7 @@ impl KVReadWriteYCSBGenerator {
             on_crash_commit: Some(ops),
             on_byzantine_commit: None,
             is_reconfiguration: false,
+            is_2pc: false,
         }
     }
 
@@ -251,6 +256,7 @@ impl KVReadWriteYCSBGenerator {
             on_crash_commit: None,
             on_byzantine_commit: Some(ops),
             is_reconfiguration: false,
+            is_2pc: false,
         }
     }
 
