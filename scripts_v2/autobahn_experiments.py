@@ -489,7 +489,7 @@ def get_default_node_params(num_nodes, repeats, seconds):
         'use_parallel_proposals': True,
         'k': 4,
         'use_fast_path': True,
-        'fast_path_timeout': 5_000,
+        'fast_path_timeout': 5_00,
         'use_ride_share': False,
         'car_timeout': 5_000,
 

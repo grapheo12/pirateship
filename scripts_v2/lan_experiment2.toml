@@ -132,7 +132,7 @@ ramp_up = 10
 ramp_down = 10
 output = "lan_experiment2.pdf"
 force_parse = true
-# skip_indices = [2]
+skip_indices = [3]
 
 [results.legends]
 # Experiment group to legend mapping
