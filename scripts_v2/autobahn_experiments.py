@@ -482,14 +482,14 @@ def get_default_node_params(num_nodes, repeats, seconds):
         'max_header_delay': 5_000,  # ms
         'gc_depth': 50,  # rounds
         'sync_retry_delay': 5_000,  # ms
-        'sync_retry_nodes': 3,  # number of nodes
+        'sync_retry_nodes': 6,  # number of nodes
         'batch_size': 500_000,  # bytes
         'max_batch_delay': 2,  # ms
         'use_optimistic_tips': True,
         'use_parallel_proposals': True,
         'k': 4,
         'use_fast_path': True,
-        'fast_path_timeout': 5_00,
+        'fast_path_timeout': 5_000,
         'use_ride_share': False,
         'car_timeout': 5_000,
 
