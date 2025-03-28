@@ -64,7 +64,8 @@ build_command = "make -C autobahn"
 duration = 60
 
 [experiments.sweeping_parameters]
-num_clients = [5, 10, 20, 50, 100, 200, 400, 800, 1000]
+# num_clients = [5, 10, 20, 50, 100, 200, 400, 800, 1000]
+num_clients = [20, 400, 1000]
 
 # [[experiments]]
 # name = "pirateship"
@@ -79,21 +80,22 @@ num_clients = [5, 10, 20, 50, 100, 200, 400, 800, 1000]
 # num_clients = [400]
 
 
-# [[experiments]]
-# name = "pirateship_sig_1_crypto_1"
-# # git_hash = "9d85b9e007d4f05488fcefa06f379eef66976de1"
-# repeats = 1
-# num_nodes = 7
-# node_distribution = "uniform"
-# build_command = "make"
-# duration = 60
+[[experiments]]
+name = "pirateship_sig_1_crypto_1"
+# git_hash = "9d85b9e007d4f05488fcefa06f379eef66976de1"
+repeats = 1
+num_nodes = 7
+node_distribution = "uniform"
+build_command = "make"
+duration = 60
 
-# [experiments.node_config.consensus_config]
-# signature_max_delay_blocks = 1
-# num_crypto_workers = 1
+[experiments.node_config.consensus_config]
+signature_max_delay_blocks = 1
+num_crypto_workers = 1
 
-# [experiments.sweeping_parameters]
+[experiments.sweeping_parameters]
 # num_clients = [100, 200, 400, 500, 800, 1000]
+num_clients = [100, 200, 400]
 
 
 # [[experiments]]
@@ -157,7 +159,7 @@ force_parse = true
 # pirateship = "pirateship+byz"
 autobahn = "autobahn"
 # pirateship_sig_1 = "ps(sig=1,cr=5)+byz"
-# pirateship_sig_1_crypto_1 = "ps(sig=1,cr=1)+byz"
+pirateship_sig_1_crypto_1 = "ps(sig=1,cr=1)+byz"
 # pbft = "pbft"
 # signed_raft = "signed_raft"
 
