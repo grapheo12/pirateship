@@ -257,9 +257,10 @@ impl TwoPCHandler {
         
         // This blocks till responses from all nodes are received.
         // TODO: Change it so that it returns after majority quorum.
-        let majority = self.config.get().consensus_config.node_list.len() / 2 + 1;
+        let n = self.config.get().consensus_config.node_list.len();
+        let majority = n / 2 + 1;
 
-        let res = PinnedClient::broadcast_and_await_quorum_reply(&self.client, &send_list, &msg, majority).await;
+        let res = PinnedClient::broadcast_and_await_quorum_reply(&self.client, &send_list, &msg, n - 1).await;
 
         if let Err(e) = res {
             error!("Failed to broadcast: {:?}", e);

@@ -78,7 +78,7 @@ duration = 60
 num_clients = [400]
 
 [[experiments]]
-name = "lucky_raft"
+name = "engraft"
 repeats = 1
 num_nodes = 5
 node_distribution = "uniform"
