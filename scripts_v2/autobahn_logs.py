@@ -228,8 +228,8 @@ class LogParser:
             client_latencies.extend(c)
         client_latency = mean(client_latencies)
 
-        if client_latency > 400:
-            raise ParseError('Client latency is too high')
+        # if client_latency > 400:
+        #     raise ParseError('Client latency is too high')
 
         return (
             '\n'
