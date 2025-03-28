@@ -94,6 +94,8 @@ fast_path = []
 platforms = []
 evil = []
 extra_2pc = []
+no_pipeline = []
+extra_qc_check = []
 
 # Applications
 app_logger = []
@@ -104,9 +106,12 @@ lucky_raft = ["fixed_leader", "never_sign", "no_qc"]
 signed_raft = ["fixed_leader", "dynamic_sign", "no_qc"]
 engraft = ["fixed_leader", "never_sign", "no_qc", "extra_2pc"]
 chained_pbft = ["round_robin_leader", "always_sign", "view_change"]
+jolteon = ["round_robin_leader", "always_sign", "view_change", "no_pipeline"]
+hotstuff = ["round_robin_leader", "always_sign", "view_change", "no_pipeline", "extra_qc_check"]
 pirateship = ["round_robin_leader", "dynamic_sign", "view_change"]
 
-default = ["pirateship", "app_logger", "storage", "fast_path", "platforms"]
+# default = ["pirateship", "app_logger", "storage", "fast_path", "platforms"]
+default = ["jolteon", "app_logger", "storage"]
 # default = ["engraft", "app_kvs", "storage", "fast_path", "platforms"]
 
 

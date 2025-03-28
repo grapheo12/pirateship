@@ -211,7 +211,12 @@ impl BlockSequencer {
         #[cfg(not(feature = "no_qc"))]
         {
             // Is there a QC I can get?
-            if self.qc_rx.len() > 0 {
+            let mut qc_check_cond = self.qc_rx.len() > 0;
+            #[cfg(feature = "no_pipeline")]
+            {
+                qc_check_cond = qc_check_cond && self.current_qc_list.len() == 0;
+            }
+            if qc_check_cond {
                 let mut qc_buf = Vec::new();
                 self.qc_rx.recv_many(&mut qc_buf, self.qc_rx.len()).await;
                 self.add_qcs(qc_buf).await;

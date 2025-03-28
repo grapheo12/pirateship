@@ -58,7 +58,7 @@ diverse_raft_logger:
 
 .PHONY: jolteon_logger
 jolteon_logger:
-	CC=clang CXX=clang++ cargo build --release --features jolteon,app_logger,storage,fast_path --no-default-features
+	CC=clang CXX=clang++ cargo build --release --features jolteon,app_logger,storage --no-default-features
 
 
 .PHONY: chained_pbft_logger
