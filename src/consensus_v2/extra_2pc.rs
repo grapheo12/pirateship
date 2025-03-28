@@ -10,17 +10,17 @@ use crate::{config::AtomicConfig, proto::{client::{ProtoClientReply, ProtoClient
 pub struct TwoPCCommand {
     key: String,
     value: Vec<u8>,
-    result_sender: oneshot::Sender<u64 /* index assigned */>,
+    // result_sender: oneshot::Sender<u64 /* index assigned */>,
+    action: EngraftActionAfterFutureDone,
 }
 
 impl TwoPCCommand {
-    pub fn new(key: String, value: Vec<u8>) -> (Self, oneshot::Receiver<u64>) {
-        let (result_sender, result_rx) = oneshot::channel();
-        (Self {
+    pub fn new(key: String, value: Vec<u8>, action: EngraftActionAfterFutureDone) -> Self {
+        Self {
             key,
             value,
-            result_sender,
-        }, result_rx)
+            action,
+        }
     }
 }
 
@@ -36,6 +36,7 @@ pub struct TwoPCHandler {
 
 
     command_rx: Receiver<TwoPCCommand>,
+    staging_tx: Sender<EngraftActionAfterFutureDone>,
 
     /// 2PC happens as a sequence of on_receive Transactions.
     /// So as to bypass the consensus protocol.
@@ -52,6 +53,7 @@ impl TwoPCHandler {
         storage2: StorageServiceConnector,
         command_rx: Receiver<TwoPCCommand>,
         phase_message_rx: Receiver<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)>,
+        staging_tx: Sender<EngraftActionAfterFutureDone>,
     ) -> Self {
         Self {
             config,
@@ -62,6 +64,7 @@ impl TwoPCHandler {
             phase_message_rx: Some(phase_message_rx),
             local_index_counter: HashMap::new(),
             client_tag_counter: 0,
+            staging_tx,
         }
     }
 
@@ -121,7 +124,7 @@ impl TwoPCHandler {
         }
 
         // Finally send the result back
-        let _ = cmd.result_sender.send(_index);
+        let _ = self.staging_tx.send(cmd.action).await;
 
         trace!("2PC success for key {} index {}", cmd.key, _index);
 
@@ -328,6 +331,7 @@ impl TwoPCHandler {
 
 
 pub enum EngraftActionAfterFutureDone {
+    None,
     AsLeader(String, ProtoVote),
     AsFollower(String, PinnedMessage),
 }

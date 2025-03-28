@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use async_recursion::async_recursion;
 use bytes::{BufMut as _, BytesMut};
-use futures::future::try_join_all;
+use futures::{future::try_join_all, FutureExt};
 use log::{debug, error, info, trace, warn};
 use prost::Message;
 use tokio::{sync::oneshot, task::spawn_local};
@@ -256,19 +256,21 @@ impl Staging {
             let mut log_meta_file = BytesMut::with_capacity(DIGEST_LENGTH);
             log_meta_file.put_slice(&_vote_digest);
 
-            let (raft_meta_2pc_cmd, raft_meta_2pc_res) = TwoPCCommand::new("raft_meta".to_string(), raft_meta_file.to_vec());
-            let (log_meta_2pc_cmd, log_meta_2pc_res) = TwoPCCommand::new("log_meta".to_string(), log_meta_file.to_vec());
+            let raft_meta_2pc_cmd = TwoPCCommand::new("raft_meta".to_string(), raft_meta_file.to_vec(), EngraftActionAfterFutureDone::None);
+            let log_meta_2pc_cmd = TwoPCCommand::new("log_meta".to_string(), log_meta_file.to_vec(), EngraftActionAfterFutureDone::AsLeader(name, vote));
 
 
             self.two_pc_command_tx.send(raft_meta_2pc_cmd).await.unwrap();
             self.two_pc_command_tx.send(log_meta_2pc_cmd).await.unwrap();
 
-            self.engraft_2pc_futures.push_back(
-                EngraftTwoPCFuture::new(
-                    _vote_n, raft_meta_2pc_res, log_meta_2pc_res,
-                    EngraftActionAfterFutureDone::AsLeader(name, vote)
-                )
-            );
+            // self.engraft_2pc_futures.push_back(
+            //     async move {
+            //         EngraftTwoPCFuture::new(
+            //             _vote_n, raft_meta_2pc_res, log_meta_2pc_res,
+            //             EngraftActionAfterFutureDone::AsLeader(name, vote)
+            //         ).await
+            //     }.boxed()
+            // );
 
             Ok(())
             
@@ -360,19 +362,21 @@ impl Staging {
             let mut log_meta_file = BytesMut::with_capacity(DIGEST_LENGTH);
             log_meta_file.put_slice(&_vote_digest);
 
-            let (raft_meta_2pc_cmd, raft_meta_2pc_res) = TwoPCCommand::new("raft_meta".to_string(), raft_meta_file.to_vec());
-            let (log_meta_2pc_cmd, log_meta_2pc_res) = TwoPCCommand::new("log_meta".to_string(), log_meta_file.to_vec());
+            let raft_meta_2pc_cmd = TwoPCCommand::new("raft_meta".to_string(), raft_meta_file.to_vec(), EngraftActionAfterFutureDone::None);
+            let log_meta_2pc_cmd = TwoPCCommand::new("log_meta".to_string(), log_meta_file.to_vec(), EngraftActionAfterFutureDone::AsFollower(leader, data));
 
 
             self.two_pc_command_tx.send(raft_meta_2pc_cmd).await.unwrap();
             self.two_pc_command_tx.send(log_meta_2pc_cmd).await.unwrap();
 
-            self.engraft_2pc_futures.push_back(
-                EngraftTwoPCFuture::new(
-                    _vote_n, raft_meta_2pc_res, log_meta_2pc_res,
-                    EngraftActionAfterFutureDone::AsFollower(leader, data)
-                )
-            );
+            // self.engraft_2pc_futures.push_back(
+            //     async move {
+            //         EngraftTwoPCFuture::new(
+            //             _vote_n, raft_meta_2pc_res, log_meta_2pc_res,
+            //             EngraftActionAfterFutureDone::AsFollower(leader, data)
+            //         ).await
+            //     }.boxed()
+            // );
             
         }
 
@@ -1061,10 +1065,13 @@ impl Staging {
 
     pub(crate) async fn process_2pc_result(&mut self, cmd: EngraftActionAfterFutureDone) -> Result<(), ()> {
         match cmd {
+            EngraftActionAfterFutureDone::None => {},
             EngraftActionAfterFutureDone::AsLeader(name, vote) => {
+                trace!("Processing continuation as leader");
                 let _ = self.process_vote(name, vote).await;
             }
             EngraftActionAfterFutureDone::AsFollower(leader, data) => {
+                trace!("Processing continuation as follower");
                 let _ = PinnedClient::send(&self.client, &leader, data.as_ref())
                     .await;
             }
