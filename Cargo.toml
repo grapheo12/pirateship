@@ -102,7 +102,7 @@ app_sql = []
 # Protocols specs
 lucky_raft = ["fixed_leader", "never_sign", "no_qc"]
 signed_raft = ["fixed_leader", "dynamic_sign", "no_qc"]
-engraft = ["fixed_leader", "dynamic_sign", "no_qc", "extra_2pc"]
+engraft = ["fixed_leader", "never_sign", "no_qc", "extra_2pc"]
 chained_pbft = ["round_robin_leader", "always_sign", "view_change"]
 pirateship = ["round_robin_leader", "dynamic_sign", "view_change"]
 
