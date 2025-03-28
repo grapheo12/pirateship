@@ -213,7 +213,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let fork_receiver_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
 
         #[cfg(feature = "extra_2pc")]
-        let extra_2pc_client = Client::new_atomic(config.clone(), keystore.clone(), true, 15);
+        let extra_2pc_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
 
         let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
         let (batch_proposer_command_tx, batch_proposer_command_rx) = make_channel(_chan_depth);
