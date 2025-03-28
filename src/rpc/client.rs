@@ -12,8 +12,7 @@ use tokio::{
     io::{split, AsyncReadExt, AsyncWriteExt, BufWriter, ReadHalf, WriteHalf},
     net::TcpStream,
     sync::{
-        mpsc::{self, Sender, UnboundedSender},
-        Mutex, RwLock
+        mpsc::{self, Sender, UnboundedSender}, oneshot, Mutex, RwLock
     }, time::{sleep, timeout},
 };
 use std::time::Instant;
@@ -185,6 +184,7 @@ pub struct Client {
     pub tls_ca_root_cert: RootCertStore,
     pub sock_map: PinnedHashMap<String, PinnedTlsStream>,
     pub chan_map: PinnedHashMap<String, Sender<(PinnedMessage, LatencyProfile)>>,
+    pub replying_chan_map: PinnedHashMap<String, Sender<(PinnedMessage, oneshot::Sender<PinnedMessage>)>>,
     pub worker_ready: PinnedHashSet<String>,
     pub key_store: AtomicKeyStore,
     do_auth: bool,
@@ -235,6 +235,7 @@ impl Client {
             sock_map: PinnedHashMap::new(),
             do_auth: true,
             chan_map: PinnedHashMap::new(),
+            replying_chan_map: PinnedHashMap::new(),
             worker_ready: PinnedHashSet::new(),
             key_store: AtomicKeyStore::new(key_store.to_owned()),
             graveyard_tx: Mutex::new(None),
@@ -250,6 +251,7 @@ impl Client {
             sock_map: PinnedHashMap::new(),
             do_auth: true,
             chan_map: PinnedHashMap::new(),
+            replying_chan_map: PinnedHashMap::new(),
             worker_ready: PinnedHashSet::new(),
             key_store,
             graveyard_tx: Mutex::new(None),
@@ -266,6 +268,7 @@ impl Client {
             do_auth: false,
             key_store: AtomicKeyStore::new(KeyStore::empty().to_owned()),
             chan_map: PinnedHashMap::new(),
+            replying_chan_map: PinnedHashMap::new(),
             worker_ready: PinnedHashSet::new(),
             graveyard_tx: Mutex::new(None),
         }
@@ -579,7 +582,7 @@ impl PinnedClient {
         Ok(result)
     }
 
-    pub async fn broadcast_and_await_quorum_reply<'b>(
+    pub async fn broadcast_and_await_quorum_reply(
         client: &PinnedClient,
         send_list: &Vec<String>,
         data: &PinnedMessage,
@@ -587,17 +590,126 @@ impl PinnedClient {
     ) -> Result<Vec<PinnedMessage>, Error> {
         assert!(quorum <= send_list.len());
 
+        let mut need_to_spawn_workers = Vec::new();
+        for name in send_list {
+            let lworkers = client.0.worker_ready.0.read().await;
+            if !lworkers.contains(name) {
+                need_to_spawn_workers.push(name.clone());
+            }
+        }
+
+        // info!("Need to spawn workes for {:?}", need_to_spawn_workers);
+
+        for name in &need_to_spawn_workers {
+            let (tx, mut rx) = mpsc::channel(10);
+            let mut lchans = client.0.replying_chan_map.0.write().await;
+            lchans.insert(name.clone(), tx);
+
+            let _name = name.clone();
+            let _client = client.clone();
+            // Register as ready.
+            {
+                let mut lworkers = _client.0.worker_ready.0.write().await;
+                lworkers.insert(_name.clone());
+            }
+            tokio::spawn(async move {
+                // Main loop: Fetch data from channel
+                // Do reliable send
+                // If reliable send fails, die.
+
+                let mut msgs = Vec::new();
+                // let c = _client.clone();
+                let sock = loop {
+                    let s = match Self::get_sock(&_client, &_name, false).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            debug!("Broadcast worker dying for {}: {}", _name, e);
+                            continue;
+                        },
+                    };
+
+                    break s
+                };
+
+                let reply_sock = Self::get_sock(&_client, &_name, _client.0.full_duplex).await?;
+                let mut reply_sock = reply_sock.0.lock().await;
+                
+                
+                while rx.recv_many(&mut msgs, 10).await > 0 {
+                    let mut should_die = false;
+                    for (msg, reply_tx) in msgs.drain(..) {
+                        let msg_ref = msg.as_ref();
+
+                        let len = msg_ref.len() as u32;
+                        if let Err(e) = Self::send_raw(&_client, &_name, &sock, SendDataType::SizeType(len)).await {
+                            warn!("Broadcast worker for {} dying: {}", _name, e);
+                            should_die = true;
+                            break;
+                        }
+                        if let Err(e) = Self::send_raw(&_client, &_name, &sock, SendDataType::ByteType(msg_ref)).await {
+                            warn!("Broadcast worker for {} dying: {}", _name, e);
+                            should_die = true;
+                            break;
+                        }
+
+                        let _ = sock.0.lock().await.flush_write_buffer().await;
+
+                        let mut resp_buf = vec![0u8; 4096];
+                        let sz = reply_sock.get_next_frame(&mut resp_buf).await? as usize;
+                        if sz == 0 {
+                            return Err(Error::new(
+                                ErrorKind::InvalidData,
+                                "socket probably closed!",
+                            ));
+                        }
+                        
+                        let _ = reply_tx.send(PinnedMessage::from(
+                            resp_buf,
+                            sz as usize,
+                            super::SenderType::Auth(_name.clone(), _client.0.client_sub_id),
+                        ));
+                    }
+                    
+
+                    if should_die {
+                        // info!("Broadcast worker for {} dying", _name);
+                        rx.close();
+                        break;
+                    }
+                }
+
+                // Deregister as ready.
+                {
+                    let mut lworkers = _client.0.worker_ready.0.write().await;
+                    lworkers.remove(&_name);
+                }
+                Ok(())
+            });
+        }
+
+        // At this point, all name in names have a dedicated broadcast worker running.
+        let mut receivers = Vec::new();
+        {
+            let lchans = client.0.replying_chan_map.0.read().await;
+            for name in send_list {
+                let chan = lchans.get(name).unwrap();
+                let (tx, rx) = oneshot::channel();
+                if let Err(e) = chan.send((data.clone(), tx)).await {
+                    warn!("Broadcast error: {}", e);
+                }
+
+                receivers.push(rx);
+            }
+        }
+    
+        
         let mut result = Vec::new();
 
         let mut futures = FuturesUnordered::new();
-        PinnedClient::broadcast(&client, send_list, data, &mut LatencyProfile::new(), quorum).await?;
-        for name in send_list {
-            let _name = name.clone();
-            let _client = client.clone();
-            let fut = async move {
-                PinnedClient::await_reply(&_client, &_name).await
-            }.boxed();
-            futures.push(fut);
+        for rx in receivers.drain(..) {
+            futures.push(async move {
+                rx.await
+            }.boxed());
         }
 
         let (tx, rx) = make_channel(quorum);
