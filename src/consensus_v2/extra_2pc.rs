@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bytes::{BufMut as _, BytesMut};
-use log::{error, warn};
+use log::{error, info, trace, warn};
 use prost::Message;
 use tokio::sync::{Mutex, oneshot};
 
@@ -28,7 +28,8 @@ impl TwoPCCommand {
 pub struct TwoPCHandler {
     config: AtomicConfig,
     client: PinnedClient,
-    storage: StorageServiceConnector,
+    storage: Option<StorageServiceConnector>,
+    storage2: StorageServiceConnector,
 
     local_index_counter: HashMap<String, u64>,
     client_tag_counter: u64,
@@ -40,7 +41,7 @@ pub struct TwoPCHandler {
     /// So as to bypass the consensus protocol.
     /// WRITE ops will be treated as Store (aka Phase 1) commands.
     /// CUSTOM ops will be treated as ConfirmStore (aka Phase 2) commands.
-    phase_message_rx: Receiver<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)>,
+    phase_message_rx: Option<Receiver<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)>>,
 }
 
 impl TwoPCHandler {
@@ -48,15 +49,17 @@ impl TwoPCHandler {
         config: AtomicConfig,
         client: PinnedClient,
         storage: StorageServiceConnector,
+        storage2: StorageServiceConnector,
         command_rx: Receiver<TwoPCCommand>,
         phase_message_rx: Receiver<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)>,
     ) -> Self {
         Self {
             config,
             client,
-            storage,
+            storage: Some(storage),
+            storage2,
             command_rx,
-            phase_message_rx,
+            phase_message_rx: Some(phase_message_rx),
             local_index_counter: HashMap::new(),
             client_tag_counter: 0,
         }
@@ -64,19 +67,23 @@ impl TwoPCHandler {
 
     pub async fn run(twopc: Arc<Mutex<Self>>) {
         let mut twopc = twopc.lock().await;
+        let storage = twopc.storage.take().unwrap();
+        let phase_message_rx = twopc.phase_message_rx.take().unwrap();
+        tokio::spawn(async move {
+            let mut storage = storage;
+            while let Some((tx, result_sender)) = phase_message_rx.recv().await {
+                Self::handle_phase_message(&mut storage, tx, result_sender).await;
+            }
+        });
+
         loop {
             twopc.worker().await;
         }
     }
 
     async fn worker(&mut self) {
-        tokio::select! {
-            Some(command) = self.command_rx.recv() => {
-                self.handle_command(command).await;
-            }
-            Some((tx, result_sender)) = self.phase_message_rx.recv() => {
-                self.handle_phase_message(tx, result_sender).await;
-            }
+        if let Some(command) = self.command_rx.recv().await {
+            self.handle_command(command).await;
         }
     }
 
@@ -93,7 +100,7 @@ impl TwoPCHandler {
         val.put_slice(&cmd.value);
 
         // First: Store locally.
-        let ack = self.storage.put_raw(final_key_name.clone(), val.to_vec()).await;
+        let ack = self.storage2.put_raw(final_key_name.clone(), val.to_vec()).await;
         if let Err(e) = ack.await {
             error!("Failed to store value: {:?}", e);
             return;
@@ -114,10 +121,12 @@ impl TwoPCHandler {
         // Finally send the result back
         let _ = cmd.result_sender.send(_index);
 
+        trace!("2PC success for key {} index {}", cmd.key, _index);
+
         
     }
 
-    async fn handle_phase_message(&mut self, tx: ProtoTransaction, result_sender: oneshot::Sender<ProtoTransactionResult>) {
+    async fn handle_phase_message(storage: &mut StorageServiceConnector, tx: ProtoTransaction, result_sender: oneshot::Sender<ProtoTransactionResult>) {
         let mut res = ProtoTransactionResult {
             result: vec![ProtoTransactionOpResult {
                 success: false,
@@ -125,14 +134,16 @@ impl TwoPCHandler {
             }]
         };
 
+        trace!("Handling 2PC phase message: {:?}", tx);
+
         if !tx.is_2pc {
-            warn!("Transaction is not 2PC");
+            error!("Transaction is not 2PC");
             let _ = result_sender.send(res);
             return;
         }
 
         if tx.on_receive.is_none() {
-            warn!("Transaction has no on_receive phase");
+            error!("Transaction has no on_receive phase");
             let _ = result_sender.send(res);
             return;
         }
@@ -166,7 +177,7 @@ impl TwoPCHandler {
 
         match op_type {
             Some(ProtoTransactionOpType::Write) => {
-                let ack = self.storage.put_raw(key, val).await;
+                let ack = storage.put_raw(key, val).await;
                 if let Err(e) = ack.await {
                     error!("Failed to store value: {:?}", e);
                     let _ = result_sender.send(res);
@@ -176,7 +187,7 @@ impl TwoPCHandler {
                 res.result[0].success = true;
             },
             Some(ProtoTransactionOpType::Custom) => {
-                let stored_val = self.storage.get_raw(key).await;
+                let stored_val = storage.get_raw(key).await;
                 if let Err(e) = stored_val {
                     error!("Failed to get stored value: {:?}", e);
                     let _ = result_sender.send(res);
@@ -200,6 +211,7 @@ impl TwoPCHandler {
 
         }
 
+        trace!("2PC phase message success for {:?}", res);
         let _ = result_sender.send(res);
     }
 
@@ -242,10 +254,12 @@ impl TwoPCHandler {
         let msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
         let send_list = self.config.get().consensus_config.node_list.iter().filter(|n| n != &&my_name).cloned().collect();
-
+        
         // This blocks till responses from all nodes are received.
         // TODO: Change it so that it returns after majority quorum.
-        let res = PinnedClient::broadcast_and_await_reply(&self.client, &send_list, &msg).await;
+        let majority = self.config.get().consensus_config.node_list.len() / 2 + 1;
+
+        let res = PinnedClient::broadcast_and_await_quorum_reply(&self.client, &send_list, &msg, majority).await;
 
         if let Err(e) = res {
             error!("Failed to broadcast: {:?}", e);
@@ -298,7 +312,6 @@ impl TwoPCHandler {
             }
         }).filter(|x| *x).count() + 1 /* for myself */;
 
-        let majority = self.config.get().consensus_config.node_list.len() / 2 + 1;
         success_acks >= majority
     }
 }

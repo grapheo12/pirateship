@@ -41,6 +41,9 @@ struct LogStats {
     total_crash_committed_txs: u64,
     total_byz_committed_txs: u64,
     total_unlogged_txs: u64,
+
+    #[cfg(feature = "extra_2pc")]
+    total_2pc_txs: u64,
 }
 
 impl LogStats {
@@ -58,6 +61,9 @@ impl LogStats {
             total_crash_committed_txs: 0,
             total_byz_committed_txs: 0,
             total_unlogged_txs: 0,
+
+            #[cfg(feature = "extra_2pc")]
+            total_2pc_txs: 0,
         };
 
         #[cfg(not(feature = "view_change"))]
@@ -87,6 +93,11 @@ impl LogStats {
         );
 
         info!("Total unlogged txs: {}", self.total_unlogged_txs);
+
+        #[cfg(feature = "extra_2pc")]
+        {
+            info!("Total 2PC txs: {}", self.total_2pc_txs);
+        }
     }
 }
 
@@ -227,6 +238,7 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
         {
             if request.is_2pc {
                 self.twopc_tx.send((request, reply_tx)).await.unwrap();
+                self.stats.total_2pc_txs += 1;
                 return;
             }
         }

@@ -213,7 +213,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let fork_receiver_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
 
         #[cfg(feature = "extra_2pc")]
-        let extra_2pc_client = Client::new_atomic(config.clone(), keystore.clone(), true, 0);
+        let extra_2pc_client = Client::new_atomic(config.clone(), keystore.clone(), true, 15);
 
         let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
         let (batch_proposer_command_tx, batch_proposer_command_rx) = make_channel(_chan_depth);
@@ -277,7 +277,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let pacemaker = Pacemaker::new(config.clone(), pacemaker_client.into(), pacemaker_crypto, view_change_rx, pacemaker_cmd_tx, pacemaker_cmd_rx2, logserver_query_tx);
 
         #[cfg(feature = "extra_2pc")]
-        let extra_2pc = extra_2pc::TwoPCHandler::new(config.clone(), extra_2pc_client.into(), storage.get_connector(crypto.get_connector()), extra_2pc_command_rx, extra_2pc_phase_message_rx);
+        let extra_2pc = extra_2pc::TwoPCHandler::new(config.clone(), extra_2pc_client.into(), storage.get_connector(crypto.get_connector()), storage.get_connector(crypto.get_connector()), extra_2pc_command_rx, extra_2pc_phase_message_rx);
         
         let mut handles = JoinSet::new();
 

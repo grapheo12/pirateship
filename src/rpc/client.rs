@@ -579,14 +579,27 @@ impl PinnedClient {
         Ok(result)
     }
 
-    // pub async fn broadcast_and_await_quorum_reply<'b>(
-    //     client: &PinnedClient,
-    //     send_list: &Vec<String>,
-    //     data: &PinnedMessage,
-    //     quorum: usize,
-    // ) -> Result<Vec<PinnedMessage>, Error> {
-    //     Ok(vec![])
-    // }
+    pub async fn broadcast_and_await_quorum_reply<'b>(
+        client: &PinnedClient,
+        send_list: &Vec<String>,
+        data: &PinnedMessage,
+        quorum: usize,
+    ) -> Result<Vec<PinnedMessage>, Error> {
+        assert!(quorum <= send_list.len());
+
+        let mut result = Vec::new();
+
+        for i in 0..send_list.len() {
+            if i + 1 <= send_list.len() - quorum {
+                let _ = PinnedClient::send(client, &send_list[i], data.as_ref()).await?;
+            } else {
+                let res = PinnedClient::send_and_await_reply(client, &send_list[i], data.as_ref()).await?;
+                result.push(res);
+            }
+        }
+
+        Ok(result)
+    }
 
 
     pub async fn reliable_send<'b>(
