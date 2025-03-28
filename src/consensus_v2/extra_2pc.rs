@@ -106,6 +106,8 @@ impl TwoPCHandler {
             return;
         }
 
+        let _ = cmd.result_sender.send(_index);
+
         
 
         // Second: Broadcast to all nodes and collect majority acks.
@@ -119,7 +121,7 @@ impl TwoPCHandler {
         }
 
         // Finally send the result back
-        let _ = cmd.result_sender.send(_index);
+        // let _ = cmd.result_sender.send(_index);
 
         trace!("2PC success for key {} index {}", cmd.key, _index);
 
