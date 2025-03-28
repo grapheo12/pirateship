@@ -1004,7 +1004,7 @@ impl Staging {
         };
 
         // Slow path: 2-hop rule
-        let new_bci_slow_path = self
+        let mut new_bci_slow_path = self
             .pending_blocks
             .iter()
             .rev()
@@ -1013,6 +1013,23 @@ impl Staging {
             .flatten()
             .max()
             .unwrap_or(old_bci); // All such qc.n must be byz committed, so new_bci = max(all such qc.n)
+
+        #[cfg(feature = "extra_qc_check")]
+        {
+            // Extra QC check for Hotstuff
+            // new_bci_slow_path now has highest QC over QC.
+            // Check one more QC hop for all blocks <= new_bci_slow_path.
+            // This combined with no_pipeline will give maintain Hotstuff-safety.
+
+            if new_bci_slow_path > old_bci {
+                new_bci_slow_path = self.pending_blocks.iter().rev()
+                    .filter(|b| b.block.block.n <= new_bci_slow_path)
+                    .map(|b| b.block.block.qc.iter().map(|qc| qc.n))
+                    .flatten()
+                    .max()
+                    .unwrap_or(old_bci);
+            }
+        }
 
         let new_bci = new_bci_fast_path.max(new_bci_slow_path);
 

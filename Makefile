@@ -60,6 +60,10 @@ diverse_raft_logger:
 jolteon_logger:
 	CC=clang CXX=clang++ cargo build --release --features jolteon,app_logger,storage --no-default-features
 
+.PHONY: hotstuff_logger
+hotstuff_logger:
+	CC=clang CXX=clang++ cargo build --release --features hotstuff,app_logger,storage --no-default-features
+
 
 .PHONY: chained_pbft_logger
 chained_pbft_logger:
