@@ -156,7 +156,7 @@ impl TwoPCHandler {
         }
 
         let op = &ops[0];
-        if op.operands.len() != 2 {
+        if op.operands.len() < 2 {
             warn!("Transaction has invalid number of operands");
             let _ = result_sender.send(res);
             return;
@@ -228,7 +228,7 @@ impl TwoPCHandler {
             on_receive: Some(ProtoTransactionPhase {
                 ops: vec![ProtoTransactionOp {
                     op_type: op_type.into(),
-                    operands: vec![key.as_bytes().to_vec(), value.to_vec()],
+                    operands: vec![key.as_bytes().to_vec(), value.to_vec(), vec![0u8; 1024]],
                 }],
             }),
             on_crash_commit: None,
