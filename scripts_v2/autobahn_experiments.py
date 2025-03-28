@@ -487,7 +487,7 @@ def get_default_node_params(num_nodes, repeats, seconds):
         'max_batch_delay': 2,  # ms
         'use_optimistic_tips': True,
         'use_parallel_proposals': True,
-        'k': 20,
+        'k': 4,
         'use_fast_path': True,
         'fast_path_timeout': 5_00,
         'use_ride_share': False,
