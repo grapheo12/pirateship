@@ -55,27 +55,27 @@ request_config = "Blanks"
 max_concurrent_requests = 32
 
 
-[[experiments]]
-name = "signed_raft"
-repeats = 1
-num_nodes = 5
-node_distribution = "uniform"
-build_command = "make signed_raft_logger"
-duration = 60
+# [[experiments]]
+# name = "signed_raft"
+# repeats = 1
+# num_nodes = 5
+# node_distribution = "uniform"
+# build_command = "make signed_raft_logger"
+# duration = 60
 
-[experiments.sweeping_parameters]
-num_clients = [400]
+# [experiments.sweeping_parameters]
+# num_clients = [400]
 
-[[experiments]]
-name = "lucky_raft"
-repeats = 1
-num_nodes = 5
-node_distribution = "uniform"
-build_command = "make lucky_raft_logger"
-duration = 60
+# [[experiments]]
+# name = "lucky_raft"
+# repeats = 1
+# num_nodes = 5
+# node_distribution = "uniform"
+# build_command = "make lucky_raft_logger"
+# duration = 60
 
-[experiments.sweeping_parameters]
-num_clients = [400]
+# [experiments.sweeping_parameters]
+# num_clients = [400]
 
 [[experiments]]
 name = "engraft"
@@ -86,6 +86,7 @@ build_command = "make engraft_logger"
 duration = 60
 
 [experiments.sweeping_parameters]
+# num_clients = [400, 800, 1000, 1200]
 num_clients = [400]
 
 
@@ -104,8 +105,8 @@ force_parse = true
 
 [results.legends]
 # Experiment group to legend mapping
-signed_raft = "signed_raft"
-lucky_raft = "lucky_raft"
+# signed_raft = "signed_raft"
+# lucky_raft = "raft"
 engraft = "engraft+byz"
 
 [results.font]

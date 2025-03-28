@@ -673,7 +673,8 @@ impl Staging {
             self.maybe_byzantine_commit(qc).await?;
         }
 
-        #[cfg(all(feature = "no_qc", not(feature = "extra_2pc")))]
+        // #[cfg(all(feature = "no_qc", not(feature = "extra_2pc")))]
+        #[cfg(feature = "no_qc")]
         {
             if this_is_final_block && self.ci > 100 { // I don't know why just self.ci doesn't work.
                                                       // But this seems to work somehow.

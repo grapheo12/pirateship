@@ -253,7 +253,12 @@ impl TwoPCHandler {
 
         let msg = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
-        let send_list = self.config.get().consensus_config.node_list.iter().filter(|n| n != &&my_name).cloned().collect();
+        let send_list = self.config.get()
+            .consensus_config.node_list.iter()
+            .filter(|n| n != &&my_name)
+            .cloned().collect::<Vec<_>>();
+        
+        // send_list.truncate(1);
         
         // This blocks till responses from all nodes are received.
         // TODO: Change it so that it returns after majority quorum.
@@ -266,9 +271,11 @@ impl TwoPCHandler {
             error!("Failed to broadcast: {:?}", e);
             return false;
         }
+        let res = res.unwrap();
+        // let res = Vec::<PinnedMessage>::new();
 
         // Count success acks.
-        let success_acks = res.unwrap().iter().map(|msg| {
+        let success_acks = res.iter().map(|msg| {
             let sz = msg.as_ref().1;
             let payload = ProtoClientReply::decode(&msg.as_ref().0.as_slice()[..sz]);
             if let Err(payload) = payload {

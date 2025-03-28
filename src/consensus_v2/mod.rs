@@ -252,9 +252,9 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let pacemaker_crypto = crypto.get_connector();
 
         #[cfg(feature = "extra_2pc")]
-        let (extra_2pc_command_tx, extra_2pc_command_rx) = make_channel(_chan_depth);
+        let (extra_2pc_command_tx, extra_2pc_command_rx) = make_channel(10 * _chan_depth);
         #[cfg(feature = "extra_2pc")]
-        let (extra_2pc_phase_message_tx, extra_2pc_phase_message_rx) = make_channel(_chan_depth);
+        let (extra_2pc_phase_message_tx, extra_2pc_phase_message_rx) = make_channel(10 * _chan_depth);
 
 
         let ctx = PinnedConsensusServerContext::new(config.clone(), keystore.clone(), batch_proposer_tx, fork_tx, fork_receiver_command_tx.clone(), vote_tx, view_change_tx, backfill_request_tx);

@@ -590,12 +590,12 @@ impl PinnedClient {
         let mut result = Vec::new();
 
         let mut futures = FuturesUnordered::new();
+        PinnedClient::broadcast(&client, send_list, data, &mut LatencyProfile::new(), quorum).await?;
         for name in send_list {
             let _name = name.clone();
             let _client = client.clone();
-            let _data = data.clone();
             let fut = async move {
-                PinnedClient::send_and_await_reply(&_client, &_name, _data.as_ref()).await
+                PinnedClient::await_reply(&_client, &_name).await
             }.boxed();
             futures.push(fut);
         }
