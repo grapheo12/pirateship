@@ -7,12 +7,14 @@ use itertools::min;
 use log::{info, trace, warn};
 use prost::Message;
 use rand::{thread_rng, Rng};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 use tokio::{sync::{mpsc::{channel, Receiver, Sender}, oneshot}, task::JoinSet};
 
 use crate::{config::AtomicConfig, consensus_v2::fork_receiver::{AppendEntriesStats, MultipartFork}, crypto::{default_hash, DIGEST_LENGTH}, proto::consensus::{HalfSerializedBlock, ProtoBlock, ProtoQuorumCertificate, ProtoViewChange}, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser, PerfCounter}};
 
 use super::{hash, AtomicKeyStore, HashType, KeyStore};
+
+type Sha = Sha512;
 
 #[derive(Clone, Debug)]
 pub struct __CachedBlock {
@@ -60,7 +62,7 @@ impl FutureHash {
 }
 
 pub fn hash_proto_block_ser(data: &[u8]) -> HashType {
-    let mut hasher = Sha256::new();
+    let mut hasher = Sha::new();
     hasher.update(&data[DIGEST_LENGTH+SIGNATURE_LENGTH..]);
     hasher.update(&data[SIGNATURE_LENGTH..SIGNATURE_LENGTH+DIGEST_LENGTH]);
     hasher.update(&data[..SIGNATURE_LENGTH]);
@@ -231,7 +233,7 @@ impl CryptoService {
                     let mut buf = serialize_proto_block_nascent(&proto_block).unwrap();
                     perf_event!();
 
-                    let mut hasher = Sha256::new();
+                    let mut hasher = Sha::new();
                     hasher.update(&buf[DIGEST_LENGTH+SIGNATURE_LENGTH..]);
                     perf_event!();
 
