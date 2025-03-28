@@ -423,7 +423,7 @@ View public key
 curl -X GET "http://localhost:8080/pubkey" -H "Content-Type: application/json" -d '{"username":"teddy"}'
 
 View private key
-// curl -X GET "http://localhost:8080/privkey" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"hi"}'
+curl -X GET "http://localhost:8080/privkey" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"hi"}'
 
 Create second user
 curl -X GET "http://localhost:8080/register" -H "Content-Type: application/json" -d '{"username":"teddy2", "password":"hi"}'
