@@ -1,7 +1,7 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}};
+use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, utils::channel::make_channel};
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt, TryFutureExt};
 use log::{debug, info, trace, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
@@ -589,13 +589,38 @@ impl PinnedClient {
 
         let mut result = Vec::new();
 
-        for i in 0..send_list.len() {
-            if i + 1 <= send_list.len() - quorum {
-                let _ = PinnedClient::send(client, &send_list[i], data.as_ref()).await?;
-            } else {
-                let res = PinnedClient::send_and_await_reply(client, &send_list[i], data.as_ref()).await?;
-                result.push(res);
+        let mut futures = FuturesUnordered::new();
+        for name in send_list {
+            let _name = name.clone();
+            let _client = client.clone();
+            let _data = data.clone();
+            let fut = async move {
+                PinnedClient::send_and_await_reply(&_client, &_name, _data.as_ref()).await
+            }.boxed();
+            futures.push(fut);
+        }
+
+        let (tx, rx) = make_channel(quorum);
+
+        tokio::spawn(async move {
+            let mut count = 0;
+            while let Some(res) = futures.next().await {
+                match res {
+                    Ok(res) => {
+                        if count < quorum {
+                            tx.send(res).await.unwrap();
+                        }
+                        count += 1;
+                    }
+                    Err(e) => {
+                        warn!("Error in broadcast_and_await_quorum_reply: {}", e);
+                    }
+                }
             }
+        });
+
+        while let Some(res) = rx.recv().await {
+            result.push(res);
         }
 
         Ok(result)

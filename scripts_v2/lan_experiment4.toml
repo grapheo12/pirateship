@@ -106,7 +106,7 @@ force_parse = true
 # Experiment group to legend mapping
 signed_raft = "signed_raft"
 lucky_raft = "lucky_raft"
-engraft = "engraft+onlybyz"
+engraft = "engraft+byz"
 
 [results.font]
 size = 55

@@ -260,7 +260,7 @@ impl TwoPCHandler {
         let n = self.config.get().consensus_config.node_list.len();
         let majority = n / 2 + 1;
 
-        let res = PinnedClient::broadcast_and_await_quorum_reply(&self.client, &send_list, &msg, n - 1).await;
+        let res = PinnedClient::broadcast_and_await_quorum_reply(&self.client, &send_list, &msg, majority - 1).await;
 
         if let Err(e) = res {
             error!("Failed to broadcast: {:?}", e);
