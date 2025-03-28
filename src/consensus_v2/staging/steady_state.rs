@@ -264,7 +264,9 @@ impl Staging {
             self.two_pc_command_tx.send(raft_meta_2pc_cmd).await.unwrap();
             self.two_pc_command_tx.send(log_meta_2pc_cmd).await.unwrap();
 
-            self.pending_2pc_results.push_back(EngraftTwoPCFuture::new(_vote_n, raft_meta_2pc_res, log_meta_2pc_res));
+            // self.pending_2pc_results.push_back(
+                EngraftTwoPCFuture::new(_vote_n, raft_meta_2pc_res, log_meta_2pc_res).wait().await;
+            // );
             
         }
 
@@ -364,7 +366,9 @@ impl Staging {
             self.two_pc_command_tx.send(raft_meta_2pc_cmd).await.unwrap();
             self.two_pc_command_tx.send(log_meta_2pc_cmd).await.unwrap();
 
-            self.pending_2pc_results.push_back(EngraftTwoPCFuture::new(_vote_n, raft_meta_2pc_res, log_meta_2pc_res));
+            // self.pending_2pc_results.push_back(
+                EngraftTwoPCFuture::new(_vote_n, raft_meta_2pc_res, log_meta_2pc_res).wait().await;
+            // );
             
         }
 

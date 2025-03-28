@@ -106,7 +106,7 @@ impl TwoPCHandler {
             return;
         }
 
-        let _ = cmd.result_sender.send(_index);
+        // let _ = cmd.result_sender.send(_index);
 
         
 
@@ -121,7 +121,7 @@ impl TwoPCHandler {
         }
 
         // Finally send the result back
-        // let _ = cmd.result_sender.send(_index);
+        let _ = cmd.result_sender.send(_index);
 
         trace!("2PC success for key {} index {}", cmd.key, _index);
 
@@ -357,6 +357,28 @@ impl EngraftTwoPCFuture {
 
         if self.log_meta_received_val.is_none() {
             match self.log_meta_res_rx.try_recv() {
+                Ok(val) => {
+                    self.log_meta_received_val = Some(val);
+                },
+                _ => {}
+            };
+        }
+
+        self.raft_meta_received_val.is_some() && self.log_meta_received_val.is_some()
+    }
+
+    pub async fn wait(mut self) -> bool {
+        if self.raft_meta_received_val.is_none() {
+            match self.raft_meta_res_rx.await {
+                Ok(val) => {
+                    self.raft_meta_received_val = Some(val);
+                },
+                _ => {}
+            };
+        }
+
+        if self.log_meta_received_val.is_none() {
+            match self.log_meta_res_rx.await {
                 Ok(val) => {
                     self.log_meta_received_val = Some(val);
                 },
