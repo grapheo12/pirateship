@@ -466,7 +466,7 @@ def get_default_node_params(num_nodes, repeats, seconds):
         'workers': 1,
         'co-locate': True,
         'rate': [1_000] * repeats,
-        'tx_size': 1024,
+        'tx_size': 512,
         'duration': seconds,
         'runs': repeats,
 
@@ -784,7 +784,7 @@ sleep {self.duration}
 echo -n $PID | xargs -d' ' -I{{}} kill -2 {{}} || true
 echo -n $PID | xargs -d' ' -I{{}} kill -15 {{}} || true
 echo -n $PID | xargs -d' ' -I{{}} kill -9 {{}} || true
-sleep 10
+sleep 3
 
 # Kill the binaries in SSHed VMs as well. Calling SIGKILL on the local SSH process might have left them orphaned.
 # Make sure not to kill the tmux server.
@@ -805,7 +805,7 @@ $SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_n
 """
                 
             _script += f"""
-sleep 10
+sleep 2
 """
                 
             # pkill -9 -c server also kills tmux-server. So we can't run a server on the dev VM.
