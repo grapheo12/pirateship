@@ -24,7 +24,7 @@ liveness_u = 2
 max_backlog_batch_size = 1000
 signature_max_delay_blocks = 50
 signature_max_delay_ms = 102 # roughly batch_max_delay_ms * signature_max_delay_blocks
-num_crypto_workers = 5
+num_crypto_workers = 3
 view_timeout_ms = 4000
 batch_max_delay_ms = 2
 
@@ -66,16 +66,16 @@ max_concurrent_requests = 32
 # [experiments.sweeping_parameters]
 # num_clients = [400]
 
-# [[experiments]]
-# name = "lucky_raft"
-# repeats = 1
-# num_nodes = 5
-# node_distribution = "uniform"
-# build_command = "make lucky_raft_logger"
-# duration = 60
+[[experiments]]
+name = "lucky_raft"
+repeats = 1
+num_nodes = 5
+node_distribution = "uniform"
+build_command = "make lucky_raft_logger"
+duration = 60
 
-# [experiments.sweeping_parameters]
-# num_clients = [400]
+[experiments.sweeping_parameters]
+num_clients = [400]
 
 [[experiments]]
 name = "engraft"
