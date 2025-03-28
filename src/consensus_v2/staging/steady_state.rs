@@ -4,10 +4,10 @@ use bytes::{BufMut as _, BytesMut};
 use futures::future::try_join_all;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, task::spawn_local};
 
 use crate::{
-    consensus_v2::{extra_2pc::{EngraftTwoPCFuture, TwoPCCommand}, logserver::LogServerCommand, pacemaker::PacemakerCommand}, crypto::{CachedBlock, DIGEST_LENGTH}, proto::{
+    consensus_v2::{extra_2pc::{EngraftActionAfterFutureDone, EngraftTwoPCFuture, TwoPCCommand}, logserver::LogServerCommand, pacemaker::PacemakerCommand}, crypto::{CachedBlock, DIGEST_LENGTH}, proto::{
         consensus::{
             proto_block::Sig, ProtoNameWithSignature, ProtoQuorumCertificate,
             ProtoSignatureArrayEntry, ProtoVote,
@@ -242,7 +242,6 @@ impl Staging {
 
         self.perf_add_event(&last_block.block, "Vote to Self");
 
-        let res = self.process_vote(name, vote).await;
 
 
         #[cfg(feature = "extra_2pc")]
@@ -264,13 +263,24 @@ impl Staging {
             self.two_pc_command_tx.send(raft_meta_2pc_cmd).await.unwrap();
             self.two_pc_command_tx.send(log_meta_2pc_cmd).await.unwrap();
 
-            // self.pending_2pc_results.push_back(
-                EngraftTwoPCFuture::new(_vote_n, raft_meta_2pc_res, log_meta_2pc_res).wait().await;
-            // );
+            self.engraft_2pc_futures.push_back(
+                EngraftTwoPCFuture::new(
+                    _vote_n, raft_meta_2pc_res, log_meta_2pc_res,
+                    EngraftActionAfterFutureDone::AsLeader(name, vote)
+                )
+            );
+
+            Ok(())
             
         }
 
-        res
+        #[cfg(not(feature = "extra_2pc"))]
+        {
+            let res = self.process_vote(name, vote).await;
+            res
+        }
+
+
     }
 
     async fn send_vote_on_last_block_to_leader(
@@ -357,20 +367,26 @@ impl Staging {
             self.two_pc_command_tx.send(raft_meta_2pc_cmd).await.unwrap();
             self.two_pc_command_tx.send(log_meta_2pc_cmd).await.unwrap();
 
-            // self.pending_2pc_results.push_back(
-                EngraftTwoPCFuture::new(_vote_n, raft_meta_2pc_res, log_meta_2pc_res).wait().await;
-            // );
+            self.engraft_2pc_futures.push_back(
+                EngraftTwoPCFuture::new(
+                    _vote_n, raft_meta_2pc_res, log_meta_2pc_res,
+                    EngraftActionAfterFutureDone::AsFollower(leader, data)
+                )
+            );
             
         }
 
-        let _ = PinnedClient::send(&self.client, &leader, data.as_ref())
-            .await;
-            // .unwrap();
-
-        if last_block.block.block.view_is_stable {
-            trace!("Sent vote to {} for {}", leader, last_block.block.block.n);
-        } else {
-            info!("Sent vote to {} for {}", leader, last_block.block.block.n);
+        #[cfg(not(feature = "extra_2pc"))]
+        {
+            let _ = PinnedClient::send(&self.client, &leader, data.as_ref())
+                .await;
+                // .unwrap();
+    
+            if last_block.block.block.view_is_stable {
+                trace!("Sent vote to {} for {}", leader, last_block.block.block.n);
+            } else {
+                info!("Sent vote to {} for {}", leader, last_block.block.block.n);
+            }
         }
 
 
@@ -1041,5 +1057,19 @@ impl Staging {
         self.pending_signatures.retain(|(_n, _)| *_n <= n);
         self.app_tx.send(AppCommand::Rollback(n)).await.unwrap();
         self.logserver_tx.send(LogServerCommand::Rollback(n)).await.unwrap();
+    }
+
+    pub(crate) async fn process_2pc_result(&mut self, cmd: EngraftActionAfterFutureDone) -> Result<(), ()> {
+        match cmd {
+            EngraftActionAfterFutureDone::AsLeader(name, vote) => {
+                let _ = self.process_vote(name, vote).await;
+            }
+            EngraftActionAfterFutureDone::AsFollower(leader, data) => {
+                let _ = PinnedClient::send(&self.client, &leader, data.as_ref())
+                    .await;
+            }
+        }
+        
+        Ok(())
     }
 }

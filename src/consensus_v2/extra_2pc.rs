@@ -1,11 +1,11 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, future::Future, sync::Arc};
 
 use bytes::{BufMut as _, BytesMut};
 use log::{error, info, trace, warn};
 use prost::Message;
 use tokio::sync::{Mutex, oneshot};
 
-use crate::{config::AtomicConfig, proto::{client::{ProtoClientReply, ProtoClientRequest}, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}, rpc::ProtoPayload}, rpc::{client::PinnedClient, PinnedMessage}, utils::{channel::{Receiver, Sender}, StorageServiceConnector}};
+use crate::{config::AtomicConfig, proto::{client::{ProtoClientReply, ProtoClientRequest}, consensus::ProtoVote, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}, rpc::ProtoPayload}, rpc::{client::PinnedClient, PinnedMessage}, utils::{channel::{Receiver, Sender}, StorageServiceConnector}};
 
 pub struct TwoPCCommand {
     key: String,
@@ -326,22 +326,29 @@ impl TwoPCHandler {
     }
 }
 
+
+pub enum EngraftActionAfterFutureDone {
+    AsLeader(String, ProtoVote),
+    AsFollower(String, PinnedMessage),
+}
 pub struct EngraftTwoPCFuture {
     pub block_n: u64,
     pub raft_meta_res_rx: oneshot::Receiver<u64>,
     pub log_meta_res_rx: oneshot::Receiver<u64>,
     pub raft_meta_received_val: Option<u64>,
     pub log_meta_received_val: Option<u64>,
+    pub action: Option<EngraftActionAfterFutureDone>,
 }
 
 impl EngraftTwoPCFuture {
-    pub fn new(block_n: u64, raft_meta_res_rx: oneshot::Receiver<u64>, log_meta_res_rx: oneshot::Receiver<u64>) -> Self {
+    pub fn new(block_n: u64, raft_meta_res_rx: oneshot::Receiver<u64>, log_meta_res_rx: oneshot::Receiver<u64>, action: EngraftActionAfterFutureDone) -> Self {
         Self {
             block_n,
             raft_meta_res_rx,
             log_meta_res_rx,
             raft_meta_received_val: None,
             log_meta_received_val: None,
+            action: Some(action),
         }
     }
 
@@ -387,5 +394,17 @@ impl EngraftTwoPCFuture {
         }
 
         self.raft_meta_received_val.is_some() && self.log_meta_received_val.is_some()
+    }
+}
+
+impl Future for EngraftTwoPCFuture {
+    type Output = EngraftActionAfterFutureDone;
+
+    fn poll(mut self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        if self.is_ready() {
+            std::task::Poll::Ready(self.action.take().unwrap())
+        } else {
+            std::task::Poll::Pending
+        }
     }
 }

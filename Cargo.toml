@@ -106,8 +106,8 @@ engraft = ["fixed_leader", "never_sign", "no_qc", "extra_2pc"]
 chained_pbft = ["round_robin_leader", "always_sign", "view_change"]
 pirateship = ["round_robin_leader", "dynamic_sign", "view_change"]
 
-default = ["pirateship", "app_logger", "storage", "fast_path", "platforms"]
-# default = ["engraft", "app_kvs", "storage", "fast_path", "platforms"]
+# default = ["pirateship", "app_logger", "storage", "fast_path", "platforms"]
+default = ["engraft", "app_kvs", "storage", "fast_path", "platforms"]
 
 
 [profile.release]

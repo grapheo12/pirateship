@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, io::Error, pin::Pin, sync::Arc, time::Duration};
 
-use futures::{future::BoxFuture, stream::FuturesOrdered};
+use futures::{future::BoxFuture, stream::FuturesOrdered, StreamExt as _};
 use log::{debug, info, trace, warn};
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
@@ -75,6 +75,8 @@ pub struct Staging {
 
     #[cfg(feature = "extra_2pc")]
     two_pc_command_tx: Sender<TwoPCCommand>,
+
+    engraft_2pc_futures: FuturesOrdered<EngraftTwoPCFuture>,
 }
 
 impl Staging {
@@ -158,6 +160,8 @@ impl Staging {
 
             #[cfg(feature = "extra_2pc")]
             two_pc_command_tx,
+
+            engraft_2pc_futures: FuturesOrdered::new(),
         };
 
         #[cfg(not(feature = "view_change"))]
@@ -232,7 +236,19 @@ impl Staging {
                 }
                 let cmd = cmd.unwrap();
                 self.process_view_change_message(cmd).await?;
-            }
+            },
+
+            two_pc_fut = self.engraft_2pc_futures.next() => {
+                if two_pc_fut.is_none() {
+                    return Err(())
+                }
+                let cmd = two_pc_fut.unwrap();
+
+                #[cfg(feature = "extra_2pc")]
+                {
+                    self.process_2pc_result(cmd).await?;
+                }
+            },
         }
 
         Ok(())
