@@ -482,7 +482,7 @@ def get_default_node_params(num_nodes, repeats, seconds):
         'sync_retry_delay': 1_000,  # ms
         'sync_retry_nodes': 4,  # number of nodes
         'batch_size': 500_000,  # bytes
-        'max_batch_delay': 2,  # ms
+        'max_batch_delay': 50,  # ms
         'use_optimistic_tips': False,
         'use_parallel_proposals': True,
         'k': 4,
