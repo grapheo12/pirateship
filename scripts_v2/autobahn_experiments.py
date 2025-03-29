@@ -461,41 +461,46 @@ class RemoteCommittee(Committee):
 
 def get_default_node_params(num_nodes, repeats, seconds):
     bench_params = {
-        'faults': 0,
-        'nodes': [num_nodes] * repeats,
+        'faults': 0, 
+        'nodes': 4,
         'workers': 1,
-        'co-locate': True,
-        'rate': [1_000] * repeats,
+        'rate': 50_000,
         'tx_size': 512,
-        'duration': seconds,
-        'runs': repeats,
+        'duration': 20,
 
         # Unused
-        'simulate_partition': True,
+        'simulate_partition': False,
         'partition_start': 5,
         'partition_duration': 5,
         'partition_nodes': 1,
     }
     node_params = {
-        'timeout_delay': 5_000,  # ms
+        'timeout_delay': 1_000,  # ms
         'header_size': 32,  # bytes
-        'max_header_delay': 5_000,  # ms
+        'max_header_delay': 200,  # ms
         'gc_depth': 50,  # rounds
-        'sync_retry_delay': 5_000,  # ms
-        'sync_retry_nodes': 6,  # number of nodes
+        'sync_retry_delay': 1_000,  # ms
+        'sync_retry_nodes': 4,  # number of nodes
         'batch_size': 500_000,  # bytes
         'max_batch_delay': 2,  # ms
-        'use_optimistic_tips': True,
+        'use_optimistic_tips': False,
         'use_parallel_proposals': True,
         'k': 4,
         'use_fast_path': True,
-        'fast_path_timeout': 5_000,
+        'fast_path_timeout': 200,
         'use_ride_share': False,
-        'car_timeout': 5_000,
+        'car_timeout': 2000,
 
         'simulate_asynchrony': False,
-        'asynchrony_start': 15_000, #ms
-        'asynchrony_duration': 3_000, #ms
+        'asynchrony_type': [],
+
+        'asynchrony_start': [], #ms
+        'asynchrony_duration': [], #ms
+        'affected_nodes': [],
+        'egress_penalty': 0, #ms
+
+        'use_fast_sync': True,
+        'use_exponential_timeouts': True,
     }
 
     return bench_params, node_params
