@@ -1,4 +1,4 @@
-use actix_web::{put, get, web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
 use bitcode::decode;
 use crossbeam::deque::Worker;
 use ed25519_dalek::pkcs8::spki::der::asn1::SetOfVec;
@@ -32,7 +32,7 @@ struct AppState {
 }
 
 
-#[get ("/register")]
+#[post ("/register")]
 async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
     let username = payload.username.clone();
     let password = payload.password.clone();
@@ -106,7 +106,7 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
 // GET /pubkey → Retrieves a public key by kid.
 // GET /listpubkeys → Lists all public keys.
 
-#[put("/refresh")]
+#[post ("/refresh")]
 async fn refresh(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
     let client = &data.client;
     let mut csprng = rand::rngs::OsRng;
@@ -414,10 +414,10 @@ async fn authenticate_user(username: String, password: String, client:&Arc<Pinne
 // Example
 /*
 Register User
-curl -X GET "http://localhost:8080/register" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"hi"}'
+curl -X POST "http://localhost:8080/register" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"hi"}'
 
 Create key value pair
-curl -X PUT "http://localhost:8080/refresh" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"hi"}'
+curl -X POST "http://localhost:8080/refresh" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"hi"}'
 
 View public key
 curl -X GET "http://localhost:8080/pubkey" -H "Content-Type: application/json" -d '{"username":"teddy"}'
@@ -429,7 +429,7 @@ Create second user
 curl -X GET "http://localhost:8080/register" -H "Content-Type: application/json" -d '{"username":"teddy2", "password":"hi"}'
 
 Create second user's key
-curl -X PUT "http://localhost:8080/refresh" -H "Content-Type: application/json" -d '{"username":"teddy2", "password":"hi"}'
+curl -X POST "http://localhost:8080/refresh" -H "Content-Type: application/json" -d '{"username":"teddy2", "password":"hi"}'
 
 List all public keys
 curl -X GET "http://localhost:8080/listpubkeys" -H "Content-Type: application/json"
