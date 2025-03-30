@@ -50,7 +50,7 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
     }; //add client tag
 
    if !result.is_empty() {
-    return HttpResponse::Ok().json(serde_json::json!({
+    return HttpResponse::Conflict().json(serde_json::json!({
         "message": "username already exists",
     }))
    }
@@ -374,7 +374,7 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client_tag: u64, client:
             }
         },
         _ => {
-            return Err(HttpResponse::Ok().json(serde_json::json!({
+            return Err(HttpResponse::NotFound().json(serde_json::json!({
                 "message": "error, no Receipt found",
                 "result": result,
             })))
@@ -395,7 +395,7 @@ async fn authenticate_user(username: String, password: String, client:&Arc<Pinne
     }; //add client tag
 
     if result.is_empty() {
-        return Err(HttpResponse::Ok().json(serde_json::json!({
+        return Err(HttpResponse::NotFound().json(serde_json::json!({
             "message": "username does not exist",
             "user": username,
         })))
@@ -403,7 +403,7 @@ async fn authenticate_user(username: String, password: String, client:&Arc<Pinne
         
     //check hash(password) matches
     if hash(&password.clone().into_bytes()) != result {
-        return Err(HttpResponse::Ok().json(serde_json::json!({
+        return Err(HttpResponse::Unauthorized().json(serde_json::json!({
             "message": "incorrect password",
             "user": username,
         })));
