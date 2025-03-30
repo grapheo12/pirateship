@@ -462,17 +462,17 @@ class RemoteCommittee(Committee):
 def get_default_node_params(num_nodes, repeats, seconds):
     bench_params = {
         'faults': 0, 
-        'nodes': 4,
+        'nodes': num_nodes,
         'workers': 1,
-        'rate': 50_000,
+        'rate': 200_000,
         'tx_size': 512,
-        'duration': 20,
+        'duration': seconds,
 
         # Unused
         'simulate_partition': False,
-        'partition_start': 5,
-        'partition_duration': 5,
-        'partition_nodes': 1,
+        'partition_start': seconds + 100,
+        'partition_duration': 0,
+        'partition_nodes': 0,
     }
     node_params = {
         'timeout_delay': 1_000,  # ms
@@ -482,7 +482,7 @@ def get_default_node_params(num_nodes, repeats, seconds):
         'sync_retry_delay': 1_000,  # ms
         'sync_retry_nodes': 4,  # number of nodes
         'batch_size': 500_000,  # bytes
-        'max_batch_delay': 50,  # ms
+        'max_batch_delay': 2,  # ms
         'use_optimistic_tips': False,
         'use_parallel_proposals': True,
         'k': 1,
@@ -789,7 +789,7 @@ sleep {self.duration}
 echo -n $PID | xargs -d' ' -I{{}} kill -2 {{}} || true
 echo -n $PID | xargs -d' ' -I{{}} kill -15 {{}} || true
 echo -n $PID | xargs -d' ' -I{{}} kill -9 {{}} || true
-sleep 3
+sleep 10
 
 # Kill the binaries in SSHed VMs as well. Calling SIGKILL on the local SSH process might have left them orphaned.
 # Make sure not to kill the tmux server.
