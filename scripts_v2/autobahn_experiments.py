@@ -668,7 +668,7 @@ class AutobahnExperiment(Experiment):
             client_vms = deployment.get_all_client_vms_in_region(self.client_region)
 
         total_nodes = self.num_nodes
-        clients_per_node = self.num_clients
+        clients_per_node = self.num_clients // total_nodes
         num_clients_per_vm = [clients_per_node // len(client_vms) for _ in range(len(client_vms))]
         num_clients_per_vm[-1] += (clients_per_node - sum(num_clients_per_vm))
 

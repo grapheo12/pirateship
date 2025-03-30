@@ -92,6 +92,8 @@ class LogParser:
 
         tmp = findall(r'Client latency: (\d+) ms', log)
         client_latencies = [int(x) for x in tmp]
+        if len(client_latencies) == 0:
+            client_latencies = [0]
 
         return size, rate, start, misses, samples, client_latencies
 
@@ -167,9 +169,9 @@ class LogParser:
         return tps, bps, duration
 
     def _consensus_latency(self):
-        return 0
-        # latency = [c - self.proposals[d] for d, c in self.commits.items()]
-        # return mean(latency) if latency else 0
+        # return 0
+        latency = [c - self.proposals[d] for d, c in self.commits.items()]
+        return mean(latency) if latency else 0
 
     def _end_to_end_throughput(self):
         if not self.commits:
@@ -182,7 +184,7 @@ class LogParser:
         return tps, bps, duration
 
     def _end_to_end_latency(self):
-        return 0
+        # return 0
         latency = []
         list_latencies = []
         first_start = 0
@@ -263,7 +265,7 @@ class LogParser:
             f' End-to-end BPS: {round(end_to_end_bps):,} B/s\n'
             f' End-to-end latency: {round(end_to_end_latency):,} ms\n'
             '\n'
-            f' Client latency: {round(client_latency):,} ms\n'
+            f' Client latency: {round(end_to_end_latency):,} ms\n'
             '-----------------------------------------\n'
         )
 
