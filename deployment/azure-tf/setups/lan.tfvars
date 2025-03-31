@@ -1,4 +1,4 @@
-platform_locations = ["centralus"]
+platform_locations = ["eastus2"]
 sevpool_count = [0]
 tdxpool_count = [7]
 nonteepool_count = [0]
