@@ -1,8 +1,10 @@
 from locust import HttpUser, task, between, events
 import requests, time
 
+#queue storing usernames
 usernames = []
-#this is synchronous with the load test.
+
+#setup phase -- this is synchronous with the load test.
 @events.test_start.add_listener 
 def on_test_start(environment):
 
@@ -19,24 +21,21 @@ def on_test_start(environment):
             f"{host}/register",
             json={"username": username, "password": password}
         )
-
-
         response = requests.post(
             f"{host}/refresh",
             json={"username": username, "password": password}
         )
-    
-
+    print("USERNAMES" , usernames)
 
 class testClass(HttpUser):
-    users = []
     user_id = 0
     wait_time = between(1, 5)
 
     def on_start(self):
-        self.username = usernames.pop(0)
+        self.username = usernames.pop(0) #client consumes from username queue to be assigned a username
         self.password = "pirateship"
-          
+
+    #run phase 
     @task
     def task1(self):
         self.client.get("/pubkey", json={"username": self.username})
