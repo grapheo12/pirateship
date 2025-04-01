@@ -8,6 +8,7 @@ use log::{debug, warn};
 use nix::libc::passwd;
 use prost::Message;
 use serde::Deserialize;
+use sha2::digest::typenum::Integer;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::time::Instant;
@@ -26,9 +27,10 @@ use ed25519_dalek::{ed25519, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SigningKey, S
 #[derive(Clone)]
 struct AppState {
     client: Arc<PinnedClient>,
-    node_list: Vec<String>, //make into reference?
+    node_list: Vec<String>,
     curr_leader_id: Arc<Mutex<usize>>,
-    curr_round_robin_id: Arc<Mutex<usize>>
+    curr_round_robin_id: Arc<Mutex<usize>>,
+    curr_client_tag:  Arc<Mutex<usize>>
 }
 
 
@@ -37,6 +39,7 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
     let username = payload.username.clone();
     let password = payload.password.clone();
     let client = &data.client;
+    let client_tag = &data.curr_client_tag;
 
     //query kms for username
     let transaction_op = ProtoTransactionOp {
@@ -44,7 +47,7 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
         operands: vec![username.clone().into_bytes()],
     }; 
 
-    let result = match send(vec![transaction_op], 0, client).await {
+    let result = match send(vec![transaction_op], client, &data.curr_client_tag).await {
         Ok(response) => response,
         Err(e) => return e
     }; //add client tag
@@ -60,7 +63,7 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
         operands: vec![username.clone().into_bytes(), hash(&password.clone().into_bytes())],
     };
 
-    let create_user_result = match send(vec![create_user_op], 0, client).await {
+    let create_user_result = match send(vec![create_user_op], client, &data.curr_client_tag).await {
         Ok(response) => response,
         Err(e) => return e
     }; //add client tag
@@ -71,7 +74,7 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
         operands: vec!["user".as_bytes().to_vec()],
     };
 
-    let get_user_result = match send(vec![get_user_op], 0, client).await {
+    let get_user_result = match send(vec![get_user_op], client, &data.curr_client_tag).await {
         Ok(response) => response,
         Err(e) => return e
     }; //add client tag
@@ -89,7 +92,7 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
         operands: vec!["user".as_bytes().to_vec(), serialized_users],
     };
 
-    let update_users_result = match send(vec![update_users_op], 0, client).await {
+    let update_users_result = match send(vec![update_users_op], client, &data.curr_client_tag).await {
         Ok(response) => response,
         Err(e) => return e
     }; //add client tag
@@ -112,7 +115,7 @@ async fn refresh(payload: web::Json<RegisterPayload>, data: web::Data<AppState>)
     let mut csprng = rand::rngs::OsRng;
     let signing_key: SigningKey = SigningKey::generate(&mut csprng);
 
-    match authenticate_user(payload.username.clone(), payload.password.clone(), client).await {
+    match authenticate_user(payload.username.clone(), payload.password.clone(), client,  &data.curr_client_tag).await {
         Ok(valid) => valid,
         Err(e) => return e
     };
@@ -137,7 +140,7 @@ async fn refresh(payload: web::Json<RegisterPayload>, data: web::Data<AppState>)
         operands: vec![priv_insert_key.into_bytes(), private_key.to_vec()],
     };
 
-    let result = match send(vec![write_pub_key_op, write_priv_key_op], 0, client).await {
+    let result = match send(vec![write_pub_key_op, write_priv_key_op], client, &data.curr_client_tag).await {
         Ok(response) => response,
         Err(e) => return e
     }; //add client tag
@@ -159,7 +162,7 @@ async fn listpubkeys(data: web::Data<AppState>) -> impl Responder {
         operands: vec!["user".as_bytes().to_vec()],
     };
 
-    let get_user_result = match send(vec![get_user_op], 0, client).await {
+    let get_user_result = match send(vec![get_user_op],client, &data.curr_client_tag).await {
         Ok(response) => response,
         Err(e) => return e
     }; //add client tag
@@ -184,7 +187,7 @@ async fn listpubkeys(data: web::Data<AppState>) -> impl Responder {
     
     let mut public_keys = Vec::new();
     for op in user_ops {
-        let user_public_key_result = match send(vec![op], 0, client).await {
+        let user_public_key_result = match send(vec![op], client, &data.curr_client_tag).await {
             Ok(response) => response,
             Err(e) => return e
         };
@@ -211,7 +214,7 @@ async fn pubkey(payload: web::Json<PubKeyPayload>, data: web::Data<AppState>) ->
         operands: vec![key.into_bytes()],
     }; 
 
-    let user_public_key_result = match send(vec![transaction_op], 0, client).await {
+    let user_public_key_result = match send(vec![transaction_op],client, &data.curr_client_tag).await {
         Ok(response) => response,
         Err(e) => return e
     };
@@ -225,10 +228,15 @@ async fn pubkey(payload: web::Json<PubKeyPayload>, data: web::Data<AppState>) ->
     
     let pub_key_arr:[u8; PUBLIC_KEY_LENGTH] = user_public_key_result.try_into().expect("Vec has incorrect length");
 
+    let mut tag_guard = data.curr_client_tag.lock().await;
+    *tag_guard += 0;
+    let current_tag = *tag_guard as u64;
+
     HttpResponse::Ok().json(serde_json::json!({
         "message": "public key of user",
         "username": &payload.username,
-        "public key": pub_key_arr
+        "public key": pub_key_arr,
+        "client tag": (current_tag) as u64,
     }))
 }
 
@@ -236,7 +244,8 @@ async fn pubkey(payload: web::Json<PubKeyPayload>, data: web::Data<AppState>) ->
 async fn privkey(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
     let client = &data.client;
 
-    match authenticate_user(payload.username.clone(), payload.password.clone(), client).await {
+
+    match authenticate_user(payload.username.clone(), payload.password.clone(), client, &data.curr_client_tag).await {
         Ok(valid) => valid,
         Err(e) => return e
     };
@@ -249,7 +258,7 @@ async fn privkey(payload: web::Json<RegisterPayload>, data: web::Data<AppState>)
         operands: vec![key.into_bytes()],
     }; 
 
-    let user_priv_key_result = match send(vec![transaction_op], 0, client).await {
+    let user_priv_key_result = match send(vec![transaction_op], client, &data.curr_client_tag).await {
         Ok(response) => response,
         Err(e) => return e
     };
@@ -282,6 +291,8 @@ async fn home(data: web::Data<AppState>) -> impl Responder {
 pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
     let curr_leader_id = Arc::new(Mutex::new(0));
     let curr_round_robin_id=  Arc::new(Mutex::new(0));
+    let curr_client_tag=  Arc::new(Mutex::new(0));
+
 
     let mut keys = KeyStore::empty();
     keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
@@ -295,7 +306,8 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
                 client: client.clone(),
                 node_list: config.consensus_config.node_list.to_vec(),
                 curr_leader_id: curr_leader_id.clone(),
-                curr_round_robin_id: curr_round_robin_id.clone()
+                curr_round_robin_id: curr_round_robin_id.clone(),
+                curr_client_tag: curr_client_tag.clone(),
             }
         ))
         .service(register)
@@ -311,7 +323,7 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
     Ok(())
 }
 
-async fn send(transaction_ops: Vec<ProtoTransactionOp>, client_tag: u64, client:&Arc<PinnedClient>) -> Result<Vec<u8>, HttpResponse> {
+async fn send(transaction_ops: Vec<ProtoTransactionOp>, client:&Arc<PinnedClient>,  client_tag: &Arc<Mutex<usize>>) -> Result<Vec<u8>, HttpResponse> {
     let transaction_phase = ProtoTransactionPhase {
         ops: transaction_ops,
     };
@@ -323,14 +335,19 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client_tag: u64, client:
         is_reconfiguration: false,
     };
 
+    let mut tag_guard = client_tag.lock().await;
+    *tag_guard += 1;
+    let current_tag = *tag_guard as u64;
+
     let rpc_msg_body = ProtoPayload {
         message: Some(pft::proto::rpc::proto_payload::Message::ClientRequest(ProtoClientRequest {
             tx: Some(transaction),
             origin: "name".to_string(), //change? doesn't really matter
             sig: vec![0u8; 1],
-            client_tag: (client_tag + 1) as u64, //change to counter
+            client_tag: current_tag,
         })),
     };
+    
 
     let mut buf = Vec::new();
     let sz = buf.len();
@@ -383,13 +400,13 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client_tag: u64, client:
     Ok(result)
 }
 
-async fn authenticate_user(username: String, password: String, client:&Arc<PinnedClient>) -> Result<bool, HttpResponse> {
+async fn authenticate_user(username: String, password: String, client:&Arc<PinnedClient>, client_tag: &Arc<Mutex<usize>>) -> Result<bool, HttpResponse> {
     let transaction_op = ProtoTransactionOp {
         op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
         operands: vec![username.clone().into_bytes()],
     };
 
-    let result = match send(vec![transaction_op], 0, client).await {
+    let result = match send(vec![transaction_op],  client, client_tag,).await {
         Ok(response) => response,
         Err(e) => return Err(e)
     }; //add client tag
