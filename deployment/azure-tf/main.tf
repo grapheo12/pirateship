@@ -249,7 +249,7 @@ resource "azurerm_linux_virtual_machine" "sevpool_vm" {
   location              = var.platform_locations[local.sevpool_ids_flattened_[count.index][0]]
   resource_group_name   = azurerm_resource_group.rg.name
   network_interface_ids = [azurerm_network_interface.sevpool_nic[count.index].id]
-  size                  = "Standard_DC8ads_v5"
+  size                  = "Standard_DC16ads_v5"
 
 #   delete_os_disk_on_termination    = true
 #   delete_data_disks_on_termination = true
@@ -265,8 +265,8 @@ resource "azurerm_linux_virtual_machine" "sevpool_vm" {
 
   source_image_reference {
     publisher = "canonical"
-    offer = "ubuntu-24_04-lts"
-    sku = "cvm"
+    offer = "0001-com-ubuntu-confidential-vm-jammy"
+    sku = "22_04-lts-cvm"
     version = "latest"
   }
 

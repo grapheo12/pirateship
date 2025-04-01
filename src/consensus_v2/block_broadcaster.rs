@@ -357,6 +357,7 @@ impl BlockBroadcaster {
                 on_crash_commit: None,
                 on_byzantine_commit: None,
                 is_reconfiguration: false,
+                is_2pc: false,
             });
     
             trace!("Equivocating on block seq num {}", block.n);

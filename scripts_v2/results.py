@@ -689,7 +689,7 @@ class Result:
 
 
         num_lines = len(plot_dict)
-        colors = self.kwargs.get('colors', ['b', 'g', 'r', 'c', 'm', 'y', 'k'])
+        colors = self.kwargs.get('colors', ['b', 'g', 'r', 'c', 'm', 'y', 'k', "orange"])
         markers = self.kwargs.get('markers', ['o', 's', 'D', '^', 'v', 'p', 'P', '*', 'X', 'H'])
         while len(colors) < num_lines:
             colors += colors
@@ -726,8 +726,10 @@ class Result:
             plt.ylabel("Latency (ms)")
 
             y_range_total = max([v[3] for v in bounding_boxes.values()]) - min([v[2] for v in bounding_boxes.values()])
-            if y_range_total > 3000:
-                plt.yscale("symlog")
+            # if y_range_total > 200:
+            #     plt.yscale("symlog")
+            # plt.ylim((0, 120))
+            # plt.xlim((50, 550))
             plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.45), ncol=legends_ncols, fontsize=55, columnspacing=1)
 
 
@@ -877,7 +879,7 @@ class Result:
         assert len(text_box_locs) == len(events)
 
 
-        line_colors = ['r', 'g', 'b', 'c', 'm', 'y', 'k']
+        line_colors = ['r', 'g', 'b', 'c', 'm', 'y', 'k', "orange"]
         text_props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
 
         for i, (event_time, event_description) in enumerate(events):
