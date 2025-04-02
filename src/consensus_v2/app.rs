@@ -183,6 +183,7 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
 
     async fn worker(&mut self) -> Result<(), ()> {
         tokio::select! {
+            biased;
             cmd = self.staging_rx.recv() => {
                 if cmd.is_none() {
                     return Err(());
