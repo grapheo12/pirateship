@@ -65,7 +65,7 @@ impl ClientReplyHandler {
 
     pub async fn run(client_reply_handler: Arc<Mutex<Self>>) {
         let mut client_reply_handler = client_reply_handler.lock().await;
-        for _ in 0..20 {
+        for _ in 0..100 {
             let rx = client_reply_handler.reply_processor_queue.1.clone();
             client_reply_handler.reply_processors.spawn(async move {
                 while let Ok(cmd) = rx.recv().await {
