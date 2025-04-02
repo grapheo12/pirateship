@@ -57,13 +57,6 @@ pub struct KVReadWriteYCSBGenerator {
 
 impl KVReadWriteYCSBGenerator {
     pub fn new(config: &KVReadWriteYCSB, client_idx: usize, total_clients: usize) -> KVReadWriteYCSBGenerator {
-        #[cfg(not(feature = "reply_from_app"))]
-        {
-            if config.linearizable_reads {
-                panic!("Linearizable reads not supported if response doesn't come from app");
-            }
-        }
-
         let rng = ChaCha20Rng::from_entropy();
 
         let read_write_weights = [
