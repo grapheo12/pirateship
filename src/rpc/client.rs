@@ -376,7 +376,7 @@ impl PinnedClient {
         }
 
         if sock.is_none() {
-            let (_sock, _) = timeout(Duration::from_secs(1), PinnedClient::connect(&client.clone(), name)).await??;
+            let (_sock, _) = PinnedClient::connect(&client.clone(), name).await?;
             sock = Some(_sock);
         }
 
@@ -885,12 +885,22 @@ impl PinnedClient {
         // At this point, all name in names have a dedicated broadcast worker running.
         {
             let lchans = client.0.chan_map.0.read().await;
+            let mut total_success = 0;
             for name in names {
                 let chan = lchans.get(name).unwrap();
                 // chans.push(chan.clone());
-                if let Err(e) = chan.send((data.clone(), profile.clone())).await {
-                    warn!("Broadcast error: {}", e);
+                if total_success < min_success {
+                    if let Err(e) = chan.send((data.clone(), profile.clone())).await {
+                        warn!("Broadcast error: {}", e);
+                    }
+                } else {
+                    if let Err(e) = chan.try_send((data.clone(), profile.clone())) {
+                        // Best effort only
+                        trace!("Broadcast error: {}", e);
+                    }
                 }
+
+                total_success += 1;
             }
         }
         

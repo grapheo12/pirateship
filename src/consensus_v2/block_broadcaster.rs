@@ -270,11 +270,26 @@ impl BlockBroadcaster {
     fn get_byzantine_broadcast_threshold(&self) -> usize {
         let config = self.config.get();
         let node_list_len = config.consensus_config.node_list.len();
-        if node_list_len <= config.consensus_config.liveness_u as usize {
-            return 0;
+        
+        #[cfg(feature = "no_qc")]
+        {
+            let f = node_list_len / 2;
+            return f;
         }
-        let byzantine_threshold = node_list_len; // - config.consensus_config.liveness_u as usize;
-        byzantine_threshold - 1
+
+        #[cfg(feature = "platforms")]
+        {
+            if node_list_len <= config.consensus_config.liveness_u as usize {
+                return 0;
+            }
+            let byzantine_threshold = node_list_len - config.consensus_config.liveness_u as usize;
+            return byzantine_threshold - 1;
+        }
+
+        let f = node_list_len / 3;
+        return 2 * f;
+
+
     }
 
     async fn process_other_block(&mut self, mut blocks: MultipartFork) -> Result<(), Error> {
