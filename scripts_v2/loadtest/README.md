@@ -8,33 +8,18 @@ Install Locust using pip3 by running:
 
 ```bash
 pip3 install locust
+
 ```
 
 ## Running Locust
 
-There are two main ways to run your load tests with Locust: using a configuration file or directly via command line arguments.
 
 Run all commands from inside the loadtest folder:
+get_distribution: ratio of get_requests out of 100. For example if get_distribution = 80, then tests will run 80% get requests, 20% post requests.
+
 ```bash
+source .venv/bin/activate
 cd scripts_v2/loadtest
-```
+python3 loadtest.py http://localhost:8080 <NUMBER_OF_USERS> locustfile.py <GET_DISTRIBUTION>
 
-### Option 1: Using a Configuration File
-
-You can create a configuration file (e.g., `locust.conf`) to define your test parameters. Locust also detects locustfiles and config files, but specifying it is more clear.
-
-Run Locust with:
-
-```bash
-locust -f locustfile.py --config locust.conf
-```
-
-
-
-### Option 2: Using Command Line Arguments
-
-You can also run Locust directly by specifying the test parameters on the command line.
-
-```bash
-locust --headless --users 10 --spawn-rate 1 -H http://localhost:8080 -f locustfile.py
 ```
