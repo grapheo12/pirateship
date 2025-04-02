@@ -376,7 +376,7 @@ impl PinnedClient {
         }
 
         if sock.is_none() {
-            let (_sock, _) = PinnedClient::connect(&client.clone(), name).await?;
+            let (_sock, _) = timeout(Duration::from_secs(1), PinnedClient::connect(&client.clone(), name)).await??;
             sock = Some(_sock);
         }
 
