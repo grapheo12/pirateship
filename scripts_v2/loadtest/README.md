@@ -15,6 +15,7 @@ pip3 install locust
 
 
 Run all commands from inside the loadtest folder:
+
 get_distribution: ratio of get_requests out of 100. For example if get_distribution = 80, then tests will run 80% get requests, 20% post requests.
 
 ```bash
