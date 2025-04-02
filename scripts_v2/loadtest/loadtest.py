@@ -1,3 +1,4 @@
+import json
 import requests
 import subprocess
 import sys
@@ -23,17 +24,24 @@ def register_users(host, num_users, password="pirateship"):
         if response.status_code != 200:
             print(f"Error refreshing {username}: {response.text}")
 
-def run_locust(locust_file, host, num_users, spawn_rate, additional_args=None):
+def run_locust(locust_file, host, num_users, getDistribution):
+    custom_user_config = {
+        "user_class_name":"testClass", 
+        "getDistribution": getDistribution
+    }
+    json_config = json.dumps(custom_user_config)
+
+
+
     command = [
         "locust",
         "-f", locust_file,
         "--headless",
         "--users", str(num_users),
         "--spawn-rate", str(num_users),
-        "-H", host
+        "-H", host,
+        "--config-users",json_config
     ]
-    if additional_args:
-        command.extend(additional_args)
     
     print("Starting Locust with command:", " ".join(command))
     subprocess.run(command)
