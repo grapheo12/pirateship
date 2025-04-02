@@ -22,7 +22,7 @@ commit_index_gap_soft = 250
 commit_index_gap_hard = 500
 liveness_u = 2
 max_backlog_batch_size = 1000
-signature_max_delay_blocks = 50
+signature_max_delay_blocks = 10
 signature_max_delay_ms = 10000
 num_crypto_workers = 5
 view_timeout_ms = 4000
@@ -62,47 +62,61 @@ linearizable_reads = false
 byz_commit_ratio = 0.0
 load_phase = true
 zipf_exponent = 0.99
+read_ratio = 0.0
 
 
 [[experiments]]
 name = "pirateship"
 repeats = 1
 num_nodes = 7
-num_clients = 800
+# num_clients = 800
 node_distribution = "uniform"
 build_command = "make pirateship_kvs"
-duration = 120
+duration = 60
 
-[experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
-read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
-# read_ratio = [0.25]
+[experiments.sweeping_parameters]
+num_clients = [100, 200, 400, 500, 600, 800]
 
 
-[[experiments]]
-name = "signed_raft"
-repeats = 1
-num_nodes = 5
-num_clients = 800
-node_distribution = "uniform"
-build_command = "make signed_raft_kvs"
-duration = 120
 
-[experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
-read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
+# # [experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
+# # read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
+# # read_ratio = [0.25]
+
+
+# [[experiments]]
+# name = "signed_raft"
+# repeats = 1
+# num_nodes = 5
+# num_clients = 800
+# node_distribution = "uniform"
+# build_command = "make signed_raft_kvs"
+# duration = 120
+
+# [experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
+# read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
 # read_ratio = [0.25]
 
 
 
 
 [[results]]
-name = "tput_rw_sweep"
-plotter = "stacked_bar_graph"
-ramp_up = 30
-ramp_down = 30
-output = "ycsb.pdf"
-xlabels = ["0R-100W", "25R-75W", "50R-50W", "75R-25W", "100R-0W"]
+name = "tput_latency_client_sweep"
+plotter = "tput_latency_sweep"
+ramp_up = 15
+ramp_down = 15
+output = "lan_final.pdf"
 force_parse = true
+# skip_indices = [0, 1]
 
 [results.legends]
-pirateship = "pirateship"
-signed_raft = "signed_raft"
+# Experiment group to legend mapping
+pirateship = "ps(sig=10)+byz"
+# pirateship_sig_1 = "ps(sig=1)+byz"
+# hotstuff = "hotstuff+onlybyz"
+# engraft = "engraft+onlybyz"
+# signed_raft = "signed_raft"
+# autobahn = "autobahn"
+
+[results.font]
+size = 55

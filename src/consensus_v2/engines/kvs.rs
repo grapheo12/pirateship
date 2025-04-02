@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 
 use log::{info, trace, warn};
@@ -20,8 +20,8 @@ use crate::proto::consensus::{
 
 #[derive(std::fmt:: Debug, Clone, Serialize, Deserialize)]
 pub struct KVSState {
-    pub ci_state: HashMap<Vec<u8>, Vec<(u64, Vec<u8>) /* versions */>>,
-    pub bci_state: HashMap<Vec<u8>, Vec<u8>>,
+    pub ci_state: BTreeMap<Vec<u8>, Vec<(u64, Vec<u8>) /* versions */>>,
+    pub bci_state: BTreeMap<Vec<u8>, Vec<u8>>,
 }
 
 impl Display for KVSState {
@@ -49,8 +49,8 @@ impl AppEngine for KVSAppEngine {
             last_bci: 0,
             quit_signal: false,
             state: KVSState {
-                ci_state: HashMap::new(),
-                bci_state: HashMap::new(),
+                ci_state: BTreeMap::new(),
+                bci_state: BTreeMap::new(),
             },
         }
     }
