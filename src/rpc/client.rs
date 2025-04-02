@@ -886,47 +886,47 @@ impl PinnedClient {
         {
             let lchans = client.0.chan_map.0.read().await;
             let mut total_success = 0;
-            let mut futs = FuturesUnordered::new();
+            // let mut futs = FuturesUnordered::new();
             for name in names {
                 let chan = lchans.get(name).unwrap();
                 // chans.push(chan.clone());
-                // if total_success < min_success {
-                //     if let Err(e) = chan.send((data.clone(), profile.clone())).await {
-                //         warn!("Broadcast error: {}", e);
-                //     }
-                // } else {
-                //     if let Err(e) = chan.try_send((data.clone(), profile.clone())) {
-                //         // Best effort only
-                //         trace!("Broadcast error: {}", e);
-                //     }
-                // }
-
-                futs.push(chan.send((data.clone(), profile.clone())));
-
-                // total_success += 1;
-            }
-
-            while let Some(res) = futs.next().await {
-                if res.is_ok() {
-                    total_success += 1;
-                }
-
-                if total_success >= min_success {
-                    break;
-                }
-            }
-
-            if futs.len() > 0 {
-                while let Ok(Some(res)) = timeout(Duration::from_millis(10), futs.next()).await {
-                    if res.is_ok() {
-                        total_success += 1;
+                if total_success < min_success {
+                    if let Err(e) = chan.send((data.clone(), profile.clone())).await {
+                        warn!("Broadcast error: {}", e);
+                    }
+                } else {
+                    if let Err(e) = chan.send((data.clone(), profile.clone())).await {
+                        // Best effort only
+                        trace!("Broadcast error: {}", e);
                     }
                 }
+
+                // futs.push(chan.send((data.clone(), profile.clone())));
+
+                total_success += 1;
             }
 
-            if futs.len() > 0 {
-                futs.clear();
-            }
+            // while let Some(res) = futs.next().await {
+            //     if res.is_ok() {
+            //         total_success += 1;
+            //     }
+
+            //     if total_success >= min_success {
+            //         break;
+            //     }
+            // }
+
+            // if futs.len() > 0 {
+            //     while let Ok(Some(res)) = timeout(Duration::from_millis(10), futs.next()).await {
+            //         if res.is_ok() {
+            //             total_success += 1;
+            //         }
+            //     }
+            // }
+
+            // if futs.len() > 0 {
+            //     futs.clear();
+            // }
 
 
         }
