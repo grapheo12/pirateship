@@ -55,7 +55,7 @@ max_concurrent_requests = 32
 
 
 [client_config.workload_config.request_config.KVReadWriteYCSB]
-num_keys = 300000
+num_keys = 3000
 num_fields = 1
 val_size = 100
 linearizable_reads = false

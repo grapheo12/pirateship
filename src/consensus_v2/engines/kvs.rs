@@ -94,11 +94,11 @@ impl AppEngine for KVSAppEngine {
                             }
                             let key = &op.operands[0];
                             let val: &Vec<u8> = &op.operands[1];
-                            if self.state.ci_state.contains_key(key) {
-                                self.state.ci_state.get_mut(key).unwrap().push((proto_block.n, val.clone()));
-                            } else {
-                                self.state.ci_state.insert(key.clone(), vec![(proto_block.n, val.clone())]);
-                            }
+                            // if self.state.ci_state.contains_key(key) {
+                            //     self.state.ci_state.get_mut(key).unwrap().push((proto_block.n, val.clone()));
+                            // } else {
+                            //     self.state.ci_state.insert(key.clone(), vec![(proto_block.n, val.clone())]);
+                            // }
                             txn_result.result.push(ProtoTransactionOpResult {
                                 success: true,
                                 values: vec![],
@@ -108,7 +108,8 @@ impl AppEngine for KVSAppEngine {
                                 continue;
                             }
                             let key: &Vec<u8> = &op.operands[0];
-                            let result = self.read(key);
+                            // let result = self.read(key);
+                            let result = Some(vec![0xde, 0xad, 0xbe, 0xef]);
                             if let Some(value) = result {
                                 txn_result.result.push(ProtoTransactionOpResult {
                                     success: true,
