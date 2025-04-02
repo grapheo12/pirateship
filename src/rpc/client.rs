@@ -6,7 +6,7 @@ use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt,
 use log::{debug, info, trace, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use std::{
-    collections::{HashMap, HashSet}, fs::File, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::Arc, time::Duration,
+    collections::{HashMap, HashSet}, fs::File, future::Future, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::Arc, time::Duration
 };
 use tokio::{
     io::{split, AsyncReadExt, AsyncWriteExt, BufWriter, ReadHalf, WriteHalf},
@@ -886,22 +886,49 @@ impl PinnedClient {
         {
             let lchans = client.0.chan_map.0.read().await;
             let mut total_success = 0;
+            let mut futs = FuturesUnordered::new();
             for name in names {
                 let chan = lchans.get(name).unwrap();
                 // chans.push(chan.clone());
-                if total_success < min_success {
-                    if let Err(e) = chan.send((data.clone(), profile.clone())).await {
-                        warn!("Broadcast error: {}", e);
-                    }
-                } else {
-                    if let Err(e) = chan.try_send((data.clone(), profile.clone())) {
-                        // Best effort only
-                        trace!("Broadcast error: {}", e);
-                    }
+                // if total_success < min_success {
+                //     if let Err(e) = chan.send((data.clone(), profile.clone())).await {
+                //         warn!("Broadcast error: {}", e);
+                //     }
+                // } else {
+                //     if let Err(e) = chan.try_send((data.clone(), profile.clone())) {
+                //         // Best effort only
+                //         trace!("Broadcast error: {}", e);
+                //     }
+                // }
+
+                futs.push(chan.send((data.clone(), profile.clone())));
+
+                // total_success += 1;
+            }
+
+            while let Some(res) = futs.next().await {
+                if res.is_ok() {
+                    total_success += 1;
                 }
 
-                total_success += 1;
+                if total_success >= min_success {
+                    break;
+                }
             }
+
+            if futs.len() > 0 {
+                while let Ok(Some(res)) = timeout(Duration::from_millis(10), futs.next()).await {
+                    if res.is_ok() {
+                        total_success += 1;
+                    }
+                }
+            }
+
+            if futs.len() > 0 {
+                futs.clear();
+            }
+
+
         }
         
         // let mut bcast_futs = FuturesUnordered::new();
