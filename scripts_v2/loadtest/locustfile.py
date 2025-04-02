@@ -23,9 +23,13 @@ class testClass(HttpUser):
         self.password = "pirateship"
 
     #run phase 
-    @task
+    @task(2)
     def task1(self):
         self.client.get("/pubkey", json={"username": self.username})
+
+    @task(2)
+    def task2(self):
+        self.client.post("/refresh", json={"username": self.username, "password": "pirateship"})
 
     
 
