@@ -106,7 +106,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         });
 
         js.spawn(async move {
-            worker.generator_task(generator_tx, backpressure_rx, _backpressure_tx).await;
+            worker.generator_task(generator_tx, backpressure_rx, _backpressure_tx, id).await;
         });
 
     }
@@ -240,7 +240,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         }
     }
 
-    async fn generator_task(&mut self, generator_tx: Sender<CheckerTask>, backpressure_rx: Receiver<CheckerResponse>, backpressure_tx: Sender<CheckerResponse>) {
+    async fn generator_task(&mut self, generator_tx: Sender<CheckerTask>, backpressure_rx: Receiver<CheckerResponse>, backpressure_tx: Sender<CheckerResponse>, id: usize) {
         let mut outstanding_requests = HashMap::<u64, OutstandingRequest>::new();
 
         let mut total_requests = 0;
@@ -250,7 +250,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         node_list.sort();
 
         let mut curr_leader_id = 0;
-        let mut curr_round_robin_id = 0;
+        let mut curr_round_robin_id = id % node_list.len();
 
         let my_name = self.config.net_config.name.clone();
 
