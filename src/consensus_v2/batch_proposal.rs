@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::time::Instant;
 use std::{io::Error, pin::Pin, sync::Arc, time::Duration};
 
 use std::io::ErrorKind;
@@ -48,6 +49,8 @@ pub struct BatchProposer {
     current_leader: String,
 
     cmd_rx: Receiver<BatchProposerCommand>,
+
+    last_batch_proposed: Instant,
 }
 
 impl BatchProposer {
@@ -83,6 +86,7 @@ impl BatchProposer {
             make_new_batches: false,
             current_leader: String::new(),
             cmd_rx,
+            last_batch_proposed: Instant::now(),
         };
 
         #[cfg(not(feature = "view_change"))]
@@ -183,6 +187,12 @@ impl BatchProposer {
             ));
         }
 
+        if !batch_timer_tick {
+            if self.last_batch_proposed.elapsed().as_millis() as u64 >= self.config.get().consensus_config.batch_max_delay_ms {
+                batch_timer_tick = true;
+            }
+        }
+
         
         if new_tx.is_some() {
             // Filter read-only transactions that do not need to go through consensus.
@@ -251,6 +261,7 @@ impl BatchProposer {
     }
 
     async fn propose_new_batch(&mut self) {
+        self.last_batch_proposed = Instant::now();
         let batch = self.current_raw_batch.take().unwrap();
         self.current_raw_batch = Some(RawBatch::with_capacity(
             self.config.get().consensus_config.max_backlog_batch_size

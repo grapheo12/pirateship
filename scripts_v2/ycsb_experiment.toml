@@ -26,7 +26,7 @@ signature_max_delay_blocks = 10
 signature_max_delay_ms = 10000
 num_crypto_workers = 5
 view_timeout_ms = 4000
-batch_max_delay_ms = 5
+batch_max_delay_ms = 2
 
 [node_config.consensus_config.log_storage_config.RocksDB]
 write_buffer_size = 2147483648
@@ -57,7 +57,7 @@ max_concurrent_requests = 32
 [client_config.workload_config.request_config.KVReadWriteYCSB]
 num_keys = 300000
 num_fields = 1
-val_size = 100
+val_size = 500
 linearizable_reads = false
 byz_commit_ratio = 0.0
 load_phase = true
@@ -74,8 +74,8 @@ build_command = "make pirateship_kvs"
 duration = 120
 
 [experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
-read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
-# read_ratio = [0.25]
+# read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
+read_ratio = [0.25, 0.5]
 
 
 [[experiments]]
@@ -88,8 +88,8 @@ build_command = "make signed_raft_kvs"
 duration = 120
 
 [experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
-read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
-# read_ratio = [0.25]
+# read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
+read_ratio = [0.25, 0.5]
 
 
 
@@ -100,7 +100,8 @@ plotter = "stacked_bar_graph"
 ramp_up = 20
 ramp_down = 20
 output = "ycsb.pdf"
-xlabels = ["0R-100W", "25R-75W", "50R-50W", "75R-25W", "100R-0W"]
+# xlabels = ["0R-100W", "25R-75W", "50R-50W", "75R-25W", "100R-0W"]
+xlabels = ["25R-75W", "50R-50W"]
 force_parse = true
 
 [results.legends]
