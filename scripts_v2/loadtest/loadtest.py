@@ -3,26 +3,49 @@ import requests
 import subprocess
 import sys
 import time
+import asyncio
+import aiohttp
 
-def register_users(host, num_users, password="pirateship"):
+MAX_CONCURRENT_REQUESTS = 200
+
+async def register_user(host, usernames, password, connector):
+    async with aiohttp.ClientSession(connector=connector) as session:
+        try: 
+            for username in usernames:
+                async with session.post(f"{host}/register", json={"username": username, "password": password}) as response:
+                    if response.status != 200:
+                        print(f"Error registering {username}: {await response.text()}")
+
+                async with session.post(f"{host}/refresh", json={"username": username, "password": password}) as response:
+                    if response.status != 200:
+                        print(f"Error refreshing {username}: {await response.text()}")
+        except Exception as e:
+            await session.close()
+            print(f"An error occurred: {e}")
+
+async def register_users(host, num_users, password="pirateship"):
     max_user_id_length = len(str(num_users))
+
+    tasks = []
+
+    connector = aiohttp.TCPConnector(limit=MAX_CONCURRENT_REQUESTS)
+
+    usernames = ["username" + (max_user_id_length - len(str(n))) * "0" + str(n) for n in range(1, num_users + 1)]
+    # Split the usernames into chunks to avoid overwhelming the server
+    chunk_size = MAX_CONCURRENT_REQUESTS
+    username_chunks = []
+    for i in range(0, len(usernames), chunk_size):
+        username_chunks.append(usernames[i:i + chunk_size])
+
     
-    for n in range(1, num_users + 1):
-        username = "username" + (max_user_id_length - len(str(n))) * "0" + str(n)
-        
-        response = requests.post(
-            f"{host}/register",
-            json={"username": username, "password": password}
-        )
-        if response.status_code != 200:
-            print(f"Error registering {username}: {response.text}")
-        
-        response = requests.post(
-            f"{host}/refresh",
-            json={"username": username, "password": password}
-        )
-        if response.status_code != 200:
-            print(f"Error refreshing {username}: {response.text}")
+    for chunk in username_chunks:
+        tasks.append(register_user(host, chunk, password, connector))
+
+    await asyncio.gather(*tasks)
+
+    await connector.close()
+
+
 
 def run_locust(locust_file, host, num_users, getDistribution):
     custom_user_config = {
@@ -56,7 +79,7 @@ if __name__ == "__main__":
     locust_file = sys.argv[3]
     spawn_rate = int(sys.argv[4])
     
-    register_users(host, num_users)
+    asyncio.run(register_users(host, num_users))
     
     time.sleep(2)
     

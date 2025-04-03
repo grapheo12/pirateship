@@ -354,7 +354,9 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
     let sz = buf.len();
     let request = PinnedMessage::from(buf, sz, pft::rpc::SenderType::Anon);
 
-    let resp = match PinnedClient::send_and_await_reply(client, &"node1".to_string(), request.as_ref()).await {
+    let name = &client.0.config.get().net_config.name;
+
+    let resp = match PinnedClient::send_and_await_reply(client, name, request.as_ref()).await {
         Ok(resp) => resp,
         Err(e) => {
             warn!("Error sending request: {}", e);
