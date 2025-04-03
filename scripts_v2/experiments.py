@@ -322,7 +322,7 @@ SCP_CMD="scp -o StrictHostKeyChecking=no -i {self.dev_ssh_key}"
                         binary_name = "controller"
 
                     _script += f"""
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '{self.remote_workdir}/build/{binary_name} {self.remote_workdir}/configs/{bin}_config.json > {self.remote_workdir}/logs/{repeat_num}/{bin}.log 2> {self.remote_workdir}/logs/{repeat_num}/{bin}.err' &
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'RUST_BACKTRACE=full {self.remote_workdir}/build/{binary_name} {self.remote_workdir}/configs/{bin}_config.json > {self.remote_workdir}/logs/{repeat_num}/{bin}.log 2> {self.remote_workdir}/logs/{repeat_num}/{bin}.err' &
 PID="$PID $!"
 """
                     
@@ -376,7 +376,7 @@ sleep 1
             f"ls {remote_repo}/target/release"
         ], self.dev_ssh_user, self.dev_ssh_key, self.dev_vm, hide=True)
 
-        return all([bin in res[0] for bin in TARGET_BINARIES])
+        return any([bin in res[0] for bin in TARGET_BINARIES])
     
 
     def get_build_details(self) -> Tuple[str, str]:

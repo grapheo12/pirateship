@@ -8,7 +8,7 @@ use log::{info, trace, warn};
 use prost::Message;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use crate::{config::NodeInfo, consensus::{handler::PinnedServerContext, log::Log, timer::ResettableTimer}, crypto::hash, execution::Engine, proto::{client::{ProtoClientReply, ProtoTryAgain}, execution::{ProtoTransactionOpResult, ProtoTransactionResult}}, rpc::PinnedMessage};
+use crate::{config::NodeInfo, consensus::{handler::PinnedServerContext, log::Log, timer::ResettableTimer}, crypto::hash, execution::Engine, get_tx_list, proto::{client::{ProtoClientReply, ProtoTryAgain}, execution::{ProtoTransactionOpResult, ProtoTransactionResult}}, rpc::PinnedMessage, utils};
 
 enum Event {
     CiUpd(u64),
@@ -85,7 +85,7 @@ impl KVStoreEngine {
 
         for pos in (old_ci + 1)..(ci + 1) {
             let block = &fork.get(pos).unwrap().block;
-            for tx in &block.tx {
+            for tx in get_tx_list!(block) {
                 let ops = match &tx.on_crash_commit {
                     Some(ops) => &ops.ops,
                     None => continue
@@ -142,7 +142,7 @@ impl KVStoreEngine {
         // First execute the on_byz_commit transaction phases.s
         for pos in (old_bci + 1)..(bci + 1) {
             let block = &fork.get(pos).unwrap().block;
-            for tx in &block.tx {
+            for tx in get_tx_list!(block) {
                 let ops = match &tx.on_byzantine_commit {
                     Some(ops) => &ops.ops,
                     None => continue

@@ -76,13 +76,16 @@ pub struct ConsensusConfig {
     pub signature_max_delay_ms: u64,
     pub view_timeout_ms: u64,
     pub signature_max_delay_blocks: u64,
-    pub vote_processing_workers: u16,
-
-    #[cfg(feature="storage")]
+    pub num_crypto_workers: usize,
     pub log_storage_config: StorageConfig,
-
-    #[cfg(feature = "platforms")]
     pub liveness_u: u64,
+}
+
+impl ConsensusConfig {
+    pub fn get_leader_for_view(&self, view: u64) -> String {
+        let n = self.node_list.len() as u64;
+        self.node_list[((view - 1) % n) as usize].clone()
+    }
 }
 
 #[cfg(feature = "platforms")]
@@ -99,7 +102,8 @@ impl ConsensusConfig {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
-    pub logger_stats_report_ms: u64,         // This is only for the logger app
+    pub logger_stats_report_ms: u64,
+    pub checkpoint_interval_ms: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -138,6 +142,7 @@ pub struct ClientRpcConfig {
 pub struct WorkloadConfig {
     pub num_clients: usize,
     pub num_requests: usize,
+    pub max_concurrent_requests: usize,
     pub request_config: RequestConfig
 }
 
@@ -146,7 +151,8 @@ pub struct WorkloadConfig {
 pub struct ClientConfig {
     pub net_config: ClientNetConfig,
     pub rpc_config: ClientRpcConfig,
-    pub workload_config: WorkloadConfig
+    pub workload_config: WorkloadConfig,
+    pub full_duplex: bool
 }
 
 impl Config {
@@ -196,16 +202,15 @@ impl ClientConfig {
                 signature_max_delay_blocks: 128,
                 signature_max_delay_ms: 100,
                 view_timeout_ms: 150,
-                vote_processing_workers: 128,
+                num_crypto_workers: 128,
 
-                #[cfg(feature = "platforms")]
                 liveness_u: 1,
 
-                #[cfg(feature = "storage")]
                 log_storage_config: StorageConfig::RocksDB(RocksDBConfig::default()),
             },
             app_config: AppConfig {
                 logger_stats_report_ms: 100,
+                checkpoint_interval_ms: 60000,
             },
             
             #[cfg(feature = "evil")]

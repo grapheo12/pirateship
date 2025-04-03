@@ -54,7 +54,7 @@ fn test_nodeconfig_serialize() {
         max_backlog_batch_size: 1000,
         signature_max_delay_blocks: 128,
         signature_max_delay_ms: 100,
-        vote_processing_workers: 128,
+        num_crypto_workers: 128,
         view_timeout_ms: 150,
         batch_max_delay_ms: 10,
 
@@ -68,6 +68,7 @@ fn test_nodeconfig_serialize() {
 
     let app_config = AppConfig {
         logger_stats_report_ms: 100,
+        checkpoint_interval_ms: 60000,
     };
 
     let evil_config = EvilConfig {
@@ -133,6 +134,7 @@ fn test_clientconfig_serialize() {
         workload_config: WorkloadConfig {
             num_clients: 100,
             num_requests: 100000,
+            max_concurrent_requests: 10,
             request_config: crate::config::RequestConfig::KVReadWriteUniform(KVReadWriteUniform {
                 num_keys: 1000,
                 val_size: 10000,
@@ -140,6 +142,7 @@ fn test_clientconfig_serialize() {
                 write_byz_commit_ratio: 0.5,
             }),
         },
+        full_duplex: false
     };
     let s = config.serialize();
     println!("{}", s);
@@ -207,7 +210,7 @@ async fn test_atomic_config_access() {
         max_backlog_batch_size: 1000,
         signature_max_delay_blocks: 128,
         signature_max_delay_ms: 100,
-        vote_processing_workers: 128,
+        num_crypto_workers: 128,
         view_timeout_ms: 150,
         batch_max_delay_ms: 10,
 
@@ -220,6 +223,7 @@ async fn test_atomic_config_access() {
 
     let app_config = AppConfig {
         logger_stats_report_ms: 100,
+        checkpoint_interval_ms: 60000,
     };
 
     let evil_config = EvilConfig {

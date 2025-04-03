@@ -23,9 +23,8 @@ import matplotlib.pyplot as plt
 node_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] fork\.last = ([0-9]+), fork\.last_qc = ([0-9]+), commit_index = ([0-9]+), byz_commit_index = ([0-9]+), pending_acks = ([0-9]+), pending_qcs = ([0-9]+) num_crash_committed_txs = ([0-9]+), num_byz_committed_txs = ([0-9]+), fork\.last_hash = (.+), total_client_request = ([0-9]+), view = ([0-9]+), view_is_stable = (.+), i_am_leader\: (.+)")
 node_rgx2 = re.compile(r"\[INFO\]\[.*\]\[(.*)\] num_reads = ([0-9]+)")
 
-# Sample log: [INFO][client][2024-08-06T10:28:12.352816849+00:00] Client Id: 264, Msg Id: 224, Block num: 1000, Tx num: 145, Latency: 4073 us, Current Leader: node1
-client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Client Id\: ([0-9]+), Msg Id\: ([0-9]+), Block num\: ([0-9]+), Tx num\: ([0-9]+), Latency\: ([.0-9]+) us, Current Leader\: (.+)")
-client_byz_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Client Id\: ([0-9]+), Block num\: ([0-9]+), Tx num\: ([0-9]+), Byz Latency\: ([.0-9]+) us")
+# Sample log: [INFO][pft::client::logger][2025-02-25T23:33:23.145307984+00:00] Average Crash commit latency: 104390 us, Average Byz commit latency: 29271247 us
+client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Average Crash commit latency: ([0-9]+) us, Average Byz commit latency: ([0-9]+) us")
 
 
 def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, read_points=[[]]) -> List:
@@ -100,34 +99,16 @@ def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, 
     return points
 
 
-def process_latencies(points, ramp_up, ramp_down, latencies):
-    if len(points[0]) == 7:
-        points = [
-            (
-                isoparse(a[0]),      # ISO format is used in run_remote
-                int(a[1]),           # Client Id
-                int(a[2]),           # Msg Id
-                int(a[3]),           # Block num
-                int(a[4]),           # Tx num
-                float(a[5]),         # Latency us
-                a[6]                 # Current Leader
-            )
-            for a in points
-        ]
-    else:
-        # Byz logs have 2 entries less
-        points = [
-            (
-                isoparse(a[0]),      # ISO format is used in run_remote
-                int(a[1]),           # Client Id
-                0,                   # Dummy Msg Id
-                int(a[2]),           # Block num
-                int(a[3]),           # Tx num
-                float(a[4]),         # Latency us
-                "node0"              # Dummy Current Leader
-            )
-            for a in points
-        ]
+def process_latencies(points, ramp_up, ramp_down, latencies, byz=False):
+    points = [
+        (
+            isoparse(a[0]),      # ISO format is used in run_remote
+            float(a[1]),         # Crash commit latency
+            float(a[2])          # Byz commit latency
+        )
+        for a in points
+    ]
+    
     total_n = len(points)
 
     # Filter points, only keep if after ramp_up time and before ramp_down time
@@ -137,7 +118,10 @@ def process_latencies(points, ramp_up, ramp_down, latencies):
 
     points = [p for p in points if p[0] >= start_time and p[0] <= end_time]
 
-    latencies.extend([p[5] for p in points])
+    if byz:
+        latencies.extend([p[2] for p in points])
+    else:
+        latencies.extend([p[1] for p in points])
 
 
 @dataclass
@@ -211,17 +195,14 @@ class Result:
             try:
                 with open(fname, "r") as f:
                     for line in f.readlines():
-                        if byz:
-                            captures = client_byz_rgx.findall(line)
-                        else:
-                            captures = client_rgx.findall(line)
+                        captures = client_rgx.findall(line)
                         # print(captures)
                         if len(captures) == 1:
                             points.append(captures[0])
             except:
                 pass
         try:
-            process_latencies(points, ramp_up, ramp_down, latencies)
+            process_latencies(points, ramp_up, ramp_down, latencies, byz=byz)
         except:
             pass
 
@@ -300,6 +281,9 @@ class Result:
     def tput_latency_sweep_parse(self, ramp_up, ramp_down, legends) -> Dict[str, List[Stats]]:
         plot_dict = {}
 
+        # Which indices do I skip?
+        skip_indices = self.kwargs.get('skip_indices', [])
+
         # Find parsing log files for each group
         for group_name, experiments in self.experiment_groups.items():
             print("========", group_name, "========")
@@ -333,7 +317,10 @@ class Result:
             if needs_crash:
                 final_stats = []
 
-                for experiment in experiments:
+                for idx, experiment in enumerate(experiments):
+                    if idx in skip_indices:
+                        print("\x1b[31;1mSkipping experiment", experiment.name, "for crash commit\x1b[0m")
+                        continue
                     stats = self.process_experiment(experiment, ramp_up, ramp_down, byz=False)
                     if stats is not None:
                         final_stats.append(stats)
@@ -346,7 +333,10 @@ class Result:
             if needs_byz:
                 final_stats = []
 
-                for experiment in experiments:
+                for idx, experiment in enumerate(experiments):
+                    if idx in skip_indices:
+                        print("\x1b[31;1mSkipping experiment", experiment.name, "for byz commit\x1b[0m")
+                        continue
                     stats = self.process_experiment(experiment, ramp_up, ramp_down, byz=True)
                     if stats is not None:
                         final_stats.append(stats)
@@ -672,6 +662,7 @@ class Result:
 
             plt.xlabel("Throughput (k req/s)")
             plt.ylabel("Latency (ms)")
+            plt.yscale("symlog")
             plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.45), ncol=legends_ncols, fontsize=55, columnspacing=1)
 
 

@@ -11,7 +11,7 @@ edition = "2021"
 async-recursion = "1.1.1"
 bytes = {version = "1.6.0", "features" = ["std", "serde"]}
 colog = "1.3.0"
-ed25519-dalek = {version = "2.1.1", features = ["alloc", "fast", "std", "zeroize", "pem", "pkcs8"]}
+ed25519-dalek = {version = "2.1.1", features = ["alloc", "fast", "std", "zeroize", "pem", "pkcs8", "batch"]}
 log = "0.4.22"
 rand = "0.8.5"
 rustls = "0.23.10"
@@ -39,6 +39,13 @@ rocksdb = "0.22.0"
 lz4_flex = { version = "0.11" }
 gluesql = "0.15"
 zipf = "7.0.1"
+kanal = "0.1.0-pre8"
+bincode = "1.3.3"
+sha3 = "0.10.8"
+bitcode = "0.6.3"
+num_cpus = "1.16.0"
+itertools = "0.14.0"
+async-channel = "2.3.1"
 
 [build-dependencies]
 prost-build = { version = "0.12" }
@@ -63,8 +70,14 @@ harness = false
 name = "storage"
 harness = false
 
+[[bench]]
+name = "crypto_service_bench"
+harness = false
+
 
 [features]
+# Perf counters
+perf = []
 # Protocol specifics
 # Leader change
 round_robin_leader = []

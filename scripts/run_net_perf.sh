@@ -11,5 +11,5 @@ python3 scripts/run_net_perf.py \
     -ct scripts/local_client_template.json \
     -ips ../nodelist.txt \
     -i ../cluster_key.pem \
-    -r 1 -s 120 \
-    --max_nodes 7
+    -r 1 -s 60 \
+    -sz 4096

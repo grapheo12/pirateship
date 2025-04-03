@@ -23,5 +23,7 @@
                 "zipf_exponent": 0.99
             }
         }
-    }
+    },
+    "full_duplex": true,
+    "client_sub_id": 0
 }

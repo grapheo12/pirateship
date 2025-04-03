@@ -10,7 +10,7 @@ use crate::{
     config::ClientConfig, consensus::{
         handler::PinnedServerContext,
         leader_rotation::get_current_leader,
-    }, crypto::hash, proto::{
+    }, crypto::hash, get_tx_list, proto::{
         consensus::{
             ProtoFork, ProtoQuorumCertificate,
         }, execution::ProtoTransaction
@@ -154,7 +154,7 @@ pub fn __display_protofork(f: &ProtoFork) -> String {
     let mut s = String::from("ProtoFork { blocks: [ ");
     for b in &f.blocks {
         let _s = format!("ProtoBlock {{ View: {} n: {} Tx: {} QC: {} }},",
-            b.view, b.n, __hash_tx_list(&b.tx).encode_hex::<String>(), __hash_qc_list(&b.qc).encode_hex::<String>());
+            b.view, b.n, __hash_tx_list(get_tx_list!(b)).encode_hex::<String>(), __hash_qc_list(&b.qc).encode_hex::<String>());
 
         s += &_s;
     }

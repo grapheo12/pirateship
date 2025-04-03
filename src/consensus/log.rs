@@ -32,7 +32,7 @@ pub struct LogEntry {
 
 impl LogEntry {
     pub fn new(block: ProtoBlock) -> LogEntry {
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(block.encoded_len());
         block.encode(&mut buf).unwrap();
         
         LogEntry {

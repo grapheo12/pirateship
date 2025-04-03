@@ -13,6 +13,7 @@ use std::{
 };
 
 use indexmap::IndexMap;
+use kanal::{bounded_async, AsyncReceiver, AsyncSender};
 use log::{debug, error, info, trace, warn};
 use prost::Message;
 use rustls::crypto::hash::Hash;
@@ -20,8 +21,8 @@ use std::time::Instant;
 use tokio::{join, sync::{mpsc, Mutex, Semaphore}};
 
 use crate::{
-    config::{AtomicConfig, Config, NodeInfo}, crypto::{AtomicKeyStore, KeyStore}, proto::{client::{ProtoByzPollRequest, ProtoByzResponse, ProtoClientRequest}, consensus::ProtoBlock, execution::ProtoTransaction, rpc::proto_payload}, rpc::{
-        client::PinnedClient, server::{GetServerKeys, LatencyProfile, MsgAckChan, RespType}, MessageRef, PinnedMessage
+    config::{AtomicConfig, Config, NodeInfo}, crypto::{AtomicKeyStore, KeyStore, DIGEST_LENGTH}, proto::{client::{ProtoByzPollRequest, ProtoByzResponse, ProtoClientReply, ProtoClientRequest, ProtoTransactionReceipt}, consensus::ProtoBlock, execution::ProtoTransaction, rpc::proto_payload}, rpc::{
+        client::PinnedClient, server::{LatencyProfile, MsgAckChan, RespType, ServerContextType}, MessageRef, PinnedMessage, SenderType
     }, utils::AtomicStruct
 };
 
@@ -75,10 +76,10 @@ impl ConsensusState {
 
 pub type ForwardedMessage = (rpc::proto_payload::Message, String, LatencyProfile);
 pub type ForwardedMessageWithAckChan = (
-    rpc::proto_payload::Message,
+    Box<rpc::proto_payload::Message>,
     String,
     MsgAckChan,
-    LatencyProfile,
+    LatencyProfile
 );
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,18 +104,22 @@ pub struct ServerContext {
 
     pub lifecycle_stage: AtomicI8,
     pub node_queue: (
-        mpsc::UnboundedSender<ForwardedMessageWithAckChan>,
-        Mutex<mpsc::UnboundedReceiver<ForwardedMessageWithAckChan>>,
+        mpsc::Sender<ForwardedMessageWithAckChan>,
+        Mutex<mpsc::Receiver<ForwardedMessageWithAckChan>>,
     ),
+    // pub client_queue: (
+    //     mpsc::Sender<ForwardedMessageWithAckChan>,
+    //     Mutex<mpsc::Receiver<ForwardedMessageWithAckChan>>,
+    // ),
     pub client_queue: (
-        mpsc::UnboundedSender<ForwardedMessageWithAckChan>,
-        Mutex<mpsc::UnboundedReceiver<ForwardedMessageWithAckChan>>,
+        mpsc::Sender<ForwardedMessageWithAckChan>,
+        Mutex<mpsc::Receiver<ForwardedMessageWithAckChan>>,
     ),
     pub state: ConsensusState,
     pub client_ack_pending: Mutex<
         HashMap<
             (u64, usize), // (block_id, tx_id)
-            (MsgAckChan, LatencyProfile, String), // (msg chan, latency, sender)
+            (MsgAckChan, LatencyProfile, String, u64), // (msg chan, latency, sender, client_tag)
         >,
     >,
 
@@ -139,15 +144,15 @@ pub struct ServerContext {
     /// For Noop blocks, there is no such client waiting,
     /// so we send the reply to a black hole.
     pub __client_black_hole_channel: (
-        mpsc::UnboundedSender<(PinnedMessage, LatencyProfile)>,
-        Mutex<mpsc::UnboundedReceiver<(PinnedMessage, LatencyProfile)>>,
+        mpsc::Sender<(PinnedMessage, LatencyProfile)>,
+        Mutex<mpsc::Receiver<(PinnedMessage, LatencyProfile)>>,
     ),
 
     pub __should_server_update_keys: AtomicBool,
 
     pub reconf_channel: (
-        mpsc::UnboundedSender<ProtoTransaction>,
-        Mutex<mpsc::UnboundedReceiver<ProtoTransaction>>,
+        mpsc::Sender<ProtoTransaction>,
+        Mutex<mpsc::Receiver<ProtoTransaction>>,
     ),
 
     pub view_timer: Arc<Pin<Box<RandomResettableTimer>>>,
@@ -175,10 +180,11 @@ pub struct PinnedServerContext(pub Arc<Pin<Box<ServerContext>>>);
 
 impl PinnedServerContext {
     pub fn new(cfg: &Config, keys: &KeyStore) -> PinnedServerContext {
-        let node_ch = mpsc::unbounded_channel();
-        let client_ch = mpsc::unbounded_channel();
-        let black_hole_ch = mpsc::unbounded_channel();
-        let reconf_channel = mpsc::unbounded_channel();
+        let node_ch = mpsc::channel(1000 * cfg.consensus_config.max_backlog_batch_size);
+        // let client_ch = mpsc::channel(10 * cfg.consensus_config.max_backlog_batch_size);
+        let client_ch = mpsc::channel(1000 * cfg.consensus_config.max_backlog_batch_size);
+        let black_hole_ch = mpsc::channel(1_000_000);
+        let reconf_channel = mpsc::channel(100 * cfg.consensus_config.max_backlog_batch_size);
         let send_list = get_everyone_except_me(&cfg.net_config.name, &cfg.consensus_config.node_list);
 
 
@@ -241,17 +247,21 @@ impl Deref for PinnedServerContext {
     }
 }
 
-impl GetServerKeys for PinnedServerContext {
+impl ServerContextType for PinnedServerContext {
     fn get_server_keys(&self) -> Arc<Box<KeyStore>> {
         info!("Keys: {:?}", self.keys.get().pub_keys.keys());
         self.keys.get()
+    }
+    
+    async fn handle_rpc(&self, msg: MessageRef<'_>, ack_chan: MsgAckChan) -> Result<RespType, Error> {
+        consensus_rpc_handler(self, msg, ack_chan).await
     }
 }
 /// This should be a very short running function.
 /// No blocking and/or locking allowed.
 /// The job is to filter old messages quickly and send them on the channel.
 /// The real consensus handler is a separate green thread that consumes these messages.
-pub fn consensus_rpc_handler<'a>(
+pub async fn consensus_rpc_handler<'a>(
     ctx: &PinnedServerContext,
     m: MessageRef<'a>,
     ack_tx: MsgAckChan,
@@ -278,37 +288,66 @@ pub fn consensus_rpc_handler<'a>(
     let msg = match &body.message {
         Some(m) => m,
         None => {
-            warn!("Nil message");
+            warn!("Nil message: {}", m.1);
             return Ok(RespType::NoResp);
         }
     };
 
     match &msg {
         rpc::proto_payload::Message::ClientRequest(client_req) => {
+            let client_tag = client_req.client_tag;
             let ret = if client_req.tx.as_ref().is_some() && client_req.tx.as_ref().unwrap().is_reconfiguration {
                 Ok(RespType::RespAndTrackAndReconf)
             } else {
                 Ok(RespType::RespAndTrack)
             };
 
-            let msg = (body.message.unwrap(), sender, ack_tx, profile);
-            if let Err(_) = ctx.client_queue.0.send(msg) {
+            let msg = (Box::new(body.message.unwrap()), sender, ack_tx, profile);
+
+            /* Test Code BEGIN */
+            // let receipt = ProtoClientReply {
+            //     reply: Some(
+            //         crate::proto::client::proto_client_reply::Reply::Receipt(
+            //             ProtoTransactionReceipt {
+            //                 req_digest: vec![0u8; DIGEST_LENGTH],
+            //                 block_n: 0,
+            //                 tx_n: 0,
+            //                 results:None,
+            //                 await_byz_response: false,
+            //                 byz_responses: vec![],
+            //             },
+            //     )),
+            //     client_tag
+            // };
+
+            // let mut buf = Vec::new();
+            // receipt.encode(&mut buf);
+            // let sz = buf.len();
+            // let reply = PinnedMessage::from(buf, sz, SenderType::Anon);
+            // msg.2.send((reply, msg.3.clone())).await;
+
+            /* Test Code END */
+
+            /* Real Code BEGIN */
+
+            if let Err(_) = ctx.client_queue.0.send(msg).await {
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }
 
+            /* Real Code END */
             return ret;
         }
         rpc::proto_payload::Message::BackfillRequest(_) => {
-            let msg = (body.message.unwrap(), sender, ack_tx, profile);
-            if let Err(_) = ctx.client_queue.0.send(msg) {
+            let msg = (Box::new(body.message.unwrap()), sender, ack_tx, profile);
+            if let Err(_) = ctx.client_queue.0.send(msg).await {
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }
 
             return Ok(RespType::RespAndTrack);
         }
         _ => {
-            let msg = (body.message.unwrap(), sender, ack_tx, profile);
-            if let Err(_) = ctx.node_queue.0.send(msg) {
+            let msg = (Box::new(body.message.unwrap()), sender, ack_tx, profile);
+            if let Err(_) = ctx.node_queue.0.send(msg).await {
                 return Err(Error::new(ErrorKind::OutOfMemory, "Channel error"));
             }
 
@@ -338,7 +377,7 @@ where Engine: crate::execution::Engine
 {
     let (msg, sender, ack_tx, profile) = ms;
     let _sender = sender.clone();
-    match &msg {
+    match msg.as_ref() {
         crate::proto::rpc::proto_payload::Message::AppendEntries(ae) => {
             profile.register("AE chan wait");
             let (last_n, updated_last_n, seq_nums, should_update_ci) =
@@ -408,7 +447,7 @@ pub async fn do_respond_to_backfill_requests(ctx: &PinnedServerContext, curr_cli
     let mut need_to_respond = Vec::new();
     
     curr_client_req.retain(|req| {
-        match &req.0 {
+        match req.0.as_ref() {
             crate::proto::rpc::proto_payload::Message::BackfillRequest(_) => {
                 need_to_respond.push(req.clone());
                 false
@@ -419,7 +458,7 @@ pub async fn do_respond_to_backfill_requests(ctx: &PinnedServerContext, curr_cli
     });
 
     for req in &mut need_to_respond {
-        match &req.0 {
+        match req.0.as_mut() {
             crate::proto::rpc::proto_payload::Message::BackfillRequest(bfr) => {
                 req.3.register("Backfill Request chan wait");
                 do_process_backfill_request(ctx.clone(), &mut req.2, bfr, &req.1).await;
@@ -480,9 +519,13 @@ where
         let cfg = ctx.config.get();
         tokio::select! {
             biased;
-            n_ = client_rx.recv_many(&mut curr_client_req, cfg.consensus_config.max_backlog_batch_size) => {
+            n_ = client_rx.recv_many(&mut curr_client_req, 1 * cfg.consensus_config.max_backlog_batch_size) => {
                 curr_client_req_num = n_;
             },
+            // msg = client_rx.recv() => {
+            //     curr_client_req_num = 1;
+            //     curr_client_req.push(msg.unwrap());
+            // }
             tick = signature_timer.wait() => {
                 signature_timer_tick = tick;
             },
@@ -574,6 +617,35 @@ where
         #[cfg(feature = "no_pipeline")]
         ctx.should_progress.acquire().await.unwrap().forget();
 
+        /* Test Code BEGIN */
+        // for msg in &request_batch {
+        //     let client_tag = if let crate::proto::rpc::proto_payload::Message::ClientRequest(c) = msg.0.as_ref() {
+        //         c.client_tag
+        //     } else { 0 };
+
+        //     let receipt = ProtoClientReply {
+        //         reply: Some(
+        //             crate::proto::client::proto_client_reply::Reply::Receipt(
+        //                 ProtoTransactionReceipt {
+        //                     req_digest: vec![0u8; DIGEST_LENGTH],
+        //                     block_n: 0,
+        //                     tx_n: 0,
+        //                     results:None,
+        //                     await_byz_response: false,
+        //                     byz_responses: vec![],
+        //                 },
+        //         )),
+        //         client_tag
+        //     };
+
+        //     let mut buf = Vec::new();
+        //     receipt.encode(&mut buf);
+        //     let sz = buf.len();
+        //     let reply = PinnedMessage::from(buf, sz, SenderType::Anon);
+        //     msg.2.send((reply, msg.3.clone())).await;
+        // }
+        /* Test Code END */
+        /* Real Code BEGIN */
         trace!("AppendEntries with {} entries", request_batch.len());
         match do_append_entries(
             ctx.clone(), &engine.clone(), client.clone(),
@@ -587,6 +659,7 @@ where
                 should_sig = false;
             }
         };
+        /* Real Code END */
 
         if should_sig {
             pending_signatures = 0;
@@ -622,7 +695,7 @@ pub async fn handle_node_messages<Engine>(
     let mut vote_worker_chans = Vec::new();
     let mut vote_worker_rr_cnt = 1u16;
     let cfg = ctx.config.get();
-    for _ in 1..cfg.consensus_config.vote_processing_workers {
+    for _ in 1..cfg.consensus_config.num_crypto_workers {
         // 0th index is for this thread
         let (tx, mut rx) = mpsc::unbounded_channel();
         vote_worker_chans.push(tx);
@@ -721,7 +794,7 @@ pub async fn handle_node_messages<Engine>(
 
             // If we are in the Dormant or Learner stage, only process AppendEntries or ViewChange. (No votes)
             if stage == LifecycleStage::Dormant as i8 || stage == LifecycleStage::Learner as i8 {
-                if let crate::proto::rpc::proto_payload::Message::AppendEntries(_) = req.0 {
+                if let crate::proto::rpc::proto_payload::Message::AppendEntries(_) = req.0.as_ref() {
                     // If I am Dormant, by this msg, I become a learner.
                     if stage == LifecycleStage::Dormant as i8 {
                         info!("Lifecycle stage: Dormant -> Learner");
@@ -731,7 +804,7 @@ pub async fn handle_node_messages<Engine>(
                         error!("Error processing append entries: {}", e);
                     }
                 }
-                if let crate::proto::rpc::proto_payload::Message::ViewChange(_) = req.0 {
+                if let crate::proto::rpc::proto_payload::Message::ViewChange(_) = req.0.as_ref() {
                     // If I am Dormant, by this msg, I become a learner.
                     if stage == LifecycleStage::Dormant as i8 {
                         info!("Lifecycle stage: Dormant -> Learner");
@@ -747,10 +820,10 @@ pub async fn handle_node_messages<Engine>(
 
             // AppendEntries should be processed by a single thread.
             // Only votes and backfill requests can be safely processed by multiple threads.
-            if let crate::proto::rpc::proto_payload::Message::Vote(_) = req.0 {
+            if let crate::proto::rpc::proto_payload::Message::Vote(_) = req.0.as_ref() {
                 let cfg = ctx.config.get();
                 let rr_cnt =
-                    vote_worker_rr_cnt % cfg.consensus_config.vote_processing_workers;
+                    vote_worker_rr_cnt % cfg.consensus_config.num_crypto_workers;
                 vote_worker_rr_cnt += 1;
                 if rr_cnt == 0 {
                     // Let this thread process it.
@@ -765,7 +838,7 @@ pub async fn handle_node_messages<Engine>(
             // else if let crate::proto::rpc::proto_payload::Message::BackfillRequest(_) = req.0 {
             //     let cfg = ctx.config.get();
             //     let mut rr_cnt =
-            //         vote_worker_rr_cnt % cfg.consensus_config.vote_processing_workers;
+            //         vote_worker_rr_cnt % cfg.consensus_config.num_crypto_workers;
             //     vote_worker_rr_cnt += 1;
             //     if rr_cnt == 0 {
             //         rr_cnt = 1;

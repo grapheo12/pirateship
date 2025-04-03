@@ -6,6 +6,8 @@ syntax = "proto3";
 package proto.checkpoint;
 import "consensus.proto";
 
+
+/////// DEPRECATED ///////
 message ProtoBackFillRequest {
     uint64 block_start = 1;
     uint64 block_end = 2;
@@ -13,4 +15,24 @@ message ProtoBackFillRequest {
 
 message ProtoBackFillResponse {
     proto.consensus.ProtoFork fork = 1;
+}
+
+////////////////////////////
+
+message ProtoBlockHint {
+    uint64 block_n = 1;
+    bytes digest = 2;
+}
+
+message ProtoBackfillNack {
+    oneof origin {
+        proto.consensus.ProtoAppendEntries ae = 1;
+        proto.consensus.ProtoViewChange vc = 2;
+    }
+
+    repeated ProtoBlockHint hints = 3;
+    uint64 last_index_needed = 4;
+    string reply_name = 5;
+
+
 }

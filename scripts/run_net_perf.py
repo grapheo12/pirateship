@@ -13,7 +13,7 @@ import datetime
 from plot_utils import parse_log_dir_with_total_clients, plot_tput_vs_latency
 
 
-def run_net_perf(node_template, client_template, ip_list, identity_file, repeat, seconds, git_hash, client_n, max_nodes=-1):
+def run_net_perf(node_template, client_template, ip_list, identity_file, repeat, seconds, git_hash, client_n, max_nodes=-1, payload_sz=4096):
     # This is almost same as run_remote.
     # But we will modify each clients config after all the configs are generated.
     # Then we will copy them over to remote and run experiments.
@@ -63,7 +63,7 @@ def run_net_perf(node_template, client_template, ip_list, identity_file, repeat,
 
         print("Running Nodes")
         promises = []
-        promises.extend(run_nodes_with_net_perf(node_conns, i, curr_time))
+        promises.extend(run_nodes_with_net_perf(node_conns, i, curr_time, payload_sz))
 
         time.sleep(1)
 
@@ -156,7 +156,13 @@ def run_net_perf(node_template, client_template, ip_list, identity_file, repeat,
     help="Maximum number of nodes to use",
     type=click.INT
 )
-def main(node_template, client_template, ip_list, identity_file, repeat, seconds, max_nodes):
+@click.option(
+    "-sz", "--size",
+    default=4096,
+    help="Payload size",
+    type=click.INT
+)
+def main(node_template, client_template, ip_list, identity_file, repeat, seconds, max_nodes, size):
     # build_project()
     git_hash = get_current_git_hash()
     tag_all_machines(ip_list)
@@ -168,7 +174,7 @@ def main(node_template, client_template, ip_list, identity_file, repeat, seconds
             run_net_perf(
                 node_template, client_template, ip_list,
                 identity_file, repeat, seconds, git_hash,
-                client, max_nodes)
+                client, max_nodes, size)
         )
 
     

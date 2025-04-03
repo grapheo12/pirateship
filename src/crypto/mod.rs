@@ -3,9 +3,12 @@
 
 mod ed25519;
 mod sha256;
+mod service;
 
 #[cfg(test)]
 mod tests;
 
 pub use ed25519::*;
 pub use sha256::*;
+
+pub use service::*;

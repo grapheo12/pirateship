@@ -6,9 +6,9 @@ use rand_chacha::ChaCha20Rng;
 use rand::prelude::*;
 use zipf::ZipfDistribution;
 
-use crate::{config::KVReadWriteYCSB, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}, utils::workload_generators::Executor};
+use crate::{config::KVReadWriteYCSB, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}};
 
-use super::{PerWorkerWorkloadGenerator, WorkloadUnit};
+use super::{PerWorkerWorkloadGenerator, WorkloadUnit, Executor};
 
 /// This is enough for YCSB-A, B, C
 #[derive(Clone)]

@@ -354,12 +354,20 @@ resource "azurerm_linux_virtual_machine" "clientpool_vm" {
     storage_account_type = "StandardSSD_LRS"
   }
 
+  # source_image_reference {
+  #   publisher = "Canonical"
+  #   offer     = "ubuntu-24_04-lts"
+  #   sku       = "server"
+  #   version   = "latest"
+  # }
+
   source_image_reference {
     publisher = "Canonical"
-    offer     = "ubuntu-24_04-lts"
-    sku       = "server"
-    version   = "latest"
+    offer     = "0001-com-ubuntu-server-focal"
+    sku       = "20_04-lts-gen2"
+    version   = "20.04.202410020"
   }
+  
 
   computer_name  = "client${count.index}"
   admin_username = var.username

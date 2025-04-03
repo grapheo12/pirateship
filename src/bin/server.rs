@@ -2,9 +2,11 @@
 // Licensed under the MIT License.
 
 use log::{debug, error, info, warn};
-use pft::{config::{self, Config}, consensus, execution::engines::{kvs::PinnedKVStoreEngine, logger::PinnedLoggerEngine, sql::PinnedSQLEngine}};
+use pft::config::{self, Config};
+use pft::consensus_v2;
 use tokio::{runtime, signal};
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
+use pft::consensus_v2::engines::null_app::NullApp;
 use std::io::Write;
 
 #[global_allocator]
@@ -56,7 +58,9 @@ fn get_feature_set() -> (&'static str, &'static str) {
 
 async fn run_main(cfg: Config) -> io::Result<()> {
     #[cfg(feature = "app_logger")]
-    let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
+    let mut node = consensus_v2::ConsensusNode::<NullApp>::new(cfg);
+    // #[cfg(feature = "app_logger")]
+    // let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
     
     #[cfg(feature = "app_kvs")]
     let node = Arc::new(consensus::ConsensusNode::<PinnedKVStoreEngine>::new(&cfg));
@@ -64,7 +68,8 @@ async fn run_main(cfg: Config) -> io::Result<()> {
     #[cfg(feature = "app_sql")]
     let node = Arc::new(consensus::ConsensusNode::<PinnedSQLEngine>::new(&cfg));
     
-    let mut handles = consensus::ConsensusNode::run(node);
+    // let mut handles = consensus::ConsensusNode::run(node);
+    let mut handles = node.run().await;
 
     match signal::ctrl_c().await {
         Ok(_) => {
@@ -82,7 +87,7 @@ async fn run_main(cfg: Config) -> io::Result<()> {
     Ok(())
 }
 
-const NUM_THREADS: usize = 6;
+const NUM_THREADS: usize = 32;
 
 fn main() {
     log4rs::init_config(config::default_log4rs_config()).unwrap();
@@ -100,16 +105,17 @@ fn main() {
     let core_ids = 
         Arc::new(Mutex::new(Box::pin(core_affinity::get_core_ids().unwrap())));
 
-    // let start_idx = cfg.consensus_config.node_list.iter().position(|r| r.eq(&cfg.net_config.name)).unwrap();
+    let start_idx = cfg.consensus_config.node_list.iter().position(|r| r.eq(&cfg.net_config.name)).unwrap();
     let mut num_threads = NUM_THREADS;
     {
         let _num_cores = core_ids.lock().unwrap().len();
-        if _num_cores < num_threads {
-            num_threads = _num_cores;
+        if _num_cores - 1 < num_threads {
+            // Leave one core for the storage compaction thread.
+            num_threads = _num_cores - 1;
         }
     }
 
-    let start_idx = 0; // start_idx * num_threads;
+    let start_idx = start_idx * num_threads;
     
     let i = Box::pin(AtomicUsize::new(0));
     let runtime = runtime::Builder::new_multi_thread()

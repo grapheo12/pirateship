@@ -1,5 +1,7 @@
 workdir = "deployment_artifacts"
 project_home = "https://github.com/grapheo12/pirateship"
+deployment_setup = "docker"
+
 
 [deployment_config]
 type = "aci"#, "terraform"
@@ -36,7 +38,7 @@ liveness_u = 1
 max_backlog_batch_size = 1000
 signature_max_delay_blocks = 50
 signature_max_delay_ms = 1000
-vote_processing_workers = 5
+num_crypto_workers = 5
 view_timeout_ms = 1000
 
 [node_config.consensus_config.log_storage_config.RocksDB]

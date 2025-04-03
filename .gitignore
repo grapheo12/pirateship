@@ -21,3 +21,5 @@ __pycache__
 *.pkl
 
 **/deployment_artifacts/
+
+latencies.txt

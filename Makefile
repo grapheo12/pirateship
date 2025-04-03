@@ -38,7 +38,7 @@ pirateship_logger_nostorage:
 
 .PHONY: lucky_raft_logger
 lucky_raft_logger:
-	CC=clang CXX=clang++ cargo build --release --features lucky_raft,app_logger,storage --no-default-features
+	CC=clang CXX=clang++ cargo build --release --features lucky_raft,app_logger --no-default-features
 
 
 .PHONY: signed_raft_logger

@@ -20,7 +20,7 @@ use crate::{
     rpc::{client::Client, server::{LatencyProfile, Server}, PinnedMessage},
 };
 
-use super::{auth::HandshakeResponse, client::PinnedClient, server::{GetServerKeys, MsgAckChan, RespType}, MessageRef};
+use super::{auth::HandshakeResponse, client::PinnedClient, server::{ServerContextType, MsgAckChan, RespType}, MessageRef};
 
 fn process_args(i: i32) -> Config {
     let _p = format!("configs/node{i}_config.json");
@@ -44,9 +44,13 @@ fn mock_msg_handler(_ctx: &ServerEmptyCtx, buf: MessageRef, _tx: MsgAckChan) -> 
 
 #[derive(Clone)]
 struct ServerEmptyCtx;
-impl GetServerKeys for ServerEmptyCtx {
+impl ServerContextType for ServerEmptyCtx {
     fn get_server_keys(&self) -> Arc<Box<KeyStore>> {
         Arc::new(Box::new(KeyStore::empty()))
+    }
+    
+    async fn handle_rpc(&self, msg: MessageRef<'_>, ack_chan: MsgAckChan) -> Result<RespType, Error> {
+        mock_msg_handler(self, msg, ack_chan)
     }
 }
 
@@ -57,7 +61,7 @@ async fn run_body(
 ) -> Result<(), Error> {
     let server = server.clone();
     let server_handle = tokio::spawn(async move {
-        let _ = Server::<ServerEmptyCtx>::run(server, ServerEmptyCtx{}).await;
+        let _ = Server::<ServerEmptyCtx>::run(server).await;
     });
     let data = String::from("Hello world!\n");
     let data = data.into_bytes();
@@ -110,14 +114,14 @@ async fn test_authenticated_client_server() {
         &config.rpc_config.allowed_keylist_path,
         &config.rpc_config.signing_priv_key_path,
     );
-    let server = Arc::new(Server::new(&config, mock_msg_handler, &keys));
-    let client = Client::new(&config, &keys).into();
+    let server = Arc::new(Server::new(&config, ServerEmptyCtx{}, &keys));
+    let client = Client::new(&config, &keys, false, 0).into();
     run_body(&server, &client, &config).await.unwrap();
 
-    let server = Arc::new(Server::new(&config, mock_msg_handler, &keys));
+    let server = Arc::new(Server::new(&config, ServerEmptyCtx{}, &keys));
     run_body(&server, &client, &config).await.unwrap();
 
-    let server = Arc::new(Server::new(&config, mock_msg_handler, &keys));
+    let server = Arc::new(Server::new(&config, ServerEmptyCtx{}, &keys));
     run_body(&server, &client, &config).await.unwrap();
 }
 
@@ -126,23 +130,27 @@ async fn test_unauthenticated_client_server() {
     colog::init();
     let config = process_args(1);
     info!("Starting {}", config.net_config.name);
-    let server = Arc::new(Server::new_unauthenticated(&config, mock_msg_handler));
+    let server = Arc::new(Server::new_unauthenticated(&config, ServerEmptyCtx{}));
     let client = Client::new_unauthenticated(&config).into();
     run_body(&server, &client, &config).await.unwrap();
 
-    let server = Arc::new(Server::new_unauthenticated(&config, mock_msg_handler));
+    let server = Arc::new(Server::new_unauthenticated(&config, ServerEmptyCtx{}));
     run_body(&server, &client, &config).await.unwrap();
 
-    let server = Arc::new(Server::new_unauthenticated(&config, mock_msg_handler));
+    let server = Arc::new(Server::new_unauthenticated(&config, ServerEmptyCtx{}));
     run_body(&server, &client, &config).await.unwrap();
 }
 
 #[derive(Clone)]
 struct ServerCtx(Arc<Mutex<Pin<Box<i32>>>>);
 
-impl GetServerKeys for ServerCtx {
+impl ServerContextType for ServerCtx {
     fn get_server_keys(&self) -> Arc<Box<KeyStore>> {
         Arc::new(Box::new(KeyStore::empty()))
+    }
+    
+    async fn handle_rpc(&self, msg: MessageRef<'_>, ack_chan: MsgAckChan) -> Result<RespType, Error> {
+        drop_after_n(self, msg, ack_chan)
     }
 }
 
@@ -182,21 +190,21 @@ async fn test_3_node_bcast() {
     let ctx1 = ServerCtx(Arc::new(Mutex::new(Box::pin(3))));
     let ctx2 = ServerCtx(Arc::new(Mutex::new(Box::pin(1))));
     let ctx3 = ServerCtx(Arc::new(Mutex::new(Box::pin(2))));
-    let server1 = Arc::new(Server::new(&config1, drop_after_n, &keys1));
-    let server2 = Arc::new(Server::new(&config2, drop_after_n, &keys2));
-    let server3 = Arc::new(Server::new(&config3, drop_after_n, &keys3));
+    let server1 = Arc::new(Server::new(&config1, ctx1, &keys1));
+    let server2 = Arc::new(Server::new(&config2, ctx2, &keys2));
+    let server3 = Arc::new(Server::new(&config3, ctx3, &keys3));
 
     let server_handle1 = tokio::spawn(async move {
-        let _ = Server::run(server1, ctx1).await;
+        let _ = Server::run(server1).await;
     });
     let server_handle2 = tokio::spawn(async move {
-        let _ = Server::run(server2, ctx2).await;
+        let _ = Server::run(server2).await;
     });
     let server_handle3 = tokio::spawn(async move {
-        let _ = Server::run(server3, ctx3).await;
+        let _ = Server::run(server3).await;
     });
 
-    let client = Client::new(&config1, &keys1).into();
+    let client = Client::new(&config1, &keys1, false, 0).into();
     let names = vec![
         String::from("node1"),
         String::from("node2"),
@@ -206,21 +214,21 @@ async fn test_3_node_bcast() {
     let data = data.into_bytes();
     let sz = data.len();
     let data = PinnedMessage::from(data, sz, super::SenderType::Anon);
-    PinnedClient::broadcast(&client, &names, &data, &mut LatencyProfile::new())
+    PinnedClient::broadcast(&client, &names, &data, &mut LatencyProfile::new(), names.len())
         .await
         .expect("Broadcast should complete with 3 nodes!");
     sleep(Duration::from_millis(100)).await;
     server_handle1.abort();
     let _ = tokio::join!(server_handle1);
     sleep(Duration::from_millis(1000)).await;
-    PinnedClient::broadcast(&client, &names, &data, &mut LatencyProfile::new())
+    PinnedClient::broadcast(&client, &names, &data, &mut LatencyProfile::new(), names.len())
         .await
         .expect("Broadcast should complete with 2 nodes!");
     sleep(Duration::from_millis(100)).await;
     server_handle2.abort();
     let _ = tokio::join!(server_handle2);
 
-    PinnedClient::broadcast(&client, &names, &data, &mut LatencyProfile::new())
+    PinnedClient::broadcast(&client, &names, &data, &mut LatencyProfile::new(), names.len())
         .await
         .expect("There are not enough nodes!");
 
@@ -238,7 +246,7 @@ pub fn test_auth_serde() {
         )),
     };
 
-    let resp_buf = h.serialize();
+    let resp_buf = h.serialize(false, 0);
 
     println!("{:?}", resp_buf);
 
@@ -249,7 +257,7 @@ pub fn test_auth_serde() {
 
     println!("{:?}", resp);
 
-    if !(resp.name == h.name && resp.signature == h.signature) {
+    if !(resp.0.name == h.name && resp.0.signature == h.signature) {
         panic!("Field mismatch: {:?} vs {:?}", h, resp);
     }
 }
