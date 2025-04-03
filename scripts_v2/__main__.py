@@ -21,6 +21,7 @@ import tqdm
 from crypto import *
 from ssh_utils import *
 from deployment import Deployment
+from deployment_aci import AciDeployment
 from experiments import Experiment
 from results import *
 import pickle
@@ -113,7 +114,14 @@ def parse_config(path, workdir=None, existing_experiments=None):
         curr_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
         workdir = os.path.join(toml_dict["workdir"], curr_time)
 
-    deployment = Deployment(toml_dict["deployment_config"], workdir)
+    # Create Deployment (Terraform, ACI, etc.)
+    # TODO(natacha): Add a way for Hybrid deployments (as a way to facilitate ACI + VM testing)
+    type = toml_dict["deployment_config"].get("type")
+    if (type is None) or  type == "vm":
+        # Default to VM deployment
+        deployment = Deployment(toml_dict["deployment_config"], workdir)
+    else:
+        deployment = AciDeployment(toml_dict["deployment_config"], workdir)
 
     base_node_config = toml_dict["node_config"]
     base_client_config = toml_dict["client_config"]
@@ -196,7 +204,7 @@ def parse_config(path, workdir=None, existing_experiments=None):
 
 @click.group(cls=DefaultGroup, default='all', default_if_no_args=True, help="Run experiment pipeline (runs all if no subcommand is provided)")
 @click.pass_context
-def main(ctx):
+def main(ctx):#
     if ctx.invoked_subcommand is None:
         # Run all()
         ctx.invoke(all)

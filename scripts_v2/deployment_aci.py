@@ -7,18 +7,16 @@ import time
 from time import sleep
 import tqdm
 import re
+import container_utils as cu
 from ssh_utils import *
+from deployment import Deployment
 
 
-class Deployment:
+class AciDeployment(Deployment):
     '''
-    By default it is assumed that the deployment is done using Azure Terraform.
-    Nodes are named as follows:
-        nodepool_vmX_{tdx|sev|nontee}_locY_idZ
-        clientpool_vmX_locY_idZ
-    Override in a subclass the deployment-specific methods to change how nodes/containers are deployed.
-    This deployment is specific to "SSH-able" deployments.
-    Not suited for Docker/K8s deployments.
+    This deploy targets Azure containers (both confidential and non-confidential) .
+    ACI containers use docker for launch and can directly be SSH-ed into using public
+    IPs on a pre-allocated port or on port 22.
 
     For other SSH-able deployments, override the following methods:
         - deploy
@@ -57,32 +55,64 @@ class Deployment:
 
 
     def __init__(self, config, workdir):
-        self.mode = config["mode"]
         self.nodelist = []
         self.workdir = workdir
         self.raw_config = deepcopy(config)
-        first_client = False
-        if self.mode == "manual":
-            self.populate_nodelist()
+        self.first_client = False
+        self.mode = config["mode"]
 
         self.ssh_user = config["ssh_user"]
+
+        if os.path.isabs(config["ssh_pub_key"]):
+            self.ssh_pub_key = config["ssh_pub_key"]
+        else:
+            self.ssh_pub_key = os.path.join(workdir, "deployment", config["ssh_pub_key"])
 
         if os.path.isabs(config["ssh_key"]):
             self.ssh_key = config["ssh_key"]
         else:
             self.ssh_key = os.path.join(workdir, "deployment", config["ssh_key"])
+
         self.node_port_base = int(config["node_port_base"])
+
+        # True if running inside a (confidential) container
+        self.confidential = config["confidential"] 
+        # Name of (unqualified) Azure Registry
+        self.registry_name = config["registry_name"]
+        # Name of Azure Resource Group  
+        self.resource_group = config["resource_group"]
+        # Name of Container Image
+        self.image_name = config["image_name"]
+        # Template Json necessary to construct container image
+        if os.path.isabs(config["template"]):
+            self.template= config["template"]
+        else:
+            self.template= os.path.join(workdir, "deployment", "azure-aci", config["template"])
+
+        # Remapped Docker SSH Port for local container deployment
+        self.docker_ssh = config["docker_ssh"]
+        
+        if self.mode == "local":
+            # Offers opportunity to test/deploy containers locally. Key difference is that the containers listen
+            # externally on an remapped port (docker_ssh). Otherwise works as normal.
+            self.local = True
+        else:
+            self.local = False 
+
+        if self.mode == "manual":
+            # If manual, the nodelist must be specified in the config file
+            self.populate_nodelist()
 
         self.parse_custom_layouts()
 
-    def find_azure_tf_dir(self):
+    def find_azure_aci_dir(self):
         '''
-        Find where the terraform files are located.
+        Find where the yaml files are located.
         The search paths are hardcoded and are relative to the root of the repo.
         '''
         search_paths = [
-            os.path.join("deployment", "azure-tf"),
-            os.path.join("scripts_v2", "deployment", "azure-tf"),
+            os.path.join("deployment", "azure-aci"),
+            os.path.join("scripts_v2", "deployment", "azure-aci"),
         ]
 
         found_path = None
@@ -92,9 +122,9 @@ class Deployment:
                 break
 
         if found_path is None:
-            raise FileNotFoundError("Azure Terraform directory not found")
+            raise FileNotFoundError("Azure ACI Deployment directory not found")
         else:
-            print(f"Found Azure Terraform directory at {found_path}")
+            print(f"Found Azure ACI Deployment directory at {found_path}")
 
         return found_path
     
@@ -111,8 +141,8 @@ class Deployment:
         search_paths = [
             "deployment",
             os.path.join("scripts_v2", "deployment"),
-            os.path.join("deployment", "azure-tf"),
-            os.path.join("scripts_v2", "deployment", "azure-tf"),
+            os.path.join("deployment", "azure-aci"),
+            os.path.join("scripts_v2", "deployment", "azure-aci"),
         ]
 
         for path in search_paths:
@@ -132,22 +162,38 @@ class Deployment:
             "./__prepare-dev-env.sh"
         ], self.ssh_user, self.ssh_key, self.dev_vm, hide=False)
 
-        
+    # In ACI, the SSH private key must already exist. This function ensures that the key has the correct permissions
+    # and is used for compatibility with Terraform 
     def get_ssh_key(self):
-        tf_output_dir = os.path.abspath(os.path.join(self.workdir, "deployment"))
-        tfstate_path = os.path.join(tf_output_dir, "terraform.tfstate")
-        private_key = run_local([
-            f"terraform output -state={tfstate_path} --raw cluster_private_key"
-        ])[0]
-        with open(self.ssh_key, "w") as f:
-            f.write(private_key)
-
-        run_local([
+           run_local([
             "chmod 600 " + self.ssh_key
         ])
 
+    # Generates container tag for client containers, where 
+    # TODO(natacha) add parameter descritions
+    # Note that _ is not an allowable character in Azure containers
+    def generate_client_container_tag(self, global_idx, platform_idx, inregion_idx):
+        tee_name = "aci" if not self.confidential else "caci"
+        return f"clientpool-vm{global_idx}-{tee_name}-loc{platform_idx}-id{inregion_idx}"
+
+    # Generates container tag for node containers, where 
+    # TODO(natacha) add parameter descritions
+    # Note that _ is not an allowable character in Azure containers
+    def generate_node_container_tag(self, global_idx, platform_idx, inregion_idx):
+        tee_name = "aci" if not self.confidential else "caci"
+        return f"nodepool-vm{global_idx}-{tee_name}-loc{platform_idx}-id{inregion_idx}"
+
+    # Current Shubham code uses "_" rather than "-", but this is not possible in Azure.
+    # This function converts "_" to "-" in the container tag.
+    # TODO(natacha): Let's move everything to a more consistent naming scheme.    
+    def convert_to_terraform(tag):
+        return tag.replace("-", "_")
+
 
     def deploy(self):
+
+        print("[WARNING]: To run this script, the user must be logged in to the Azure CLI. Please make sure to run az login from command line first")
+
         run_local([
             f"mkdir -p {self.workdir}",
             f"mkdir -p {self.workdir}/deployment",
@@ -159,38 +205,91 @@ class Deployment:
             # Manual must mean there is a nodelist specified in the toml file.
             # There is no need to deploy.
             return
-        
-        # Terraform deploy
 
-        # Find the azure-tf directory relative to where the script is being called from
-        found_path = self.find_azure_tf_dir()
+       # Find the azure-tf directory relative to where the script is being called from
+        found_path = self.find_azure_aci_dir()
 
         if found_path is None:
-            raise FileNotFoundError("Azure Terraform directory not found")
+            raise FileNotFoundError("Azure ACI directory not found")
         else:
-            print(f"Found Azure Terraform directory at {found_path}")
+            print(f"Found Azure ACI directory at {found_path}")
 
-        # There must exist a var-file in azure-tf/setups for the deployment mode
-        var_file = os.path.join(found_path, "setups", f"{self.mode}.tfvars")
-        if not os.path.exists(var_file):
-            raise FileNotFoundError(f"Var file for deployment mode {self.mode} not found")
+        # There must exist a configuration file in azure-aci/setups for the deployment mode
+        deploy_config  = os.path.join(found_path, "setups", f"{self.mode}.yaml")
+        print(deploy_config)
+        if not os.path.exists(deploy_config):
+            raise FileNotFoundError(f"Deployment config file for deployment mode {self.mode} not found")
+        if not os.path.exists(self.template):
+            raise FileNotFoundError(f"Deployment config file for Azure Template{self.template} not found")
 
-        tf_output_dir = os.path.abspath(os.path.join(self.workdir, "deployment"))
-        plan_path = os.path.join(tf_output_dir, "main.tfplan")
-        tfstate_path = os.path.join(tf_output_dir, "terraform.tfstate")
 
-        # Plan
-        run_local([
-            f"terraform -chdir={found_path} init",
-            f"terraform -chdir={found_path} plan -no-color -var-file=\"{var_file}\" -var=\"username={self.ssh_user}\" -out={plan_path} -state={tfstate_path} > {tf_output_dir}/plan.log 2>&1",
-        ])
+        # Get token that will allow connectiong to the Azure Container Registry
+        token = cu.getAcrToken(self.registry_name)
 
-        # Apply
-        run_local([
-            f"terraform -chdir={found_path} apply -no-color -auto-approve -state={tfstate_path} {plan_path} > {tf_output_dir}/apply.log 2>&1",
-        ])
+        # Build containers
+        #cu.buildImage(cu.getFullImageName(self.registry_name, self.image_name), found_path) #TODO: expects cluster_key.pub in same repo as called. FIX
+        #cu.pushImage(self.registry_name, cu.getFullImageName(self.registry_name, self.image_name))
 
-        # Populate nodelist
+        # Deploy containers on Azure or locally
+        # If deploying on Azure, the YAML configuration file is used
+        # to determine which/what containers to launch and where
+        # TODO(natacha) Local Option is not currently implemented in the v2 scripts.
+
+        docker_ssh = 22 if not self.local else docker_ssh # Reset SSH port to 22 if not in local mode
+        extractConfigArgs = cu.extractConfig(deploy_config)['platforms']
+        print(extractConfigArgs)
+
+        # Iterate over the configuration (regions)
+        total_idx = 0
+        platform_idx = 0
+        nodelist = {}
+        for platform in extractConfigArgs:
+          location = platform['location']
+          print("Creating containers in " + location)
+          # Launch Node Containers
+          launch_count = int(platform["nodepool_count"])
+          print("Launching "+ str(launch_count) + " node containers")
+          base_port = self.node_port_base
+          for i in range(0, launch_count):
+            nodepool_container_tag_i = self.generate_node_container_tag(total_idx,platform_idx, i)
+            #cu.launchDeployment(self.template, self.resource_group, nodepool_container_tag_i, self.registry_name, self.image_name, self.ssh_pub_key, token , location, base_port, docker_ssh, self.local, self.confidential)
+            ip = cu.obtainIpAddress(self.resource_group, nodepool_container_tag_i, self.local)
+            nodelist[nodepool_container_tag_i] = {
+                "private_ip": "127.0.0.1" if self.local else ip ,
+                "public_ip":  ip,
+                "tee_type":  "aci" if not self.confidential else "caci",
+                "region_id": platform_idx,
+                "ssh_port": base_port
+            }
+            base_port = base_port + 1
+            # This line is only relevant when running in local mode
+            docker_ssh = docker_ssh + 1 if self.local else docker_ssh
+            total_idx = total_idx + 1
+
+          # Launch Client Containers
+          launch_count = int(platform["clientpool_count"])
+          print("Launching "+ str(launch_count) + " client containers")
+          total_idx = 0
+          for i in range(0, launch_count):
+              client_container_tag_i = self.generate_client_container_tag(total_idx,platform_idx,i)
+              #cu.launchDeployment(self.template, self.resource_group, client_container_tag_i, self.registry_name, self.image_name, self.ssh_pub_key, token , location, base_port, docker_ssh, self.local, self.confidential)
+              ip = cu.obtainIpAddress(self.resource_group, client_container_tag_i, self.local)
+              nodelist[client_container_tag_i] = {
+                "private_ip":  ip,
+                "public_ip":  ip,
+                "tee_type":  "aci" if not self.confidential else "caci",
+                "region_id": platform_idx,
+                "ssh_port": base_port
+              }
+              base_port = base_port + 1
+              # This line is only relevant when running in local mode
+              docker_ssh = docker_ssh + 1 if self.local else docker_ssh
+             
+          platform_idx = platform_idx + 1
+        
+        self.raw_config["node_list"] = nodelist
+        pprint(nodelist)
+
         self.populate_nodelist()
 
         # Store the SSH key
@@ -241,41 +340,21 @@ class Deployment:
         ], self.ssh_user, self.ssh_key, self.dev_vm)
 
 
-
-
-    def populate_raw_node_list_from_terraform(self):
-        found_path = self.find_azure_tf_dir()
+    def populate_raw_node_list_from_azure(self):
+        found_path = self.find_azure_aci_dir()
 
         if found_path is None:
             raise FileNotFoundError("Azure Terraform directory not found")
-        
-        tf_output_dir = os.path.abspath(os.path.join(self.workdir, "deployment"))
-        tfstate_path = os.path.join(tf_output_dir, "terraform.tfstate")
 
-        rg_name = run_local([
-            f"terraform output -state={tfstate_path} --raw resource_group_name"
-        ])[0]
+        ips = cu.collectAllIpAddressJson(self.resource_group, self.local)
+        print(ips)
+        ips = {} if ips=="" else json.loads(ips)
 
-        print("Resource group name:", rg_name)
-
-        # Use az cli to get the public and private IPs of all deployed vms in this resource group
-        private_ips, public_ips = run_local([
-            r'az vm list-ip-addresses --resource-group ' + rg_name
-            + r' --query "[].{Name:virtualMachine.name, IP:virtualMachine.network.privateIpAddresses[0]}" --output json',
-
-            r'az vm list-ip-addresses --resource-group ' + rg_name
-            + r' --query "[].{Name:virtualMachine.name, IP:virtualMachine.network.publicIpAddresses[0].ipAddress}" --output json'
-        ])
-
-        private_ips = json.loads(private_ips)
-        public_ips = json.loads(public_ips)
-
-        vm_names = {vm["Name"] for vm in private_ips}
+        vm_names = {vm["Name"] for vm in ips}
 
         node_list = {}
         for name in vm_names:
-            private_ip = next(vm["IP"] for vm in private_ips if vm["Name"] == name)
-            public_ip = next(vm["IP"] for vm in public_ips if vm["Name"] == name)
+            ip = next(vm["IP"] for vm in ips if vm["Name"] == name)
             
             if "tdx" in name:
                 tee_type = "tdx"
@@ -291,8 +370,8 @@ class Deployment:
                 region_id = 0
 
             node_list[name] = {
-                "private_ip": private_ip,
-                "public_ip": public_ip,
+                "private_ip": ip,
+                "public_ip": ip,
                 "tee_type": tee_type,
                 "region_id": region_id
             }
@@ -302,12 +381,16 @@ class Deployment:
         pprint(node_list)
 
 
+
+
     def populate_nodelist(self):
         if self.mode != "manual":
-            self.populate_raw_node_list_from_()
+            self.populate_raw_node_list_from_azure()
     
         first_client = False
         for name, info in self.raw_config["node_list"].items():
+            print(name)
+            print(info)
             public_ip = info["public_ip"]
             private_ip = info["private_ip"]
             is_client = name.startswith("client")
@@ -332,39 +415,19 @@ class Deployment:
 
             if dev_vm:
                 self.dev_vm = self.nodelist[-1]
-        
-        if not(first_client):
-            raise ValueError("No client VM")
-
+       
         
     def teardown(self):
         if self.mode == "manual":
             return
         
-        found_path = self.find_azure_tf_dir()
-        if found_path is None:
-            raise FileNotFoundError("Azure Terraform directory not found")
-        else:
-            print(f"Found Azure Terraform directory at {found_path}")
-
-        tf_output_dir = os.path.abspath(os.path.join(self.workdir, "deployment"))
-        tfstate_path = os.path.join(tf_output_dir, "terraform.tfstate")
-
-
-        while True:
-            try:
-                run_local([
-                    f"terraform -chdir={found_path} apply -destroy -no-color -auto-approve -state={tfstate_path}",
-                ], hide=False)
-                break
-            except Exception as e:
-                print("Error while destroying VMs. Retrying...")
-                print(e)
+        print(cu.deleteDeployment(self.resource_group, self.deployment_name))
 
     def __repr__(self):
         s = f"Mode: {self.mode}\n"
         s += f"SSH user: {self.ssh_user}\n"
-        s += f"SSH key path: {self.ssh_key}\n"
+        s += f"SSH private key path: {self.ssh_key}\n"
+        s += f"SSH public key path: {self.ssh_pub_key}\n"
         s += f"Node port base: {self.node_port_base}\n"
         s += "++++ Nodelist +++++\n"
         for node in self.nodelist:

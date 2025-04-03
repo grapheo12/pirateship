@@ -250,6 +250,7 @@ class Experiment:
         cmds = [
             f"git clone {self.project_home} {remote_repo}"
         ]
+        print(cmds)
         try:
             run_remote_public_ip(cmds, self.dev_ssh_user, self.dev_ssh_key, self.dev_vm)
         except Exception as e:
@@ -414,6 +415,7 @@ sleep 1
         # Hard dependency on Linux style paths
         self.remote_workdir = f"/home/{deployment.ssh_user}/{deployment.workdir}/experiments/{self.name}"
 
+        print("Reached here")
         # Clone repo in remote and build
         git_hash, git_diff, build_cmd = self.get_build_details()
         use_cached_build = git_hash == last_git_hash and git_diff == last_git_diff and build_cmd == last_build_command
