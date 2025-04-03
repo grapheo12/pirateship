@@ -1,4 +1,5 @@
     use actix_web::{put, get, web, App, HttpResponse, HttpServer, Responder};
+    use bitcode::decode;
     use crossbeam::deque::Worker;
     use log::{debug, warn};
     use prost::Message;
@@ -93,7 +94,7 @@
         let request = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
         // Send the request and await the reply.
-        let resp = match PinnedClient::send_and_await_reply(&data.client, &"client1".to_string(), request.as_ref()).await {
+        let resp = match PinnedClient::send_and_await_reply(&data.client, &"node1".to_string(), request.as_ref()).await {
             Ok(resp) => resp,
             Err(e) => {
                 warn!("Error sending request: {}", e);
@@ -104,7 +105,7 @@
         let resp = resp.as_ref();
 
         // Decode the response payload.
-        let decoded_payload = match ProtoPayload::decode(&resp.0.as_slice()[0..resp.1]) {
+        let decoded_payload  = match ProtoClientReply::decode(&resp.0.as_slice()[0..resp.1]) {
             Ok(payload) => payload,
             Err(e) => {
                 warn!("Error decoding response: {}", e);
@@ -118,6 +119,7 @@
             "key": key_str,
             "value": value_str,
             "node list": data.node_list,
+            "payload": decoded_payload
         }))
     }
 
@@ -145,6 +147,20 @@
         }))
     }
 
+    pub async fn setup_frontend(config: Config) -> String {
+        // let _ = run_actix_server(config).await;
+        "hello".to_string()
+    }
+
+    pub async fn test_actix_server() -> std::io::Result<()> {
+        HttpServer::new(|| {
+            App::new()
+        })
+        .bind("127.0.0.1:8080")? 
+        .run()                
+        .await
+    }
+
     pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
         let curr_leader_id = Arc::new(Mutex::new(0));
         let curr_round_robin_id=  Arc::new(Mutex::new(0));
@@ -156,7 +172,7 @@
         let client = Arc::new(Client::new(&config, &keys, false, 0 as u64).into());
 
 
-        HttpServer::new(move || {
+        let _ = HttpServer::new(move || {
             App::new()
             .app_data(web::Data::new(AppState {
                     client: client.clone(),
@@ -171,7 +187,8 @@
         })
         .bind("127.0.0.1:8080")? 
         .run()                
-        .await
+        .await;
+        Ok(())
     }
 
     struct OutstandingRequest {

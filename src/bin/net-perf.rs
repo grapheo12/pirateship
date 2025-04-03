@@ -7,8 +7,8 @@ use tokio::{runtime, signal, task::JoinSet, time::sleep};
 use std::{env, fs, io::{self, Error}, path, pin::Pin, sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex}, time::Duration};
 use std::io::Write;
 
-#[global_allocator]
-static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+// #[global_allocator]
+// static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 /// Fetch json config file from command line path.
 /// Panic if not found or parsed properly.
