@@ -1,11 +1,5 @@
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
-use bitcode::decode;
-use crossbeam::deque::Worker;
-use ed25519_dalek::pkcs8::spki::der::asn1::SetOfVec;
-use gluesql::core::ast_builder::function::sign;
-use gluesql::core::sqlparser::keywords::USER;
 use log::{debug, warn};
-use nix::libc::passwd;
 use prost::Message;
 use serde::Deserialize;
 use sha2::digest::typenum::Integer;
@@ -21,7 +15,6 @@ use pft::rpc::{MessageRef, PinnedMessage};
 use pft::{config::ClientConfig, proto::{client::{self, ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::channel::{make_channel, Receiver, Sender}};
 use crate::payloads::{RegisterPayload, PubKeyPayload};
 
-use rand_chacha::ChaCha20Rng;
 use ed25519_dalek::{ed25519, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SigningKey, SecretKey, VerifyingKey};
 
 #[derive(Clone)]
@@ -286,6 +279,13 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
     keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
     let keys = keys.clone();
 
+    let addr = config.net_config.addr.clone();
+    // Add 1000 to the port.
+    let (host, port) = addr.split_once(':').unwrap();
+    let port: u16 = port.parse().unwrap();
+    let port = port + 1000;
+    let addr = format!("{}:{}", host, port);
+
     HttpServer::new(move || {
         // Each worker thread creates its own client instance.
         let client = Client::new(&config, &keys, false, 0 as u64).into();
@@ -303,7 +303,7 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
             .service(privkey)
             .service(home)
     })
-    .bind("127.0.0.1:8080")?
+    .bind(addr)?
     .run()
     .await?;
     Ok(())
@@ -320,6 +320,7 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
             on_crash_commit: None,
             on_byzantine_commit: None,
             is_reconfiguration: false,
+            is_2pc: false,
         }
     } else {
         ProtoTransaction {
@@ -327,6 +328,7 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
             on_crash_commit: Some(transaction_phase.clone()),
             on_byzantine_commit: None,
             is_reconfiguration: false,
+            is_2pc: false,
         }
     };
     

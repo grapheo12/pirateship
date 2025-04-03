@@ -6,6 +6,9 @@
 pirateship_logger:
 	CC=clang CXX=clang++ cargo build --release
 
+.PHONY: contrib
+contrib:
+	CC=clang CXX=clang++ cargo build --release --manifest-path contrib/Cargo.toml
 
 .PHONY: pirateship_kvs
 pirateship_kvs:

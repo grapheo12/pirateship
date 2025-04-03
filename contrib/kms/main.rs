@@ -7,10 +7,8 @@ use pft::consensus_v2;
 use tokio::{runtime, signal};
 use std::io::Write;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
-use pft::consensus_v2::engines::null_app::NullApp;
 use pft::consensus_v2::engines::kvs::KVSAppEngine;
 mod frontend;
-use std::thread;
 
 mod payloads;
 
@@ -110,15 +108,15 @@ fn main() {
         Arc::new(Mutex::new(Box::pin(core_affinity::get_core_ids().unwrap())));
 
     let start_idx = cfg.consensus_config.node_list.iter().position(|r| r.eq(&cfg.net_config.name)).unwrap();
-    let mut num_threads = NUM_THREADS;
+    let mut num_threads = NUM_THREADS / 2;
     {
         let _num_cores = core_ids.lock().unwrap().len();
-        if _num_cores - 1 < num_threads {
+        if (_num_cores - 1) / 2 < num_threads {
             // Leave one core for the storage compaction thread.
-            num_threads = _num_cores - 1;
+            num_threads = (_num_cores - 1) / 2;
         }
     }
-    let num_threads = 4;
+    // let num_threads = 4;
 
     let start_idx = start_idx * num_threads;
     
@@ -148,20 +146,14 @@ fn main() {
 
     let _ = runtime.spawn(run_main(cfg.clone()));
     
-    let frontend_handle = thread::spawn(move || {
-        let frontend_runtime = runtime::Builder::new_multi_thread()
-            .enable_all()
-            .worker_threads(1) 
-            .build()
-            .unwrap();
-        match frontend_runtime.block_on(frontend::run_actix_server(cfg)) {
-            Ok(_) => println!("Frontend server ran successfully."),
-            Err(e) => eprintln!("Frontend server error: {:?}", e),
-        }
-    });
-
-    frontend_handle.join().unwrap();
-
-
+    let frontend_runtime = runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(num_threads) 
+        .build()
+        .unwrap();
+    match frontend_runtime.block_on(frontend::run_actix_server(cfg)) {
+        Ok(_) => println!("Frontend server ran successfully."),
+        Err(e) => eprintln!("Frontend server error: {:?}", e),
+    };
 
 }
