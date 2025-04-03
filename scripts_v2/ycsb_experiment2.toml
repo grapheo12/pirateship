@@ -75,7 +75,7 @@ build_command = "make pirateship_kvs"
 duration = 60
 
 [experiments.sweeping_parameters]
-num_clients = [100, 800]
+num_clients = [20, 50, 100]
 
 
 
@@ -98,7 +98,7 @@ duration = 60
 # read_ratio = [0.25]
 
 [experiments.sweeping_parameters]
-num_clients = [100, 800]
+num_clients = [20, 50, 100]
 
 
 
@@ -114,7 +114,7 @@ force_parse = true
 
 [results.legends]
 # Experiment group to legend mapping
-pirateship1 = "ps(sig=10)+byz"
+pirateship1 = "ps(sig=10)"
 # pirateship_sig_1 = "ps(sig=1)+byz"
 # hotstuff = "hotstuff+onlybyz"
 # engraft = "engraft+onlybyz"
