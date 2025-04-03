@@ -19,14 +19,14 @@ channel_depth = 1000
 
 [node_config.consensus_config]
 commit_index_gap_soft = 250
-commit_index_gap_hard = 500
+commit_index_gap_hard = 5000
 liveness_u = 2
 max_backlog_batch_size = 1000
 signature_max_delay_blocks = 10
 signature_max_delay_ms = 10000
 num_crypto_workers = 5
 view_timeout_ms = 4000
-batch_max_delay_ms = 5
+batch_max_delay_ms = 2
 
 [node_config.consensus_config.log_storage_config.RocksDB]
 write_buffer_size = 2147483648
@@ -51,7 +51,7 @@ client_sub_id = 0       # This is filled up later by the caller code.
 client_max_retry = 10
 
 [client_config.workload_config]
-max_concurrent_requests = 32
+max_concurrent_requests = 16
 
 
 [client_config.workload_config.request_config.KVReadWriteYCSB]
@@ -62,11 +62,11 @@ linearizable_reads = false
 byz_commit_ratio = 0.0
 load_phase = true
 zipf_exponent = 0.99
-read_ratio = 0.0
+read_ratio = 1.0
 
 
 [[experiments]]
-name = "pirateship"
+name = "pirateship1"
 repeats = 1
 num_nodes = 7
 # num_clients = 800
@@ -75,7 +75,7 @@ build_command = "make pirateship_kvs"
 duration = 60
 
 [experiments.sweeping_parameters]
-num_clients = [50, 100, 150, 200]
+num_clients = [100, 800]
 
 
 
@@ -84,18 +84,21 @@ num_clients = [50, 100, 150, 200]
 # # read_ratio = [0.25]
 
 
-# [[experiments]]
-# name = "signed_raft"
-# repeats = 1
-# num_nodes = 5
+[[experiments]]
+name = "signed_raft1"
+repeats = 1
+num_nodes = 5
 # num_clients = 800
-# node_distribution = "uniform"
-# build_command = "make signed_raft_kvs"
-# duration = 120
+node_distribution = "uniform"
+build_command = "make signed_raft_kvs"
+duration = 60
 
 # [experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
 # read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
 # read_ratio = [0.25]
+
+[experiments.sweeping_parameters]
+num_clients = [100, 800]
 
 
 
@@ -111,11 +114,11 @@ force_parse = true
 
 [results.legends]
 # Experiment group to legend mapping
-pirateship = "ps(sig=10)+byz"
+pirateship1 = "ps(sig=10)+byz"
 # pirateship_sig_1 = "ps(sig=1)+byz"
 # hotstuff = "hotstuff+onlybyz"
 # engraft = "engraft+onlybyz"
-# signed_raft = "signed_raft"
+signed_raft1 = "signed_raft"
 # autobahn = "autobahn"
 
 [results.font]

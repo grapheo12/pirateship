@@ -51,30 +51,30 @@ client_sub_id = 0       # This is filled up later by the caller code.
 client_max_retry = 10
 
 [client_config.workload_config]
-max_concurrent_requests = 8
+max_concurrent_requests = 16
 
 
 [client_config.workload_config.request_config.KVReadWriteYCSB]
 num_keys = 300000
 num_fields = 1
-val_size = 500
+val_size = 100
 linearizable_reads = false
 byz_commit_ratio = 0.0
 load_phase = true
 zipf_exponent = 0.99
 
 
-# [[experiments]]
-# name = "pirateship"
-# repeats = 1
-# num_nodes = 7
-# num_clients = 100
-# node_distribution = "uniform"
-# build_command = "make pirateship_kvs"
-# duration = 120
+[[experiments]]
+name = "pirateship"
+repeats = 1
+num_nodes = 7
+num_clients = 800
+node_distribution = "uniform"
+build_command = "make pirateship_kvs"
+duration = 60
 
-# [experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
-# # read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
+[experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
+read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
 # read_ratio = [0.25, 0.5]
 
 
@@ -88,8 +88,8 @@ build_command = "make signed_raft_kvs"
 duration = 60
 
 [experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
-# read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
-read_ratio = [0.5]
+read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
+# read_ratio = [0.5]
 
 
 
@@ -97,13 +97,13 @@ read_ratio = [0.5]
 [[results]]
 name = "tput_rw_sweep"
 plotter = "stacked_bar_graph"
-ramp_up = 10
-ramp_down = 10
+ramp_up = 15
+ramp_down = 15
 output = "ycsb.pdf"
-# xlabels = ["0R-100W", "25R-75W", "50R-50W", "75R-25W", "100R-0W"]
-xlabels = ["50R-50W"]
+xlabels = ["0R-100W", "25R-75W", "50R-50W", "75R-25W", "100R-0W"]
+# xlabels = ["50R-50W"]
 force_parse = true
 
 [results.legends]
-# pirateship = "pirateship"
+pirateship = "pirateship"
 signed_raft = "signed_raft"
