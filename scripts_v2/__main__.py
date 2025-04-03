@@ -137,6 +137,8 @@ def parse_config(path, workdir=None, existing_experiments=None):
 
         if "sweeping_parameters" in e:
             flats = flatten_sweeping_params(e["sweeping_parameters"])
+            # raise Exception(e.get("seq_start", 0))
+            seq_start = int(e.get("seq_start", 0))
             for i, params in enumerate(flats):
                 _e = nested_override(e, params)
                 if "node_config" in _e:
@@ -152,9 +154,9 @@ def parse_config(path, workdir=None, existing_experiments=None):
                     _client_config = client_config
 
                 experiments.append(klass(
-                    os.path.join(_e['name'], str(i)),
+                    os.path.join(_e['name'], str(i + seq_start)),
                     _e['name'], # Group name
-                    i, # Seq num
+                    i + seq_start, # Seq num
                     int(_e["repeats"]),
                     int(_e["duration"]),
                     int(_e["num_nodes"]),
@@ -170,7 +172,7 @@ def parse_config(path, workdir=None, existing_experiments=None):
                 ))
         else:
             experiments.append(klass(
-                e["name"],
+                os.path.join(_e['name'], str(seq_start)),
                 e["name"],  # Group name
                 0, # Seq num
                 int(e["repeats"]),

@@ -47,6 +47,7 @@ bitcode = "0.6.3"
 num_cpus = "1.16.0"
 itertools = "0.14.0"
 async-channel = "2.3.1"
+hashbrown = {version = "0.15.2", features = ["serde", "allocator-api2", "default-hasher", "equivalent", "inline-more", "raw-entry"]}
 
 [build-dependencies]
 prost-build = { version = "0.12" }
@@ -94,6 +95,9 @@ no_qc = []
 fast_path = []
 platforms = []
 evil = []
+extra_2pc = []
+no_pipeline = []
+extra_qc_check = []
 
 # Applications
 app_logger = []
@@ -102,10 +106,15 @@ app_sql = []
 # Protocols specs
 lucky_raft = ["fixed_leader", "never_sign", "no_qc"]
 signed_raft = ["fixed_leader", "dynamic_sign", "no_qc"]
+engraft = ["fixed_leader", "never_sign", "no_qc", "extra_2pc"]
 chained_pbft = ["round_robin_leader", "always_sign", "view_change"]
+jolteon = ["round_robin_leader", "always_sign", "view_change", "no_pipeline"]
+hotstuff = ["round_robin_leader", "always_sign", "view_change", "no_pipeline", "extra_qc_check"]
 pirateship = ["round_robin_leader", "dynamic_sign", "view_change"]
 
-default = ["pirateship", "app_kvs", "storage", "fast_path", "platforms"]
+default = ["pirateship", "app_logger", "storage", "fast_path", "platforms"]
+# default = ["jolteon", "app_logger", "storage"]
+# default = ["engraft", "app_kvs", "storage", "fast_path", "platforms"]
 
 
 [profile.release]

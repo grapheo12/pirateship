@@ -689,7 +689,7 @@ class Result:
 
 
         num_lines = len(plot_dict)
-        colors = self.kwargs.get('colors', ['b', 'g', 'r', 'c', 'm', 'y', 'k'])
+        colors = self.kwargs.get('colors', ['b', 'g', 'r', 'c', 'm', 'y', 'k', "orange"])
         markers = self.kwargs.get('markers', ['o', 's', 'D', '^', 'v', 'p', 'P', '*', 'X', 'H'])
         while len(colors) < num_lines:
             colors += colors
@@ -726,8 +726,10 @@ class Result:
             plt.ylabel("Latency (ms)")
 
             y_range_total = max([v[3] for v in bounding_boxes.values()]) - min([v[2] for v in bounding_boxes.values()])
-            if y_range_total > 3000:
-                plt.yscale("symlog")
+            # if y_range_total > 200:
+            #     plt.yscale("symlog")
+            # plt.ylim((0, 120))
+            # plt.xlim((50, 550))
             plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.45), ncol=legends_ncols, fontsize=55, columnspacing=1)
 
 
@@ -857,36 +859,43 @@ class Result:
     def crash_byz_tput_timeseries_plot(self, times, crash_commits, byz_commits, events):
         assert len(times) == len(crash_commits) == len(byz_commits)
 
-        plt.plot(times, crash_commits, label="Crash Commit Throughput")
-        plt.plot(times, byz_commits, label="Byz Commit Throughput")
-        plt.xlabel("Time (s)")
-        plt.ylabel("Throughput (batch/s)")
+        plt.plot(times, crash_commits, label="Crash Commit Throughput", linewidth=3)
+        plt.plot(times, byz_commits, label="Byz Commit Throughput", linewidth=3)
+        plt.xlabel("Time (s)", fontsize=55)
+        plt.ylabel("Throughput (batch/s)", fontsize=55)
 
         plt.yscale("symlog")
-        plt.legend()
+
+        # Legend at lower right
+        plt.legend(loc="lower right", fontsize=30)
         plt.grid()
 
         plt.xlim(times[0], times[-1])
+        plt.xticks(fontsize=55)
+        plt.yticks(fontsize=55)
+
 
         # How low/high can I go?
         ylim_min = min(min(crash_commits), min(byz_commits))
         ylim_max = max(max(crash_commits), max(byz_commits))
 
         # Will use this range for all text boxes for events
-        text_box_locs = list(np.linspace(ylim_min, ylim_max, len(events) + 2)[1:-1])
+        text_box_locs = list(np.linspace(0, ylim_max, len(events) + 4)[2:-2])
         assert len(text_box_locs) == len(events)
 
 
-        line_colors = ['r', 'g', 'b', 'c', 'm', 'y', 'k']
+        line_colors = ['r', 'g', 'b', 'c', 'm', 'y', 'k', "orange"]
         text_props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
 
         for i, (event_time, event_description) in enumerate(events):
-            plt.axvline(x=event_time, color=line_colors.pop(0), linestyle="--")
+            plt.axvline(x=event_time, color=line_colors.pop(0), linestyle="--", linewidth=3)
+            # Large font
             plt.text(
-                event_time, text_box_locs[i],
+                event_time + 0.2 * i, text_box_locs[i] if i % 2 == 0 else -text_box_locs[i],
                 event_description, bbox=text_props,
                 horizontalalignment='center',
-                verticalalignment='center'
+                verticalalignment='center',
+                fontsize=40
             )
 
         plt.gcf().set_size_inches(
@@ -977,7 +986,7 @@ class Result:
             log_dir = f"{expr[0].local_workdir}/logs/0"
             points = self.parse_node_logs(
                 log_dir, [f"{target_node}.log"],
-                expr.duration,
+                expr[0].duration,
                 ramp_up, ramp_down, tputs, tputs_unbatched
             )
 

@@ -55,55 +55,71 @@ max_concurrent_requests = 16
 
 
 [client_config.workload_config.request_config.KVReadWriteYCSB]
-num_keys = 300000
+num_keys = 3000
 num_fields = 1
 val_size = 100
 linearizable_reads = false
 byz_commit_ratio = 0.0
 load_phase = true
 zipf_exponent = 0.99
+read_ratio = 1.0
 
 
 [[experiments]]
-name = "pirateship"
+name = "pirateship1"
 repeats = 1
 num_nodes = 7
-num_clients = 50
+# num_clients = 800
 node_distribution = "uniform"
 build_command = "make pirateship_kvs"
 duration = 60
 
-[experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
-read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
-# read_ratio = [0.25, 0.5]
+[experiments.sweeping_parameters]
+num_clients = [20, 50, 100]
+
+
+
+# # [experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
+# # read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
+# # read_ratio = [0.25]
 
 
 [[experiments]]
-name = "signed_raft"
+name = "signed_raft1"
 repeats = 1
 num_nodes = 5
-num_clients = 50
+# num_clients = 800
 node_distribution = "uniform"
 build_command = "make signed_raft_kvs"
 duration = 60
 
-[experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
-read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
-# read_ratio = [0.25, 0.5]
+# [experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
+# read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
+# read_ratio = [0.25]
+
+[experiments.sweeping_parameters]
+num_clients = [20, 50, 100]
 
 
 
 
 [[results]]
-name = "tput_rw_sweep"
-plotter = "stacked_bar_graph"
+name = "tput_latency_client_sweep"
+plotter = "tput_latency_sweep"
 ramp_up = 15
 ramp_down = 15
-output = "ycsb.pdf"
-xlabels = ["0R-100W", "25R-75W", "50R-50W", "75R-25W", "100R-0W"]
-# xlabels = ["25R-75W", "50R-50W"]
+output = "lan_final.pdf"
 force_parse = true
+# skip_indices = [0, 1]
 
 [results.legends]
-pirateship = "pirateship"
-signed_raft = "signed_raft"
+# Experiment group to legend mapping
+pirateship1 = "ps(sig=10)"
+# pirateship_sig_1 = "ps(sig=1)+byz"
+# hotstuff = "hotstuff+onlybyz"
+# engraft = "engraft+onlybyz"
+signed_raft1 = "signed_raft"
+# autobahn = "autobahn"
+
+[results.font]
+size = 55

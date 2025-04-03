@@ -461,41 +461,46 @@ class RemoteCommittee(Committee):
 
 def get_default_node_params(num_nodes, repeats, seconds):
     bench_params = {
-        'faults': 0,
-        'nodes': [num_nodes] * repeats,
+        'faults': 0, 
+        'nodes': num_nodes,
         'workers': 1,
-        'co-locate': True,
-        'rate': [411_000] * repeats,
+        'rate': 200_000,
         'tx_size': 512,
         'duration': seconds,
-        'runs': repeats,
 
         # Unused
-        'simulate_partition': True,
-        'partition_start': 5,
-        'partition_duration': 5,
-        'partition_nodes': 1,
+        'simulate_partition': False,
+        'partition_start': seconds + 100,
+        'partition_duration': 0,
+        'partition_nodes': 0,
     }
     node_params = {
-        'timeout_delay': 5_000,  # ms
+        'timeout_delay': 1_000,  # ms
         'header_size': 32,  # bytes
-        'max_header_delay': 5_000,  # ms
+        'max_header_delay': 200,  # ms
         'gc_depth': 50,  # rounds
-        'sync_retry_delay': 5_000,  # ms
-        'sync_retry_nodes': 3,  # number of nodes
+        'sync_retry_delay': 1_000,  # ms
+        'sync_retry_nodes': 4,  # number of nodes
         'batch_size': 500_000,  # bytes
-        'max_batch_delay': 2,  # ms
-        'use_optimistic_tips': True,
+        'max_batch_delay': 10,  # ms
+        'use_optimistic_tips': False,
         'use_parallel_proposals': True,
-        'k': 4,
+        'k': 1,
         'use_fast_path': True,
-        'fast_path_timeout': 5_000,
+        'fast_path_timeout': 200,
         'use_ride_share': False,
-        'car_timeout': 5_000,
+        'car_timeout': 2000,
 
         'simulate_asynchrony': False,
-        'asynchrony_start': 15_000, #ms
-        'asynchrony_duration': 3_000, #ms
+        'asynchrony_type': [],
+
+        'asynchrony_start': [], #ms
+        'asynchrony_duration': [], #ms
+        'affected_nodes': [],
+        'egress_penalty': 0, #ms
+
+        'use_fast_sync': True,
+        'use_exponential_timeouts': True,
     }
 
     return bench_params, node_params
@@ -555,7 +560,7 @@ class CommandMaker:
         assert isinstance(nodes, list)
         assert all(isinstance(x, str) for x in nodes)
         nodes = f'--nodes {" ".join(nodes)}' if nodes else ''
-        return f'{binary_name} {address} --size {size} --clients {clients} {nodes}'
+        return f'{binary_name} {address} --size {size} --rate {clients} {nodes}'
 
     @staticmethod
     def kill():
@@ -661,8 +666,15 @@ class AutobahnExperiment(Experiment):
             client_vms = deployment.get_all_client_vms()
         else:
             client_vms = deployment.get_all_client_vms_in_region(self.client_region)
-        num_clients_per_vm = [self.num_clients // len(client_vms) for _ in range(len(client_vms))]
-        num_clients_per_vm[-1] += (self.num_clients - sum(num_clients_per_vm))
+
+        # if len(client_vms) > 1:
+        #     client_vms = [client_vms[0]]
+
+
+        total_nodes = self.num_nodes
+        clients_per_node = self.num_clients // total_nodes
+        num_clients_per_vm = [clients_per_node // len(client_vms) for _ in range(len(client_vms))]
+        num_clients_per_vm[-1] += (clients_per_node - sum(num_clients_per_vm))
 
         for client_num in range(len(client_vms)):
             config = deepcopy(self.base_client_config)
@@ -781,7 +793,7 @@ sleep {self.duration}
 echo -n $PID | xargs -d' ' -I{{}} kill -2 {{}} || true
 echo -n $PID | xargs -d' ' -I{{}} kill -15 {{}} || true
 echo -n $PID | xargs -d' ' -I{{}} kill -9 {{}} || true
-sleep 1
+sleep 10
 
 # Kill the binaries in SSHed VMs as well. Calling SIGKILL on the local SSH process might have left them orphaned.
 # Make sure not to kill the tmux server.
@@ -802,7 +814,7 @@ $SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_n
 """
                 
             _script += f"""
-sleep 1
+sleep 2
 """
                 
             # pkill -9 -c server also kills tmux-server. So we can't run a server on the dev VM.

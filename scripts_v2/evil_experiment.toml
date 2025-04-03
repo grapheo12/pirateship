@@ -2,7 +2,7 @@ workdir = "deployment_artifacts"
 project_home = "https://github.com/grapheo12/pirateship"
 
 [deployment_config]
-mode = "lan-nontee"
+mode = "lan"
 ssh_key = "cluster_key.pem"
 ssh_user = "pftadmin"
 node_port_base = 3000
@@ -35,7 +35,7 @@ max_write_buffers_to_merge = 1
 
 [node_config.app_config]
 logger_stats_report_ms = 100
-checkpoint_interval_ms = 60000
+checkpoint_interval_ms = 1000
 
 [node_config.evil_config]
 simulate_byzantine_behavior = true

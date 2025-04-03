@@ -46,6 +46,11 @@ signed_raft_logger:
 	CC=clang CXX=clang++ cargo build --release --features signed_raft,app_logger,storage --no-default-features
 
 
+.PHONY: engraft_logger
+engraft_logger:
+	CC=clang CXX=clang++ cargo build --release --features engraft,app_logger,storage --no-default-features
+
+
 .PHONY: diverse_raft_logger
 diverse_raft_logger:
 	CC=clang CXX=clang++ cargo build --release --features diverse_raft,app_logger,storage --no-default-features
@@ -53,7 +58,11 @@ diverse_raft_logger:
 
 .PHONY: jolteon_logger
 jolteon_logger:
-	CC=clang CXX=clang++ cargo build --release --features jolteon,app_logger,storage,fast_path --no-default-features
+	CC=clang CXX=clang++ cargo build --release --features jolteon,app_logger,storage --no-default-features
+
+.PHONY: hotstuff_logger
+hotstuff_logger:
+	CC=clang CXX=clang++ cargo build --release --features hotstuff,app_logger,storage --no-default-features
 
 
 .PHONY: chained_pbft_logger

@@ -12,12 +12,13 @@ impl PerWorkerWorkloadGenerator for BlankWorkloadGenerator {
                 on_crash_commit: Some(ProtoTransactionPhase {
                     ops: vec![ProtoTransactionOp {
                         op_type: crate::proto::execution::ProtoTransactionOpType::Noop.into(),
-                        operands: vec![vec![2u8; 478]],
+                        operands: vec![vec![2u8; 512]],
                         // operands: vec![vec![2u8; 0]],
                     }; 1],
                 }),
                 on_byzantine_commit: None,
                 is_reconfiguration: false,
+                is_2pc: false,
             },
             executor: Executor::Leader
         }

@@ -57,13 +57,6 @@ pub struct KVReadWriteYCSBGenerator {
 
 impl KVReadWriteYCSBGenerator {
     pub fn new(config: &KVReadWriteYCSB, client_idx: usize, total_clients: usize) -> KVReadWriteYCSBGenerator {
-        #[cfg(not(feature = "reply_from_app"))]
-        {
-            if config.linearizable_reads {
-                panic!("Linearizable reads not supported if response doesn't come from app");
-            }
-        }
-
         let rng = ChaCha20Rng::from_entropy();
 
         let read_write_weights = [
@@ -169,6 +162,7 @@ impl KVReadWriteYCSBGenerator {
                 }),
                 on_byzantine_commit: None,
                 is_reconfiguration: false,
+                is_2pc: false,
             },
             executor: Executor::Leader
         }
@@ -211,6 +205,7 @@ impl KVReadWriteYCSBGenerator {
             on_crash_commit: Some(ops),
             on_byzantine_commit: None,
             is_reconfiguration: false,
+            is_2pc: false,
         }
     }
 
@@ -221,6 +216,7 @@ impl KVReadWriteYCSBGenerator {
             on_crash_commit: None,
             on_byzantine_commit: Some(ops),
             is_reconfiguration: false,
+            is_2pc: false,
         }
     }
 
@@ -231,6 +227,7 @@ impl KVReadWriteYCSBGenerator {
             on_crash_commit: None,
             on_byzantine_commit: None,
             is_reconfiguration: false,
+            is_2pc: false,
         }
     }
 
@@ -241,6 +238,7 @@ impl KVReadWriteYCSBGenerator {
             on_crash_commit: Some(ops),
             on_byzantine_commit: None,
             is_reconfiguration: false,
+            is_2pc: false,
         }
     }
 
@@ -251,6 +249,7 @@ impl KVReadWriteYCSBGenerator {
             on_crash_commit: None,
             on_byzantine_commit: Some(ops),
             is_reconfiguration: false,
+            is_2pc: false,
         }
     }
 

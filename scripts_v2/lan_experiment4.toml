@@ -2,7 +2,7 @@ workdir = "deployment_artifacts"
 project_home = "https://github.com/grapheo12/pirateship"
 
 [deployment_config]
-mode = "lan"
+mode = "lan-nontee"
 ssh_key = "cluster_key.pem"
 ssh_user = "pftadmin"
 node_port_base = 3000
@@ -19,12 +19,12 @@ channel_depth = 1000
 
 [node_config.consensus_config]
 commit_index_gap_soft = 250
-commit_index_gap_hard = 5000
+commit_index_gap_hard = 500
 liveness_u = 2
 max_backlog_batch_size = 1000
-signature_max_delay_blocks = 10
-signature_max_delay_ms = 10000
-num_crypto_workers = 5
+signature_max_delay_blocks = 50
+signature_max_delay_ms = 102 # roughly batch_max_delay_ms * signature_max_delay_blocks
+num_crypto_workers = 3
 view_timeout_ms = 4000
 batch_max_delay_ms = 2
 
@@ -46,64 +46,68 @@ byzantine_start_block = 0
 full_duplex = true
 client_sub_id = 0       # This is filled up later by the caller code.
 
-
 [client_config.net_config]
 client_max_retry = 10
 
 [client_config.workload_config]
-max_concurrent_requests = 16
+num_requests = 100_000_000
+request_config = "Blanks"
+max_concurrent_requests = 32
 
 
-[client_config.workload_config.request_config.KVReadWriteYCSB]
-num_keys = 300000
-num_fields = 1
-val_size = 100
-linearizable_reads = false
-byz_commit_ratio = 0.0
-load_phase = true
-zipf_exponent = 0.99
+# [[experiments]]
+# name = "signed_raft"
+# repeats = 1
+# num_nodes = 5
+# node_distribution = "uniform"
+# build_command = "make signed_raft_logger"
+# duration = 60
 
-
-[[experiments]]
-name = "pirateship"
-repeats = 1
-num_nodes = 7
-num_clients = 50
-node_distribution = "uniform"
-build_command = "make pirateship_kvs"
-duration = 60
-
-[experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
-read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
-# read_ratio = [0.25, 0.5]
-
+# [experiments.sweeping_parameters]
+# num_clients = [400]
 
 [[experiments]]
-name = "signed_raft"
+name = "lucky_raft"
 repeats = 1
 num_nodes = 5
-num_clients = 50
 node_distribution = "uniform"
-build_command = "make signed_raft_kvs"
+build_command = "make lucky_raft_logger"
 duration = 60
 
-[experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
-read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
-# read_ratio = [0.25, 0.5]
+[experiments.sweeping_parameters]
+num_clients = [400]
+
+[[experiments]]
+name = "engraft"
+repeats = 1
+num_nodes = 5
+node_distribution = "uniform"
+build_command = "make engraft_logger"
+duration = 60
+
+[experiments.sweeping_parameters]
+num_clients = [400, 800, 1000, 1200]
+# num_clients = [400]
+
+
 
 
 
 
 [[results]]
-name = "tput_rw_sweep"
-plotter = "stacked_bar_graph"
-ramp_up = 15
-ramp_down = 15
-output = "ycsb.pdf"
-xlabels = ["0R-100W", "25R-75W", "50R-50W", "75R-25W", "100R-0W"]
-# xlabels = ["25R-75W", "50R-50W"]
+name = "tput_latency_client_sweep"
+plotter = "tput_latency_sweep"
+ramp_up = 10
+ramp_down = 10
+output = "engraft.pdf"
 force_parse = true
+# skip_indices = [4]
 
 [results.legends]
-pirateship = "pirateship"
-signed_raft = "signed_raft"
+# Experiment group to legend mapping
+# signed_raft = "signed_raft"
+lucky_raft = "lucky_raft"
+engraft = "engraft"
+
+[results.font]
+size = 55

@@ -1,4 +1,5 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
+from copy import deepcopy
 from datetime import datetime
 from glob import glob
 from multiprocessing import Pool
@@ -9,7 +10,6 @@ from statistics import mean, median
 
 class ParseError(Exception):
     pass
-
 
 class LogParser:
     def __init__(self, clients, primaries, workers, faults=0):
@@ -32,7 +32,7 @@ class LogParser:
                 results = p.map(self._parse_clients, clients)
         except (ValueError, IndexError, AttributeError) as e:
             raise ParseError(f'Failed to parse clients\' logs: {e}')
-        self.size, self.rate, self.start, misses, self.sent_samples, self.client_latencies \
+        self.size, self.rate, self.start, misses, self.sent_samples \
             = zip(*results)
         self.misses = sum(misses)
 
@@ -42,9 +42,12 @@ class LogParser:
                 results = p.map(self._parse_primaries, primaries)
         except (ValueError, IndexError, AttributeError) as e:
             raise ParseError(f'Failed to parse nodes\' logs: {e}')
-        proposals, commits, self.configs, primary_ips = zip(*results)
+        proposals, commits, self.configs, primary_ips, client_latencies = zip(*results)
         self.proposals = self._merge_results([x.items() for x in proposals])
         self.commits = self._merge_results([x.items() for x in commits])
+        self.all_commits = self._pile_results([x.items() for x in commits])
+
+        self.client_latencies = self._avg_results(client_latencies)
 
         # Parse the workers logs.
         try:
@@ -74,6 +77,30 @@ class LogParser:
                 if not k in merged or merged[k] > v:
                     merged[k] = v
         return merged
+    
+    def _avg_results(self, input):
+        # Keep the earliest timestamp.
+        merged = {}
+        for x in input:
+            for k, v in x.items():
+                if not k in merged:
+                    merged[k] = [v]
+                else:
+                    merged[k].append(v)
+
+        merged = {k: mean(v) for k, v in merged.items()}
+        return merged
+    
+    def _pile_results(self, input):
+        merged = {}
+        for x in input:
+            for k, v in x:
+                if not k in merged:
+                    merged[k] = [v]
+                else:
+                    merged[k].append(v)
+
+        return merged
 
     def _parse_clients(self, log):
         # if search(r'Error', log) is not None:
@@ -90,10 +117,12 @@ class LogParser:
         tmp = findall(r'\[(.*Z) .* sample transaction (\d+)', log)
         samples = {int(s): self._to_posix(t) for t, s in tmp}
 
-        tmp = findall(r'Client latency: (\d+) ms', log)
-        client_latencies = [int(x) for x in tmp]
+        # tmp = findall(r'Client latency: (\d+) ms', log)
+        # client_latencies = [int(x) for x in tmp]
+        # if len(client_latencies) == 0:
+        #     client_latencies = [0]
 
-        return size, rate, start, misses, samples, client_latencies
+        return size, rate, start, misses, samples
 
     def _parse_primaries(self, log):
         # if search(r'(?:panicked|Error)', log) is not None:
@@ -106,6 +135,14 @@ class LogParser:
         tmp = findall(r'\[(.*Z) .* Committed B\d+\([^ ]+\) -> ([^ ]+=)', log)
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         commits = self._merge_results([tmp])
+
+        latencies = {}
+        for d in commits.keys():
+            if d in proposals:
+                latencies[d] = commits[d] - proposals[d]
+
+        
+
 
         configs = {
             #'timeout_delay': int(
@@ -136,7 +173,7 @@ class LogParser:
 
         ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
 
-        return proposals, commits, configs, ip
+        return proposals, commits, configs, ip, latencies
 
     def _parse_workers(self, log):
         # if search(r'(?:panic|Error)', log) is not None:
@@ -167,9 +204,13 @@ class LogParser:
         return tps, bps, duration
 
     def _consensus_latency(self):
-        return 0
+        # return 0
         # latency = [c - self.proposals[d] for d, c in self.commits.items()]
-        # return mean(latency) if latency else 0
+
+        # # latency = [x for x in latency if x > 0]
+        # # print(mean(list(self.client_latencies.values())))
+        latency = list(self.client_latencies.values())
+        return mean(latency) if latency else 0
 
     def _end_to_end_throughput(self):
         if not self.commits:
@@ -182,7 +223,7 @@ class LogParser:
         return tps, bps, duration
 
     def _end_to_end_latency(self):
-        return 0
+        # return 0
         latency = []
         list_latencies = []
         first_start = 0
@@ -194,7 +235,15 @@ class LogParser:
                     for _sent in self.sent_samples:
                         if tx_id in _sent:
                             start = _sent[tx_id]
-                            end = self.commits[batch_id]
+                            possible_ends = self.all_commits[batch_id]
+                            impossible_ends = [x for x in possible_ends if x < start]
+                            if len(impossible_ends) > 0:
+                                print("batch:", batch_id, "tx:", tx_id, "impossible_ends:", impossible_ends)
+                            possible_ends = [x for x in possible_ends if x > start]
+
+                            if len(possible_ends) == 0:
+                                continue
+                            end = min(possible_ends)
                             if set_first:
                                 first_start = start
                                 first_end = end
@@ -206,6 +255,7 @@ class LogParser:
         with open('latencies.txt', 'w') as f:
             for line in list_latencies:
                 f.write(str(line[0]) + ',' + str(line[1]) + ',' + str((line[2])) + '\n')
+        # latency = [x for x in latency if x > 0]
         return mean(latency) if latency else 0
 
     def result(self):
@@ -223,10 +273,13 @@ class LogParser:
         end_to_end_tps, end_to_end_bps, duration = self._end_to_end_throughput()
         end_to_end_latency = self._end_to_end_latency() * 1_000
 
-        client_latencies = []
-        for c in self.client_latencies:
-            client_latencies.extend(c)
-        client_latency = median(client_latencies)
+        # client_latencies = []
+        # for c in self.client_latencies:
+        #     client_latencies.extend(c)
+        # client_latency = mean(client_latencies)
+
+        # if client_latency > 400:
+        #     raise ParseError('Client latency is too high')
 
         return (
             '\n'
@@ -260,7 +313,7 @@ class LogParser:
             f' End-to-end BPS: {round(end_to_end_bps):,} B/s\n'
             f' End-to-end latency: {round(end_to_end_latency):,} ms\n'
             '\n'
-            f' Client latency: {round(client_latency):,} ms\n'
+            f' Client latency: {round(end_to_end_latency):,} ms\n'
             '-----------------------------------------\n'
         )
 

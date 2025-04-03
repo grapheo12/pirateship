@@ -51,6 +51,7 @@ fn get_feature_set() -> (&'static str, &'static str) {
     #[cfg(feature = "signed_raft")]{ protocol = "signed_raft"; }
     #[cfg(feature = "chained_pbft")]{ protocol = "chained_pbft"; }
     #[cfg(feature = "pirateship")]{ protocol = "pirateship"; }
+    #[cfg(feature = "engraft")]{ protocol = "engraft"; }
 
     (protocol, app)
 }

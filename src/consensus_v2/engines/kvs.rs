@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+// use std::collections::{BTreeMap, HashMap};
+use hashbrown::HashMap;
+use rustls::crypto::hash::Hash;
 use std::fmt::Display;
 
 use log::{info, trace, warn};
@@ -109,6 +111,7 @@ impl AppEngine for KVSAppEngine {
                             }
                             let key: &Vec<u8> = &op.operands[0];
                             let result = self.read(key);
+                            // let result = Some(vec![0xde, 0xad, 0xbe, 0xef]);
                             if let Some(value) = result {
                                 txn_result.result.push(ProtoTransactionOpResult {
                                     success: true,

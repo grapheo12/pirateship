@@ -19,11 +19,11 @@ channel_depth = 1000
 
 [node_config.consensus_config]
 commit_index_gap_soft = 250
-commit_index_gap_hard = 5000
+commit_index_gap_hard = 500
 liveness_u = 2
 max_backlog_batch_size = 1000
 signature_max_delay_blocks = 10
-signature_max_delay_ms = 10000
+signature_max_delay_ms = 102 # roughly batch_max_delay_ms * signature_max_delay_blocks
 num_crypto_workers = 5
 view_timeout_ms = 4000
 batch_max_delay_ms = 2
@@ -46,64 +46,60 @@ byzantine_start_block = 0
 full_duplex = true
 client_sub_id = 0       # This is filled up later by the caller code.
 
-
 [client_config.net_config]
 client_max_retry = 10
 
 [client_config.workload_config]
-max_concurrent_requests = 16
-
-
-[client_config.workload_config.request_config.KVReadWriteYCSB]
-num_keys = 300000
-num_fields = 1
-val_size = 100
-linearizable_reads = false
-byz_commit_ratio = 0.0
-load_phase = true
-zipf_exponent = 0.99
-
+num_requests = 100_000_000
+request_config = "Blanks"
+max_concurrent_requests = 32
 
 [[experiments]]
-name = "pirateship"
+name = "autobahn"
+type = "autobahn"
 repeats = 1
 num_nodes = 7
-num_clients = 50
 node_distribution = "uniform"
-build_command = "make pirateship_kvs"
+build_command = "make -C autobahn"
 duration = 60
+seq_start = 11
 
-[experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
-read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
-# read_ratio = [0.25, 0.5]
+[experiments.sweeping_parameters]
+num_clients = [370_000, 390_000, 400_000]
 
 
-[[experiments]]
-name = "signed_raft"
-repeats = 1
-num_nodes = 5
-num_clients = 50
-node_distribution = "uniform"
-build_command = "make signed_raft_kvs"
-duration = 60
+# [[experiments]]
+# name = "hotstuff"
+# repeats = 1
+# num_nodes = 7
+# node_distribution = "uniform"
+# build_command = "make hotstuff_logger"
+# duration = 60
+# seq_start = 5
 
-[experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
-read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
-# read_ratio = [0.25, 0.5]
+# [experiments.sweeping_parameters]
+# num_clients = [120, 150, 170]
 
 
 
 
 [[results]]
-name = "tput_rw_sweep"
-plotter = "stacked_bar_graph"
+name = "tput_latency_client_sweep"
+plotter = "tput_latency_sweep"
 ramp_up = 15
 ramp_down = 15
-output = "ycsb.pdf"
-xlabels = ["0R-100W", "25R-75W", "50R-50W", "75R-25W", "100R-0W"]
-# xlabels = ["25R-75W", "50R-50W"]
+output = "lan_final.pdf"
 force_parse = true
+# skip_indices = [7]
 
 [results.legends]
-pirateship = "pirateship"
-signed_raft = "signed_raft"
+# Experiment group to legend mapping
+# pirateship = "ps(sig=10)+byz"
+# pirateship_sig_1 = "ps(sig=1)+byz"
+# hotstuff = "hotstuff+onlybyz"
+# engraft = "engraft+onlybyz"
+# signed_raft = "signed_raft"
+autobahn = "autobahn"
+
+[results.font]
+size = 55
