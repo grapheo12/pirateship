@@ -51,7 +51,7 @@ client_sub_id = 0       # This is filled up later by the caller code.
 client_max_retry = 10
 
 [client_config.workload_config]
-max_concurrent_requests = 32
+max_concurrent_requests = 8
 
 
 [client_config.workload_config.request_config.KVReadWriteYCSB]
@@ -82,14 +82,14 @@ zipf_exponent = 0.99
 name = "signed_raft"
 repeats = 1
 num_nodes = 5
-num_clients = 500
+num_clients = 800
 node_distribution = "uniform"
 build_command = "make signed_raft_kvs"
-duration = 120
+duration = 60
 
 [experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
 # read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
-read_ratio = [0.25, 0.5]
+read_ratio = [0.5]
 
 
 
@@ -97,11 +97,11 @@ read_ratio = [0.25, 0.5]
 [[results]]
 name = "tput_rw_sweep"
 plotter = "stacked_bar_graph"
-ramp_up = 20
-ramp_down = 20
+ramp_up = 10
+ramp_down = 10
 output = "ycsb.pdf"
 # xlabels = ["0R-100W", "25R-75W", "50R-50W", "75R-25W", "100R-0W"]
-xlabels = ["25R-75W", "50R-50W"]
+xlabels = ["50R-50W"]
 force_parse = true
 
 [results.legends]

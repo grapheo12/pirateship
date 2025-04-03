@@ -118,7 +118,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         loop {
             match generator_rx.recv().await {
                 Some(req) => {
-                    if alleged_leader.len() == 0 {
+                    if alleged_leader.len() == 0 && req.executor_mode == Executor::Leader {
                         alleged_leader = req.wait_from.clone();
                     }
 
