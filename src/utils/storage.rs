@@ -62,7 +62,7 @@ impl StorageEngine for RocksDBStorageEngine {
         #[cfg(not(feature = "disk_wal"))]
         opts.set_manual_wal_flush(true);
 
-        
+
         opts.set_compaction_style(DBCompactionStyle::Universal);
 
         let _ = DB::destroy(&opts, &self.config.db_path);
@@ -72,8 +72,8 @@ impl StorageEngine for RocksDBStorageEngine {
         let mut wopts = WriteOptions::default();
 
 
-        #[cfg(feature = "disk_wal")]
-        wopts.set_sync(true);
+        // #[cfg(feature = "disk_wal")]
+        // wopts.set_sync(true);
 
         #[cfg(not(feature = "disk_wal"))]
         wopts.disable_wal(true);
