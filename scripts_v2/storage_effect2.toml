@@ -63,7 +63,7 @@ build_command = "make"
 duration = 120
 
 [experiments.sweeping_parameters]
-num_clients = [800, 1000]
+num_clients = [800]
 
 [[experiments]]
 name = "sync_disk"
@@ -74,7 +74,7 @@ build_command = "make pirateship_logger_syncstorage"
 duration = 120
 
 [experiments.sweeping_parameters]
-num_clients = [800, 1000]
+num_clients = [800]
 
 [[experiments]]
 name = "no_disk"
@@ -85,7 +85,7 @@ build_command = "make pirateship_logger_nostorage"
 duration = 120
 
 [experiments.sweeping_parameters]
-num_clients = [800, 1000]
+num_clients = [800]
 
 
 

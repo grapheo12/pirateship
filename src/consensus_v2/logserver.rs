@@ -43,8 +43,12 @@ impl ReadCache {
             return Ok(block);
         }
 
-        let next_block = self.cache.range(n..).next()
-            .unwrap().1.clone();
+        let next_block = match self.cache.range(n..).next() {
+            Some((_, block)) => block.clone(),
+            None => {
+                return Err(None);
+            }
+        };
         Err(Some(next_block))
     }
 
