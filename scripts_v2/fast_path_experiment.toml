@@ -22,7 +22,7 @@ commit_index_gap_soft = 250
 commit_index_gap_hard = 500
 liveness_u = 2
 max_backlog_batch_size = 1000
-signature_max_delay_blocks = 50
+signature_max_delay_blocks = 10
 signature_max_delay_ms = 102 # roughly batch_max_delay_ms * signature_max_delay_blocks
 num_crypto_workers = 5
 view_timeout_ms = 4000
@@ -60,10 +60,10 @@ repeats = 1
 num_nodes = 7
 node_distribution = "uniform"
 build_command = "make"
-duration = 60
+duration = 90
 
 [experiments.sweeping_parameters]
-num_clients = [10, 20, 30, 50, 100, 200, 400, 500, 600]
+num_clients = [50, 100, 200, 400, 500, 600]
 
 
 
@@ -74,7 +74,7 @@ repeats = 1
 num_nodes = 7
 node_distribution = "uniform"
 build_command = "make pirateship_logger_nofast"
-duration = 60
+duration = 90
 
 [experiments.sweeping_parameters]
 num_clients = [50, 100, 200, 400, 500, 600]
@@ -89,7 +89,7 @@ ramp_up = 15
 ramp_down = 15
 output = "fast_path_experiment.pdf"
 force_parse = true
-# skip_indices = [0, 1, 2]
+skip_indices = [4]
 
 [results.legends]
 # Experiment group to legend mapping

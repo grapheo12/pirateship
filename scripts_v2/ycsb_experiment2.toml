@@ -62,7 +62,7 @@ linearizable_reads = false
 byz_commit_ratio = 0.0
 load_phase = true
 zipf_exponent = 0.99
-read_ratio = 1.0
+read_ratio = 0.75
 
 
 [[experiments]]
@@ -75,7 +75,7 @@ build_command = "make pirateship_kvs"
 duration = 60
 
 [experiments.sweeping_parameters]
-num_clients = [20, 50, 100]
+num_clients = [100, 200, 400, 800, 1000, 1200]
 
 
 
@@ -98,7 +98,8 @@ duration = 60
 # read_ratio = [0.25]
 
 [experiments.sweeping_parameters]
-num_clients = [20, 50, 100]
+num_clients = [100, 200, 400, 800, 1000, 1200]
+
 
 
 
