@@ -38,6 +38,10 @@ pirateship_logger_nofast:
 pirateship_logger_nostorage:
 	CC=clang CXX=clang++ cargo build --release --features pirateship,app_logger,fast_path,platforms --no-default-features
 
+.PHONY: pirateship_logger_syncstorage
+pirateship_logger_syncstorage:
+	CC=clang CXX=clang++ cargo build --release --features pirateship,app_logger,storage,disk_wal,fast_path,platforms --no-default-features
+
 
 .PHONY: lucky_raft_logger
 lucky_raft_logger:

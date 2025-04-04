@@ -93,6 +93,7 @@ never_sign = []
 dynamic_sign = []
 # Other features
 storage = []
+disk_wal = []
 view_change = []
 no_qc = []
 fast_path = []

@@ -62,7 +62,7 @@ linearizable_reads = false
 byz_commit_ratio = 0.0
 load_phase = true
 zipf_exponent = 0.99
-read_ratio = 0.75
+read_ratio = 0.0
 
 
 [[experiments]]
@@ -75,7 +75,7 @@ build_command = "make pirateship_kvs"
 duration = 60
 
 [experiments.sweeping_parameters]
-num_clients = [100, 200, 400, 800, 1000, 1200]
+num_clients = [800]
 
 
 
@@ -84,21 +84,21 @@ num_clients = [100, 200, 400, 800, 1000, 1200]
 # # read_ratio = [0.25]
 
 
-[[experiments]]
-name = "signed_raft1"
-repeats = 1
-num_nodes = 5
-# num_clients = 800
-node_distribution = "uniform"
-build_command = "make signed_raft_kvs"
-duration = 60
+# [[experiments]]
+# name = "signed_raft1"
+# repeats = 1
+# num_nodes = 5
+# # num_clients = 800
+# node_distribution = "uniform"
+# build_command = "make signed_raft_kvs"
+# duration = 60
 
-# [experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
-# read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
-# read_ratio = [0.25]
+# # [experiments.sweeping_parameters.client_config.workload_config.request_config.KVReadWriteYCSB]
+# # read_ratio = [0.0, 0.25, 0.5, 0.75, 1.0]
+# # read_ratio = [0.25]
 
-[experiments.sweeping_parameters]
-num_clients = [100, 200, 400, 800, 1000, 1200]
+# [experiments.sweeping_parameters]
+# num_clients = [100, 200, 400, 800, 1000, 1200]
 
 
 
@@ -119,7 +119,7 @@ pirateship1 = "ps(sig=10)"
 # pirateship_sig_1 = "ps(sig=1)+byz"
 # hotstuff = "hotstuff+onlybyz"
 # engraft = "engraft+onlybyz"
-signed_raft1 = "signed_raft"
+# signed_raft1 = "signed_raft"
 # autobahn = "autobahn"
 
 [results.font]
