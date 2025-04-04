@@ -75,6 +75,9 @@ impl StorageEngine for RocksDBStorageEngine {
         #[cfg(feature = "disk_wal")]
         wopts.disable_wal(false);
 
+        #[cfg(feature = "disk_wal")]
+        wopts.set_sync(true);
+
         #[cfg(not(feature = "disk_wal"))]
         wopts.disable_wal(true);
         

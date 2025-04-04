@@ -47,10 +47,11 @@ async def register_users(host, num_users, password="pirateship"):
 
 
 
-def run_locust(locust_file, host, num_users, getDistribution):
+def run_locust(locust_file, host, num_users, getDistribution, getRequestHosts=[]):
     custom_user_config = {
         "user_class_name":"testClass", 
-        "getDistribution": getDistribution
+        "getDistribution": getDistribution,
+        "getRequestHosts": getRequestHosts
     }
     json_config = json.dumps(custom_user_config)
 
@@ -71,16 +72,23 @@ def run_locust(locust_file, host, num_users, getDistribution):
 
 if __name__ == "__main__":
     if len(sys.argv) < 5:
-        print("Usage: python run_test.py <host> <num_users> <locust_file> <spawn_rate>")
+        print("Usage: python run_test.py <host> <num_users> <locust_file> <get_ratio> [<get_request_hosts>]")
         sys.exit(1)
     
     host = sys.argv[1]
     num_users = int(sys.argv[2])
     locust_file = sys.argv[3]
-    spawn_rate = int(sys.argv[4])
+    get_ratio = int(sys.argv[4])
+    get_request_hosts = sys.argv[5:]
+
     
+    print("Performing Load Phase...")
     asyncio.run(register_users(host, num_users))
     
     time.sleep(2)
+
+    print("Performing Run Phase...")
     
-    run_locust(locust_file, host, num_users, spawn_rate)
+    run_locust(locust_file, host, num_users, get_ratio, get_request_hosts)
+
+    print("Load test completed.")
