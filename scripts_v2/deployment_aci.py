@@ -227,8 +227,8 @@ class AciDeployment(Deployment):
         token = cu.getAcrToken(self.registry_name)
 
         # Build containers
-        #cu.buildImage(cu.getFullImageName(self.registry_name, self.image_name), found_path) #TODO: expects cluster_key.pub in same repo as called. FIX
-        #cu.pushImage(self.registry_name, cu.getFullImageName(self.registry_name, self.image_name))
+        cu.buildImage(cu.getFullImageName(self.registry_name, self.image_name), found_path) #TODO: expects cluster_key.pub in same repo as called. FIX
+        cu.pushImage(self.registry_name, cu.getFullImageName(self.registry_name, self.image_name))
 
         # Deploy containers on Azure or locally
         # If deploying on Azure, the YAML configuration file is used
