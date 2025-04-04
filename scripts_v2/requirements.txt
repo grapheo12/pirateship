@@ -34,6 +34,7 @@ parso==0.8.4
 pexpect==4.9.0
 pillow==11.1.0
 platformdirs==4.3.6
+pyyaml == 6.0
 prompt_toolkit==3.0.50
 psutil==7.0.0
 ptyprocess==0.7.0

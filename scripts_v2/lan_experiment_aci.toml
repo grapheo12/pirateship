@@ -62,7 +62,7 @@ request_config = "Blanks"
 [[experiments]]
 name = "pirateship"
 repeats = 1
-num_nodes = 1
+num_nodes = 7 
 node_distribution = "uniform"
 build_command = "make"
 duration = 120
