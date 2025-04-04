@@ -59,7 +59,10 @@ impl StorageEngine for RocksDBStorageEngine {
         opts.set_max_write_buffer_number(self.config.max_write_buffer_number);
         opts.set_min_write_buffer_number_to_merge(self.config.max_write_buffers_to_merge);
 
+        #[cfg(not(feature = "disk_wal"))]
         opts.set_manual_wal_flush(true);
+
+        
         opts.set_compaction_style(DBCompactionStyle::Universal);
 
         let _ = DB::destroy(&opts, &self.config.db_path);
@@ -72,6 +75,7 @@ impl StorageEngine for RocksDBStorageEngine {
         #[cfg(feature = "disk_wal")]
         wopts.set_sync(true);
 
+        #[cfg(not(feature = "disk_wal"))]
         wopts.disable_wal(true);
         
         let res = // self.db.put(block_hash, block_ser);
