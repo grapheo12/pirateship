@@ -105,7 +105,7 @@ impl AppEngine for KVSAppEngine {
                                 success: true,
                                 values: vec![],
                             });
-                        } else if op_type ==ProtoTransactionOpType::Read {
+                        } else if op_type == ProtoTransactionOpType::Read {
                             if op.operands.len() != 1 {
                                 continue;
                             }
@@ -118,6 +118,51 @@ impl AppEngine for KVSAppEngine {
                                     values: vec![value],
                                 });
                             }
+                        } else if op_type == ProtoTransactionOpType::Increment {
+                            if op.operands.len() != 1 && op.operands.len() != 2 {
+                                continue;
+                            }
+
+                            // Read increment value (default 1)
+                            let incr_val = if op.operands.len() == 2 {
+                                let incr_val = &op.operands[1];
+                                if let Ok(arr) = incr_val.as_slice().try_into() {
+                                    i64::from_be_bytes(arr)
+                                } else {
+                                    1
+                                }
+                            } else {
+                                1
+                            };
+
+                            // Read counter
+                            let key: &Vec<u8> = &op.operands[0];
+                            let result = self.read(key);
+                            let mut result = if result.is_none() {
+                                0
+                            } else {
+                                let result = result.unwrap();
+                                i64::from_be_bytes(result.as_slice().try_into().unwrap())
+                            };
+
+                            // Perform op
+                            result += incr_val;
+
+                            // Write back
+                            let val = result.to_be_bytes().to_vec();
+
+                            if self.state.ci_state.contains_key(key) {
+                                self.state.ci_state.get_mut(key).unwrap().push((proto_block.n, val.clone()));
+                            } else {
+                                self.state.ci_state.insert(key.clone(), vec![(proto_block.n, val.clone())]);
+                            }
+
+                            // Return incremented value
+                            txn_result.result.push(ProtoTransactionOpResult {
+                                success: true,
+                                values: vec![val],
+                            });
+
                         }
                     } else {
                         warn!("Invalid operation type: {}", op.op_type);

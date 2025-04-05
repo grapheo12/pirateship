@@ -27,18 +27,20 @@ async def register_user(host, usernames, password, connector):
             await session.close()
             print(f"An error occurred: {e}")
 
-async def register_users(host, num_users, password="pirateship", num_client_nodes=1):
+async def register_users(host, num_users, password="pirateship", workers_per_client=2, num_client_nodes=1):
     max_user_id_length = len(str(num_users))
 
     tasks = []
 
     connector = aiohttp.TCPConnector(limit=MAX_CONCURRENT_REQUESTS)
 
-    users_per_clients = [num_users // num_client_nodes] * num_client_nodes
+    total_machines = workers_per_client * num_client_nodes
+
+    users_per_clients = [num_users // total_machines] * total_machines
     users_per_clients[-1] += num_users - sum(users_per_clients)
 
     usernames = []
-    for i in range(num_client_nodes):
+    for i in range(total_machines):
         # Set a different random seed for each client node
         rnd = random.Random()
         rnd.seed(RAND_SEED_LIST[i % len(RAND_SEED_LIST)] * (1 + i // len(RAND_SEED_LIST)))
@@ -63,16 +65,19 @@ async def register_users(host, num_users, password="pirateship", num_client_node
 
 
 
-def run_locust(locust_file, host, num_users, getDistribution, getRequestHosts=[]):
+def run_locust(locust_file, host, num_users, getDistribution, getRequestHosts=[], master_host="localhost", workers_per_client=2, num_client_nodes=1):
     custom_user_config = {
         "user_class_name":"testClass", 
         "getDistribution": getDistribution,
         "getRequestHosts": getRequestHosts
     }
     json_config = json.dumps(custom_user_config)
+    json_config = "'" + json_config + "'"
+
+    procs = []
 
 
-
+    # Spawn the master node
     command = [
         "locust",
         "-f", locust_file,
@@ -80,11 +85,38 @@ def run_locust(locust_file, host, num_users, getDistribution, getRequestHosts=[]
         "--users", str(num_users),
         "--spawn-rate", str(num_users),
         "-H", host,
-        "--config-users",json_config
+        "--config-users", json_config,
+        "--master",
     ]
+
+    with open("master.log", "w") as master_log:
+        cmd = " ".join(command)
+        print("Starting Locust master with command:", cmd)
+        proc = subprocess.Popen(cmd, stdout=master_log, stderr=subprocess.STDOUT, shell=True)
+        procs.append(proc)
+
+
+    for client_num in range(num_client_nodes):
+        for worker_num in range(workers_per_client):
+            with open(f"worker_{client_num}_{worker_num}.log", "w") as worker_log:
+                cmd = command[:-1]
+                custom_user_config["machineId"] = client_num * workers_per_client + worker_num
+                json_config = json.dumps(custom_user_config)
+                json_config = "'" + json_config + "'"
+                cmd.extend(["--worker", "--master-host", master_host, "--processes", str(1)])
+
+                cmd = " ".join(cmd)
+                print("Starting Locust worker", custom_user_config["machineId"], "with command:", cmd)
+                proc = subprocess.Popen(cmd, stdout=worker_log, stderr=subprocess.STDOUT, shell=True)
+                procs.append(proc)
+
+
+    # Wait for all to finish
+    for proc in procs:
+        proc.wait()
     
-    print("Starting Locust with command:", " ".join(command))
-    subprocess.run(command)
+
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 5:

@@ -84,7 +84,14 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
         operands: vec!["user".as_bytes().to_vec(), serialized_users],
     };
 
-    let _ = match send(vec![update_users_op], client, client_tag, false).await {
+
+    // Increment the counter for number of users.
+    let user_count_op = ProtoTransactionOp {
+        op_type: pft::proto::execution::ProtoTransactionOpType::Increment.into(),
+        operands: vec!["user_count".as_bytes().to_vec()],
+    };
+
+    let _ = match send(vec![update_users_op, user_count_op], client, client_tag, false).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -183,6 +190,42 @@ async fn listpubkeys(data: web::Data<AppState>) -> impl Responder {
     HttpResponse::Ok().json(serde_json::json!({
         "message": "public keys retrieved",
         "public keys": public_keys,
+    }))
+}
+
+#[get("/num_users")]
+async fn num_users(data: web::Data<AppState>) -> impl Responder {
+    let client = &data.client;
+
+    let transaction_op = ProtoTransactionOp {
+        op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+        operands: vec!["user_count".as_bytes().to_vec()],
+    };
+
+    let user_count_result = match send(vec![transaction_op], client, &data.curr_client_tag, true).await {
+        Ok(response) => response,
+        Err(e) => return e,
+    };
+
+    if user_count_result.is_empty() {
+        return HttpResponse::NotFound().json(serde_json::json!({
+            "message": "number of users",
+            "user_count": 0,
+        }));
+    }
+
+    let user_count = if let Ok(arr) = user_count_result.try_into() {
+        i64::from_be_bytes(arr)
+    } else {
+        return HttpResponse::Ok().json(serde_json::json!({
+            "message": "number of users",
+            "user_count": 0,
+        }));
+    };
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "message": "number of users",
+        "user_count": user_count,
     }))
 }
 
@@ -302,6 +345,7 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
             .service(refresh)
             .service(privkey)
             .service(home)
+            .service(num_users)
     })
     .bind(addr)?
     .run()
