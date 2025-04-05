@@ -20,6 +20,7 @@ import json
 
 import tqdm
 from crypto import *
+from scripts_v2.app_experiments import AppExperiment
 from ssh_utils import *
 from deployment import Deployment
 from experiments import Experiment
@@ -131,6 +132,8 @@ def parse_config(path, workdir=None, existing_experiments=None):
         experiment_type = e.get("type", "pirateship")
         if experiment_type == "pirateship":
             klass = Experiment
+        elif experiment_type == "app":
+            klass = AppExperiment
         elif experiment_type == "autobahn":
             klass = AutobahnExperiment
         project_home = toml_dict["project_home"]

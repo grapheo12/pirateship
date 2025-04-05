@@ -427,6 +427,9 @@ sleep 60
         else:
             self.copy_back_build_files()
 
+        # Call order: generate_configs, remote_build, generate_arbiter_script
+        # DO NOT CHANGE THIS ORDER. Subclasses may depend on this order.
+
         # Generate the shell script to run the experiment
         self.generate_arbiter_script()
 
