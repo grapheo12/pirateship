@@ -2,7 +2,7 @@ workdir = "deployment_artifacts"
 project_home = "https://github.com/grapheo12/pirateship"
 
 [deployment_config]
-mode = "lan-tiny"
+mode = "lan"
 ssh_key = "cluster_key.pem"
 ssh_user = "pftadmin"
 node_port_base = 3000
@@ -42,7 +42,7 @@ simulate_byzantine_behavior = false
 byzantine_start_block = 0
 
 [client_config]
-getDistribution = 80
+getDistribution = 0
 workers_per_client = 8
 workload = "kms"
 
@@ -52,10 +52,10 @@ workload = "kms"
 name = "kms"
 type = "app"
 repeats = 1
-num_nodes = 1
-num_clients = 5000
+num_nodes = 7
+num_clients = 10_000
 build_command = "make contrib"
-duration = 20
+duration = 180
 
 
 [[results]]
@@ -74,7 +74,7 @@ force_parse = true
 # hotstuff = "hotstuff+onlybyz"
 # engraft = "engraft+onlybyz"
 # signed_raft = "signed_raft"
-autobahn = "autobahn"
+# autobahn = "autobahn"
 
 [results.font]
 size = 55

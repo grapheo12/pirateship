@@ -329,6 +329,8 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
     let port = port + 1000;
     let addr = format!("{}:{}", host, port);
 
+    let batch_size = config.consensus_config.max_backlog_batch_size;
+
     HttpServer::new(move || {
         // Each worker thread creates its own client instance.
         let client = Client::new(&config, &keys, false, 0 as u64).into();
@@ -347,6 +349,7 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
             .service(home)
             .service(num_users)
     })
+    .workers(batch_size)            // Otherwise the server doesn't load consensus properly.
     .bind(addr)?
     .run()
     .await?;
