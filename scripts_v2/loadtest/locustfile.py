@@ -2,10 +2,17 @@ import random
 from locust import FastHttpUser, task, between, events
 import requests, time, collections
 import uuid
+import random
 import hashlib
 
 getWeight = 100
 getRequestHosts = []
+
+
+
+# This must be same between this file and loadtest.py
+RAND_SEED_LIST = [42, 120, 430, 82, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110]
+rnd = random.Random()
 
 #setup phase -- this is synchronous with the load test.
 @events.test_start.add_listener
@@ -23,13 +30,20 @@ def on_test_setup(environment, **kwargs):
 
     getRequestHosts = user_config.get("getRequestHosts", [])
 
+    machineId = user_config.get("machineId", 0)
+
+    # This ensures the same seed is used between load and run phase to generate user names
+    seed = RAND_SEED_LIST[machineId % len(RAND_SEED_LIST)] * (1 + machineId // len(RAND_SEED_LIST))
+    rnd.seed(seed)
+
+
 
 
 class testClass(FastHttpUser):
     def on_start(self):
         # We need to magically generate unique usernames without any kind of central coordination.
         # Since with distributed load testing, we can't guarantee that the same username won't be used by another user.
-        self.username = "user" + str(uuid.uuid4())
+        self.username = "user" + str(uuid.UUID(int=rnd.getrandbits(128)))
         self.password = "pirateship"
 
 

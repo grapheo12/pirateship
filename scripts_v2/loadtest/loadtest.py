@@ -5,8 +5,12 @@ import sys
 import time
 import asyncio
 import aiohttp
+import random
+import uuid
 
 MAX_CONCURRENT_REQUESTS = 200
+
+RAND_SEED_LIST = [42, 120, 430, 82, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110]
 
 async def register_user(host, usernames, password, connector):
     async with aiohttp.ClientSession(connector=connector) as session:
@@ -23,14 +27,26 @@ async def register_user(host, usernames, password, connector):
             await session.close()
             print(f"An error occurred: {e}")
 
-async def register_users(host, num_users, password="pirateship"):
+async def register_users(host, num_users, password="pirateship", num_client_nodes=1):
     max_user_id_length = len(str(num_users))
 
     tasks = []
 
     connector = aiohttp.TCPConnector(limit=MAX_CONCURRENT_REQUESTS)
 
-    usernames = ["username" + (max_user_id_length - len(str(n))) * "0" + str(n) for n in range(1, num_users + 1)]
+    users_per_clients = [num_users // num_client_nodes] * num_client_nodes
+    users_per_clients[-1] += num_users - sum(users_per_clients)
+
+    usernames = []
+    for i in range(num_client_nodes):
+        # Set a different random seed for each client node
+        rnd = random.Random()
+        rnd.seed(RAND_SEED_LIST[i % len(RAND_SEED_LIST)] * (1 + i // len(RAND_SEED_LIST)))
+
+        _usernames = ["user" + str(uuid.UUID(int=rnd.getrandbits(128))) for _ in range(users_per_clients[i])]
+        usernames.extend(_usernames)
+        
+
     # Split the usernames into chunks to avoid overwhelming the server
     chunk_size = MAX_CONCURRENT_REQUESTS
     username_chunks = []
