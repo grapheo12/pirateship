@@ -12,22 +12,20 @@ MAX_CONCURRENT_REQUESTS = 200
 
 RAND_SEED_LIST = [42, 120, 430, 82, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110]
 
-async def register_user(host, usernames, password, connector):
-    async with aiohttp.ClientSession(connector=connector) as session:
-        try: 
-            for username in usernames:
-                async with session.post(f"{host}/register", json={"username": username, "password": password}) as response:
-                    resp = await response.text()
-                    if response.status != 200:
-                        print(f"Error registering {username}: {resp}")
+async def register_user(host, usernames, password, session):
+    try: 
+        for username in usernames:
+            async with session.post(f"{host}/register", json={"username": username, "password": password}) as response:
+                if response.status != 200:
+                    print(f"Error registering {username}: {await response.text()}")
 
-                async with session.post(f"{host}/refresh", json={"username": username, "password": password}) as response:
-                    resp = await response.text()
-                    if response.status != 200:
-                        print(f"Error refreshing {username}: {resp}")
-        except Exception as e:
-            await session.close()
-            print(f"An error occurred: {e}")
+            async with session.post(f"{host}/refresh", json={"username": username, "password": password}) as response:
+                if response.status != 200:
+                    print(f"Error refreshing {username}: {await response.text()}")
+    except Exception as e:
+        await session.close()
+        print(f"An error occurred: {e}")
+
 
 async def register_users(host, num_users, password="pirateship", workers_per_client=2, num_client_nodes=1):
     max_user_id_length = len(str(num_users))
@@ -58,10 +56,11 @@ async def register_users(host, num_users, password="pirateship", workers_per_cli
         username_chunks.append(usernames[i:i + chunk_size])
 
     
-    for chunk in username_chunks:
-        tasks.append(register_user(host, chunk, password, connector))
+    async with aiohttp.ClientSession(connector=connector) as session:
+        for chunk in username_chunks:
+            tasks.append(register_user(host, chunk, password, session))
 
-    await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     await connector.close()
 
