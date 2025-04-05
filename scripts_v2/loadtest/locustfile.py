@@ -34,7 +34,7 @@ def on_test_setup(environment, **kwargs):
 
         machineId = user_config.get("machineId", 0)
     except Exception as e:
-        raise user_config
+        raise Exception(environment.parsed_options.config_users)
         # raise e
 
     # This ensures the same seed is used between load and run phase to generate user names
