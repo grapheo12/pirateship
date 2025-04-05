@@ -23,6 +23,9 @@ enum ProtoTransactionOpType {
 
     // For SQL and other operations
     CUSTOM = 8;
+
+    // To check for byz commit
+    PROBE = 9;
 }
 
 message ProtoTransactionOp {
