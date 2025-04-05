@@ -42,7 +42,7 @@ simulate_byzantine_behavior = false
 byzantine_start_block = 0
 
 [client_config]
-getDistribution = 0
+getDistribution = 80
 workers_per_client = 8
 workload = "kms"
 
@@ -53,7 +53,7 @@ name = "kms"
 type = "app"
 repeats = 1
 num_nodes = 7
-num_clients = 10_000
+num_clients = 30_000
 build_command = "make contrib"
 duration = 180
 
