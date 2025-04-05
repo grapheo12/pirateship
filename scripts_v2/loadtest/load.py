@@ -17,12 +17,14 @@ async def register_user(host, usernames, password, connector):
         try: 
             for username in usernames:
                 async with session.post(f"{host}/register", json={"username": username, "password": password}) as response:
+                    resp = await response.text()
                     if response.status != 200:
-                        print(f"Error registering {username}: {await response.text()}")
+                        print(f"Error registering {username}: {resp}")
 
                 async with session.post(f"{host}/refresh", json={"username": username, "password": password}) as response:
+                    resp = await response.text()
                     if response.status != 200:
-                        print(f"Error refreshing {username}: {await response.text()}")
+                        print(f"Error refreshing {username}: {resp}")
         except Exception as e:
             await session.close()
             print(f"An error occurred: {e}")

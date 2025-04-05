@@ -29,7 +29,7 @@ class AppExperiment(Experiment):
 
     def bins_already_exist(self):
         TARGET_BINARIES = ["kms"]
-        remote_repo = f"/home/{self.dev_ssh_user}/repo/autobahn"
+        remote_repo = f"/home/{self.dev_ssh_user}/repo"
 
         remote_script_dir = f"{remote_repo}/scripts_v2/loadtest"
         TARGET_SCRIPTS = ["load.py", "locustfile.py"]
@@ -201,10 +201,13 @@ sleep 1
             host = self.probableLeader
             
             # Run the load phase
+            # Assume a throughput of 3000 rps (this is <0.01x of the max throughput of the system)
+            load_phase_seconds = 5 + self.num_clients // 3000 # 5s min
             _script += f"""
-# Run the load phase. This is blocking.
-$SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} 'python3 {self.remote_workdir}/build/load.py {host} {self.num_clients} {self.total_client_vms} {self.workers_per_client} > {self.remote_workdir}/logs/{repeat_num}/loader.log 2> {self.remote_workdir}/logs/{repeat_num}/loader.err'
-sleep 1
+# Run the load phase.
+$SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} 'python3 {self.remote_workdir}/build/load.py {host} {self.num_clients} {self.total_client_vms} {self.workers_per_client} > {self.remote_workdir}/logs/{repeat_num}/loader.log 2> {self.remote_workdir}/logs/{repeat_num}/loader.err' &
+PID="$PID $!"
+sleep {load_phase_seconds}
 """
             # Run the locust master
 
