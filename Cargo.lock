@@ -961,6 +961,7 @@ name = "contrib"
 version = "0.1.0"
 dependencies = [
  "actix-web",
+ "async-recursion",
  "core_affinity",
  "ed25519-dalek",
  "futures",

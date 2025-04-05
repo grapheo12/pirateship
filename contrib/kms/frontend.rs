@@ -6,6 +6,7 @@ use sha2::digest::typenum::Integer;
 use tokio::sync::Mutex;
 use std::sync::Arc;
 use std::time::Instant;
+use async_recursion::async_recursion;
 
 use pft::config::Config;
 use pft::crypto::{KeyStore, hash};
@@ -356,6 +357,7 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
     Ok(())
 }
 
+#[async_recursion]
 async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, client_tag: &Arc<Mutex<usize>>, isRead: bool) -> Result<Vec<u8>, HttpResponse> {
     let transaction_phase = ProtoTransactionPhase {
         ops: transaction_ops,
@@ -421,6 +423,8 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
         }
     };
 
+    let mut block_n = 0;
+
     match decoded_payload.reply.unwrap() {
         pft::proto::client::proto_client_reply::Reply::Receipt(receipt) => {
             if let Some(tx_result) = receipt.results {
@@ -432,6 +436,7 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
                         result = value; // Consider improving this aggregation logic.
                     }
                 }
+                block_n = receipt.block_n;
             }
         },
         _ => {
@@ -441,6 +446,13 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
             })))
         },
     };
+
+    if !isRead && block_n != 0 {
+        send(vec![ProtoTransactionOp {
+            op_type: pft::proto::execution::ProtoTransactionOpType::Probe.into(),
+            operands: vec![block_n.to_be_bytes().to_vec()],
+        }], client, client_tag, true).await?;
+    }
     Ok(result)
 }
 
