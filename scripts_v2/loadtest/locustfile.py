@@ -21,7 +21,7 @@ rnd = random.Random()
 def on_test_setup(environment, **kwargs):
     global getWeight, getRequestHosts
 
-    user_config = environment.parsed_options.config_users[0][0]
+    user_config = environment.parsed_options.config_users[0]
 
     try:
         if type(user_config) == str:
