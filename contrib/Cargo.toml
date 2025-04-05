@@ -31,3 +31,7 @@ pft = { path = "../"}
 [[bin]]
 name = "kms"
 path = "kms/main.rs"
+
+[[bin]]
+name = "svr3"
+path = "svr3/main.rs"
