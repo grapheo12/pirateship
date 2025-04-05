@@ -4,6 +4,7 @@ import requests, time, collections
 import uuid
 import random
 import hashlib
+import json
 from pprint import pprint
 
 getWeight = 100
@@ -21,7 +22,11 @@ def on_test_setup(environment, **kwargs):
     global getWeight, getRequestHosts
 
     user_config = environment.parsed_options.config_users[0][0]
+
     try:
+        if type(user_config) == str:
+            user_config = json.loads(user_config)
+
         getWeight = user_config["getDistribution"]
         print("getDistribution: ", getWeight, "postDistribution: ", 100 - getWeight)
 
