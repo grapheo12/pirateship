@@ -75,7 +75,7 @@ class Experiment:
             f.write(patch)
 
 
-    def __gen_crypto(self, config_dir, nodelist, client_cnt):
+    def gen_crypto(self, config_dir, nodelist, client_cnt):
         participants = gen_keys_and_certs(nodelist, DEFAULT_CA_NAME, client_cnt, config_dir)
         print(participants)
         return {
@@ -152,7 +152,7 @@ class Experiment:
         else:
             client_vms = deployment.get_all_client_vms_in_region(self.client_region)
 
-        crypto_info = self.__gen_crypto(config_dir, node_list_for_crypto, len(client_vms))
+        crypto_info = self.gen_crypto(config_dir, node_list_for_crypto, len(client_vms))
         
 
         for k, v in node_configs.items():
@@ -410,10 +410,10 @@ sleep 60
         build_dir, config_dir, log_dir_base, log_dirs = self.create_directory(workdir)
         self.tag_source(workdir)
         self.tag_experiment(workdir)
-        self.generate_configs(deployment, config_dir, log_dir_base)
         self.dev_vm = deployment.dev_vm
         self.dev_ssh_user = deployment.ssh_user
         self.dev_ssh_key = deployment.ssh_key
+        self.generate_configs(deployment, config_dir, log_dir_base)
         self.local_workdir = workdir
 
         # Hard dependency on Linux style paths

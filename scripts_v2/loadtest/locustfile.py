@@ -4,6 +4,7 @@ import requests, time, collections
 import uuid
 import random
 import hashlib
+from pprint import pprint
 
 getWeight = 100
 getRequestHosts = []
@@ -20,17 +21,21 @@ def on_test_setup(environment, **kwargs):
     global getWeight, getRequestHosts
 
     user_config = environment.parsed_options.config_users[0][0]
-    getWeight = user_config["getDistribution"]
-    print("getDistribution: ", getWeight, "postDistribution: ", 100 - getWeight)
+    try:
+        getWeight = user_config["getDistribution"]
+        print("getDistribution: ", getWeight, "postDistribution: ", 100 - getWeight)
 
-    if not (0 <= getWeight <= 100):
-        getWeight = 100
-        postWeight = 0
-        print("set getDistribution in range of [0, 100]")
+        if not (0 <= getWeight <= 100):
+            getWeight = 100
+            postWeight = 0
+            print("set getDistribution in range of [0, 100]")
 
-    getRequestHosts = user_config.get("getRequestHosts", [])
+        getRequestHosts = user_config.get("getRequestHosts", [])
 
-    machineId = user_config.get("machineId", 0)
+        machineId = user_config.get("machineId", 0)
+    except Exception as e:
+        pprint(user_config)
+        raise e
 
     # This ensures the same seed is used between load and run phase to generate user names
     seed = RAND_SEED_LIST[machineId % len(RAND_SEED_LIST)] * (1 + machineId // len(RAND_SEED_LIST))

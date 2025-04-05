@@ -19,8 +19,8 @@ class AppExperiment(Experiment):
         for bin in TARGET_BINARIES:
             copy_file_from_remote_public_ip(f"{remote_repo}/target/release/{bin}", os.path.join(self.local_workdir, "build", bin), self.dev_ssh_user, self.dev_ssh_key, self.dev_vm)
 
-        remote_script_dir = f"{remote_repo}/scripts_v2"
-        TARGET_SCRIPTS = ["loadtest/load.py", "loadtest/locustfile.py"]
+        remote_script_dir = f"{remote_repo}/scripts_v2/loadtest"
+        TARGET_SCRIPTS = ["load.py", "locustfile.py"]
 
         # Copy the scripts to build directory
         for script in TARGET_SCRIPTS:
@@ -31,8 +31,8 @@ class AppExperiment(Experiment):
         TARGET_BINARIES = ["kms"]
         remote_repo = f"/home/{self.dev_ssh_user}/repo/autobahn"
 
-        remote_script_dir = f"{remote_repo}/scripts_v2"
-        TARGET_SCRIPTS = ["loadtest/loadtest.py", "loadtest/locustfile.py", "loadtest/locust.conf", "requirements.txt"]
+        remote_script_dir = f"{remote_repo}/scripts_v2/loadtest"
+        TARGET_SCRIPTS = ["load.py", "locustfile.py"]
 
 
         res1 = run_remote_public_ip([
@@ -115,7 +115,7 @@ class AppExperiment(Experiment):
 
         self.client_vms = client_vms[:]
 
-        crypto_info = self.__gen_crypto(config_dir, node_list_for_crypto, 0)
+        crypto_info = self.gen_crypto(config_dir, node_list_for_crypto, 0)
         
 
         for k, v in node_configs.items():
@@ -154,6 +154,17 @@ class AppExperiment(Experiment):
         self.binary_mapping[self.locust_master].append("loader")
         self.binary_mapping[self.locust_master].append("master")
 
+        # Install pip and the dependencies in client vms.
+        for vm in self.client_vms:
+            run_remote_public_ip([
+                f"sudo apt-get update",
+                f"sudo apt-get install -y python3-pip",
+                f"pip3 install locust",
+                f"pip3 install aiohttp",
+                f"pip3 install requests",
+            ], self.dev_ssh_user, self.dev_ssh_key, vm, hide=False)
+
+
 
         
     def generate_arbiter_script(self):
@@ -176,7 +187,7 @@ SCP_CMD="scp -o StrictHostKeyChecking=no -i {self.dev_ssh_key}"
                 # Boot up the nodes first
                 for bin in bin_list:
                     if "node" in bin:
-                        binary_name = "server"
+                        binary_name = self.workload
                     else:
                         continue
                     _script += f"""
@@ -203,13 +214,14 @@ sleep 1
                 "getDistribution": self.getDistribution,
                 "getRequestHosts": self.getRequestHosts,
             }
-            config_users = "'" + json.dumps(config_users) + "'"
+            config_users_str = "'\"'\"'" + json.dumps(config_users) + "'\"'\"'" # Bash magic! https://stackoverflow.com/questions/1250079/how-to-escape-single-quotes-within-single-quoted-strings
             _script += f"""
 # Run phase start
 
 # Run the locust master
-$SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} 'locust -f {self.remote_workdir}/build/locustfile.py --headless --master --users {self.num_clients} --spawn-rate {int(self.total_worker_processes * 1000)} --host {host.private_ip} --run-time {self.duration}s --config-users {config_users} > {self.remote_workdir}/logs/{repeat_num}/locust-master.log 2> {self.remote_workdir}/logs/{repeat_num}/locust-master.err' &
+$SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} '/home/pftadmin/.local/bin/locust -f {self.remote_workdir}/build/locustfile.py --headless --master --users {self.num_clients} --spawn-rate {int(self.total_worker_processes * 1000)} --host {host} --run-time {self.duration}s --config-users {config_users_str} > {self.remote_workdir}/logs/{repeat_num}/locust-master.log 2> {self.remote_workdir}/logs/{repeat_num}/locust-master.err' &
 PID="$PID $!"
+sleep 1
 
 # Run all workers
 """
@@ -218,11 +230,13 @@ PID="$PID $!"
                 for bin in bin_list:
                     if "client" in bin:
                         machineId = int(bin[6:])
+                        config_users["machineId"] = machineId
+                        config_users_str = "'\"'\"'" + json.dumps(config_users) + "'\"'\"'"
                     else:
                         continue
 
                     _script += f"""
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'locust -f {self.remote_workdir}/build/locustfile.py --headless --worker --master-host {self.locust_master.private_ip} --processes 1 --run-time {self.duration}s --config-users {config_users} > {self.remote_workdir}/logs/{repeat_num}/{bin}.log 2> {self.remote_workdir}/logs/{repeat_num}/{bin}.err' &
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '/home/pftadmin/.local/bin/locust -f {self.remote_workdir}/build/locustfile.py --headless --worker --master-host {self.locust_master.private_ip} --processes 1 --run-time {self.duration}s --config-users {config_users_str} > {self.remote_workdir}/logs/{repeat_num}/{bin}.log 2> {self.remote_workdir}/logs/{repeat_num}/{bin}.err' &
 PID="$PID $!"
 """
             
@@ -245,7 +259,7 @@ sleep 10
             for vm, bin_list in self.binary_mapping.items():
                 for bin in bin_list:
                     if "node" in bin:
-                        binary_name = "server"
+                        binary_name = self.workload
                     else:
                         binary_name = "locust"
                 
@@ -260,7 +274,7 @@ $SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_n
 """
                     
             _script += f"""
-sleep 60
+sleep 10
 """
                     
             # pkill -9 -c server also kills tmux-server. So we can't run a server on the dev VM.
@@ -268,17 +282,4 @@ sleep 60
 
             with open(os.path.join(self.local_workdir, f"arbiter_{repeat_num}.sh"), "w") as f:
                 f.write(_script + "\n\n")
-
-
-    def remote_build(self):
-        super().remote_build()
-
-        # Install pip and the dependencies in client vms.
-        for vm in self.client_vms:
-            copy_remote_public_ip(os.path.join("scripts_v2", "requirements.txt"), "/home/pftadmin/requirements.txt", self.dev_ssh_user, self.dev_ssh_key, vm)
-            run_remote_public_ip([
-                f"sudo apt-get update",
-                f"sudo apt-get install -y python3-pip",
-                f"pip3 install -r /home/pftadmin/requirements.txt"
-            ], self.dev_ssh_user, self.dev_ssh_key, vm)
 

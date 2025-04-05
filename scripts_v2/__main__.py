@@ -20,7 +20,7 @@ import json
 
 import tqdm
 from crypto import *
-from scripts_v2.app_experiments import AppExperiment
+from app_experiments import AppExperiment
 from ssh_utils import *
 from deployment import Deployment
 from experiments import Experiment
@@ -174,10 +174,11 @@ def parse_config(path, workdir=None, existing_experiments=None):
                     controller_must_run
                 ))
         else:
+            seq_start = int(e.get("seq_start", 0))
             experiments.append(klass(
-                os.path.join(_e['name'], str(seq_start)),
+                os.path.join(e['name'], str(seq_start)),
                 e["name"],  # Group name
-                0, # Seq num
+                seq_start, # Seq num
                 int(e["repeats"]),
                 int(e["duration"]),
                 int(e["num_nodes"]),
@@ -381,7 +382,7 @@ def run_command(config, workdir, command):
 )
 @click.option(
     "-d", "--workdir", required=False,
-    type=click.Path(file_okay=False, resolve_path=True),
+    type=click.Path(file_okay=False, resolve_path=False),
     default=None
 )
 def deploy(config, workdir):
