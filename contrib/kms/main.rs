@@ -111,24 +111,28 @@ fn main() {
         Arc::new(Mutex::new(Box::pin(core_affinity::get_core_ids().unwrap())));
 
     let start_idx = cfg.consensus_config.node_list.iter().position(|r| r.eq(&cfg.net_config.name)).unwrap();
-    let mut num_threads = NUM_THREADS / 2;
-    {
+
+    let (actix_threads, consensus_threads) = {
         let _num_cores = core_ids.lock().unwrap().len();
-        if (_num_cores - 1) / 2 < num_threads {
-            // Leave one core for the storage compaction thread.
-            num_threads = (_num_cores - 1) / 2;
+        if _num_cores == 1 {
+            // This will have a terrible performance, but it will work!
+            (1, 1)
+        } else if _num_cores > 4 {
+            (4, _num_cores - 4)
+        } else {
+            (1, _num_cores - 1)
         }
-    }
+    };
     // let num_threads = 4;
 
     let (batch_proposer_tx, batch_proposer_rx) = make_channel(cfg.rpc_config.channel_depth as usize);
 
-    let start_idx = start_idx * num_threads;
+    let start_idx = start_idx * consensus_threads;
     
     let i = Box::pin(AtomicUsize::new(0));
     let runtime = runtime::Builder::new_multi_thread()
         .enable_all()
-        .worker_threads(num_threads)
+        .worker_threads(consensus_threads)
         .on_thread_start(move || {
             let _cids = core_ids.clone();
             let lcores = _cids.lock().unwrap();
@@ -153,10 +157,10 @@ fn main() {
     
     let frontend_runtime = runtime::Builder::new_multi_thread()
         .enable_all()
-        .worker_threads(num_threads) 
+        .worker_threads(actix_threads) 
         .build()
         .unwrap();
-    match frontend_runtime.block_on(frontend::run_actix_server(cfg, batch_proposer_tx)) {
+    match frontend_runtime.block_on(frontend::run_actix_server(cfg, batch_proposer_tx, actix_threads)) {
         Ok(_) => println!("Frontend server ran successfully."),
         Err(e) => eprintln!("Frontend server error: {:?}", e),
     };

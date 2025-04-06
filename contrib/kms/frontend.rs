@@ -320,7 +320,7 @@ async fn home(_data: web::Data<AppState>) -> impl Responder {
     }))
 }
 
-pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::channel::AsyncSenderWrapper<TxWithAckChanTag>) -> std::io::Result<()> {
+pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::channel::AsyncSenderWrapper<TxWithAckChanTag>, actix_threads: usize) -> std::io::Result<()> {
     // Prepare keys.
     let mut keys = KeyStore::empty();
     keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
@@ -357,7 +357,7 @@ pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::cha
             .service(toggle_byz_wait)
 
     })
-    .workers(batch_size)            // Otherwise the server doesn't load consensus properly.
+    .workers(actix_threads)            // Otherwise the server doesn't load consensus properly.
     .bind(addr)?
     .run()
     .await?;
