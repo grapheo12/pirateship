@@ -298,7 +298,9 @@ impl ClientReplyHandler {
                     self.probe_buffer.insert(block_n, vec![sender]);
                 }
 
-                // self.maybe_clear_probe_buf().await;
+                info!("Probe added for block {}", block_n);
+
+                self.maybe_clear_probe_buf().await;
             },
         }
     }
@@ -319,6 +321,7 @@ impl ClientReplyHandler {
 
         for (block_n, reply_vec) in remove_vec {
             for reply_tx in reply_vec {
+                info!("Probe clear for block {}", block_n);
                 self.reply_processor_queue.0.send(ReplyProcessorCommand::Probe(block_n, reply_tx)).await.unwrap();
             }
         }
