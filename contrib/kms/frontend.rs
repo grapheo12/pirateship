@@ -342,10 +342,10 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
     HttpServer::new(move || {
         let _client_sub_id = client_sub_id.clone().fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         // Each worker thread creates its own client instance.
-        let client = Client::new(&config, &keys, false, _client_sub_id).into();
+        let client = Client::new(&config, &keys, true, _client_sub_id).into();
         
         let _client_sub_id = client_sub_id.clone().fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let probe_client = Client::new(&config, &keys, false, _client_sub_id).into();
+        let probe_client = Client::new(&config, &keys, true, _client_sub_id).into();
         let state = AppState {
             client,
             probe_client,
@@ -369,7 +369,6 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
     Ok(())
 }
 
-#[async_recursion]
 async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, client_tag: &Arc<Mutex<usize>>, isRead: bool, probe_client: &PinnedClient) -> Result<Vec<u8>, HttpResponse> {
     let transaction_phase = ProtoTransactionPhase {
         ops: transaction_ops,
@@ -394,12 +393,11 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
     };
     
 
-    let current_tag = {
-        let mut tag_guard = client_tag.lock().await;
-        *tag_guard += 1;
+    // Hold this lock so there can be only one inflight request at a time.
+    let mut tag_guard = client_tag.lock().await;
+    *tag_guard += 1;
 
-        *tag_guard as u64
-    };
+    let current_tag = *tag_guard as u64;
 
     let rpc_msg_body = ProtoPayload {
         message: Some(pft::proto::rpc::proto_payload::Message::ClientRequest(ProtoClientRequest {
@@ -463,10 +461,49 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
     };
 
     if !isRead && block_n != 0 {
-        send(vec![ProtoTransactionOp {
-            op_type: pft::proto::execution::ProtoTransactionOpType::Probe.into(),
-            operands: vec![block_n.to_be_bytes().to_vec()],
-        }], probe_client, client_tag, true, probe_client).await?;
+        *tag_guard += 1;
+
+        let current_tag = *tag_guard as u64;
+    
+        let rpc_msg_body = ProtoPayload {
+            message: Some(pft::proto::rpc::proto_payload::Message::ClientRequest(ProtoClientRequest {
+                tx: Some(ProtoTransaction {
+                    on_receive: Some(ProtoTransactionPhase {
+                        ops: vec![ProtoTransactionOp {
+                            op_type: pft::proto::execution::ProtoTransactionOpType::Probe.into(),
+                            operands: vec![block_n.to_be_bytes().to_vec()],
+                        }]
+                    }),
+                    on_crash_commit: None,
+                    on_byzantine_commit: None,
+                    is_reconfiguration: false,
+                    is_2pc: false,
+                }),
+                origin: "name".to_string(), // Change as needed.
+                sig: vec![0u8; 1],
+                client_tag: current_tag,
+            })),
+        };
+    
+        let mut buf = Vec::new();
+        if let Err(e) = rpc_msg_body.encode(&mut buf) {
+            warn!("Error encoding request: {}", e);
+        }
+    
+        let sz = buf.len();
+        let request = PinnedMessage::from(buf, sz, pft::rpc::SenderType::Anon);
+    
+        let name = &client.0.config.get().net_config.name;
+    
+        let _resp = match PinnedClient::send_and_await_reply(client, name, request.as_ref()).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                warn!("Error sending request: {}", e);
+                return Err(HttpResponse::InternalServerError().body(format!("Error sending request: {}", e)));
+            }
+        };
+
+        // Probe replies only after Byz commit
     }
     Ok(result)
 }
