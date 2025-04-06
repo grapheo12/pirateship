@@ -365,7 +365,7 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
 
     let transaction = if isRead {
         ProtoTransaction {
-            on_receive: Some(transaction_phase.clone()),
+            on_receive: Some(transaction_phase),
             on_crash_commit: None,
             on_byzantine_commit: None,
             is_reconfiguration: false,
@@ -374,7 +374,7 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
     } else {
         ProtoTransaction {
             on_receive: None,
-            on_crash_commit: Some(transaction_phase.clone()),
+            on_crash_commit: Some(transaction_phase),
             on_byzantine_commit: None,
             is_reconfiguration: false,
             is_2pc: false,
@@ -382,9 +382,12 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
     };
     
 
-    let mut tag_guard = client_tag.lock().await;
-    *tag_guard += 1;
-    let current_tag = *tag_guard as u64;
+    let current_tag = {
+        let mut tag_guard = client_tag.lock().await;
+        *tag_guard += 1;
+
+        *tag_guard as u64
+    };
 
     let rpc_msg_body = ProtoPayload {
         message: Some(pft::proto::rpc::proto_payload::Message::ClientRequest(ProtoClientRequest {
