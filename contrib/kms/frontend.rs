@@ -333,7 +333,7 @@ pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::cha
     let port = port + 1000;
     let addr = format!("{}:{}", host, port);
 
-    let batch_size = config.consensus_config.max_backlog_batch_size;
+    let batch_size = config.consensus_config.max_backlog_batch_size.max(256);
 
 
     let probe_for_byz_commit = Arc::new(AtomicBool::new(false)); // This is a global state!
