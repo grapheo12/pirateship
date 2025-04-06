@@ -5,7 +5,7 @@ use log::{error, info, warn};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{default_hash, CachedBlock, HashType, DIGEST_LENGTH}, proto::{client::ProtoByzResponse, execution::{ProtoTransaction, ProtoTransactionOpType, ProtoTransactionResult}}, utils::{channel::{Receiver, Sender}, PerfCounter}};
+use crate::{config::AtomicConfig, crypto::{default_hash, CachedBlock, HashType, DIGEST_LENGTH}, proto::{client::ProtoByzResponse, execution::{ProtoTransaction, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionResult}}, utils::{channel::{Receiver, Sender}, PerfCounter}};
 
 use super::{client_reply::ClientReplyCommand, super::utils::timer::ResettableTimer};
 
@@ -245,7 +245,12 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
             if *block_n <= self.stats.bci {
                 info!("Clearing probe tx buffer of size {} for block {}", reply_vec.len(), block_n);
                 for reply_tx in reply_vec.drain(..) {
-                    let _ = reply_tx.send(ProtoTransactionResult::default());
+                    let _ = reply_tx.send(ProtoTransactionResult {
+                        result: vec![ProtoTransactionOpResult { 
+                            success: true,
+                            values: vec![],
+                        }],
+                    });
                 }
                 false
             } else {
