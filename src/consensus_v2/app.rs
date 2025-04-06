@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::{BTreeMap, HashMap, VecDeque}, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
 use hex::ToHex;
-use log::{error, info, warn};
+use log::{error, info, trace, warn};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::{oneshot, Mutex};
 
@@ -243,7 +243,7 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
         // Find blocks <= bci in the probe_tx_buffer and clear them.
         self.probe_tx_buffer.retain(|block_n, reply_vec| {
             if *block_n <= self.stats.bci {
-                info!("Clearing probe tx buffer of size {} for block {}", reply_vec.len(), block_n);
+                trace!("Clearing probe tx buffer of size {} for block {}", reply_vec.len(), block_n);
                 for reply_tx in reply_vec.drain(..) {
                     let _ = reply_tx.send(ProtoTransactionResult {
                         result: vec![ProtoTransactionOpResult { 

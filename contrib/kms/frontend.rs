@@ -4,7 +4,7 @@ use prost::Message;
 use serde::Deserialize;
 use sha2::digest::typenum::Integer;
 use tokio::sync::Mutex;
-use std::sync::atomic::{AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use async_recursion::async_recursion;
@@ -26,7 +26,7 @@ struct AppState {
 
     // Separate client instance for byz commit probe, so it doesn't interfere with other requests
     // on the same worker thread.
-    probe_client: PinnedClient,
+    probe_for_byz_commit: Arc<AtomicBool>,
     // Only a per-thread client tag counter remains.
     curr_client_tag: Arc<Mutex<usize>>,
 }
@@ -44,7 +44,7 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
         operands: vec![username.clone().into_bytes()],
     };
 
-    let result = match send(vec![transaction_op], client, client_tag, true, &data.probe_client).await {
+    let result = match send(vec![transaction_op], client, client_tag, true, false).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -61,7 +61,7 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
         operands: vec![username.clone().into_bytes(), hash(&password.into_bytes())],
     };
 
-    let _ = match send(vec![create_user_op], client, client_tag, false, &data.probe_client).await {
+    let _ = match send(vec![create_user_op], client, client_tag, false, data.probe_for_byz_commit.load(Ordering::SeqCst)).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -72,7 +72,7 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
         operands: vec!["user".as_bytes().to_vec()],
     };
 
-    let get_user_result = match send(vec![get_user_op], client, client_tag, true, &data.probe_client).await {
+    let get_user_result = match send(vec![get_user_op], client, client_tag, true, false).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -97,7 +97,7 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
         operands: vec!["user_count".as_bytes().to_vec()],
     };
 
-    let _ = match send(vec![update_users_op, user_count_op], client, client_tag, false, &data.probe_client).await {
+    let _ = match send(vec![update_users_op, user_count_op], client, client_tag, false, data.probe_for_byz_commit.load(Ordering::SeqCst)).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -138,7 +138,7 @@ async fn refresh(payload: web::Json<RegisterPayload>, data: web::Data<AppState>)
         operands: vec![priv_insert_key.into_bytes(), private_key.to_vec()],
     };
 
-    let _ = match send(vec![write_pub_key_op, write_priv_key_op], client, &data.curr_client_tag, false, &data.probe_client).await {
+    let _ = match send(vec![write_pub_key_op, write_priv_key_op], client, &data.curr_client_tag, false, data.probe_for_byz_commit.load(Ordering::SeqCst)).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -151,6 +151,17 @@ async fn refresh(payload: web::Json<RegisterPayload>, data: web::Data<AppState>)
     }))
 }
 
+#[post("/toggle_byz_wait")]
+async fn toggle_byz_wait(data: web::Data<AppState>) -> impl Responder {
+    let mut state = data.probe_for_byz_commit.load(Ordering::SeqCst);
+    state = !state;
+    data.probe_for_byz_commit.store(state, Ordering::SeqCst);
+    HttpResponse::Ok().json(serde_json::json!({
+        "message": "byzantine wait toggled",
+        "probe_for_byz_commit": state,
+    }))
+}
+
 #[get("/listpubkeys")]
 async fn listpubkeys(data: web::Data<AppState>) -> impl Responder {
     let client = &data.client;
@@ -160,7 +171,7 @@ async fn listpubkeys(data: web::Data<AppState>) -> impl Responder {
         operands: vec!["user".as_bytes().to_vec()],
     };
 
-    let get_user_result = match send(vec![get_user_op], client, &data.curr_client_tag, true, &data.probe_client).await {
+    let get_user_result = match send(vec![get_user_op], client, &data.curr_client_tag, true, false).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -183,7 +194,7 @@ async fn listpubkeys(data: web::Data<AppState>) -> impl Responder {
 
     let mut public_keys = Vec::new();
     for op in user_ops {
-        let user_public_key_result = match send(vec![op], client, &data.curr_client_tag, true, &data.probe_client).await {
+        let user_public_key_result = match send(vec![op], client, &data.curr_client_tag, true, false).await {
             Ok(response) => response,
             Err(e) => return e,
         };
@@ -208,7 +219,7 @@ async fn num_users(data: web::Data<AppState>) -> impl Responder {
         operands: vec!["user_count".as_bytes().to_vec()],
     };
 
-    let user_count_result = match send(vec![transaction_op], client, &data.curr_client_tag, true, &data.probe_client).await {
+    let user_count_result = match send(vec![transaction_op], client, &data.curr_client_tag, true, false).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -247,7 +258,7 @@ async fn pubkey(payload: web::Json<PubKeyPayload>, data: web::Data<AppState>) ->
         operands: vec![key.into_bytes()],
     };
 
-    let user_public_key_result = match send(vec![transaction_op], client, &data.curr_client_tag, true, &data.probe_client).await {
+    let user_public_key_result = match send(vec![transaction_op], client, &data.curr_client_tag, true, false).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -293,7 +304,7 @@ async fn privkey(payload: web::Json<RegisterPayload>, data: web::Data<AppState>)
         operands: vec![key.into_bytes()],
     };
 
-    let user_priv_key_result = match send(vec![transaction_op], client, &data.curr_client_tag, true, &data.probe_client).await {
+    let user_priv_key_result = match send(vec![transaction_op], client, &data.curr_client_tag, true, false).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -345,10 +356,9 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
         let client = Client::new(&config, &keys, true, _client_sub_id).into();
         
         let _client_sub_id = client_sub_id.clone().fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let probe_client = Client::new(&config, &keys, true, _client_sub_id).into();
         let state = AppState {
             client,
-            probe_client,
+            probe_for_byz_commit: Arc::new(AtomicBool::new(false)),
             curr_client_tag: Arc::new(Mutex::new(0)),
         };
 
@@ -369,7 +379,7 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
     Ok(())
 }
 
-async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, client_tag: &Arc<Mutex<usize>>, isRead: bool, probe_client: &PinnedClient) -> Result<Vec<u8>, HttpResponse> {
+async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, client_tag: &Arc<Mutex<usize>>, isRead: bool, probe_for_byz_commit: bool) -> Result<Vec<u8>, HttpResponse> {
     let transaction_phase = ProtoTransactionPhase {
         ops: transaction_ops,
     };
@@ -460,7 +470,7 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
         },
     };
 
-    if !isRead && block_n != 0 {
+    if !isRead && block_n != 0 && probe_for_byz_commit {
         *tag_guard += 1;
 
         let current_tag = *tag_guard as u64;
@@ -519,7 +529,7 @@ async fn authenticate_user(
         operands: vec![username.clone().into_bytes()],
     };
 
-    let result = match send(vec![transaction_op], client, client_tag, true, client).await {
+    let result = match send(vec![transaction_op], client, client_tag, true, false).await {
         Ok(response) => response,
         Err(e) => return Err(e),
     };
