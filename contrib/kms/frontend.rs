@@ -395,7 +395,12 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, isRead: bool, state: &Ap
     let tx_with_ack_chan_tag: TxWithAckChanTag = (Some(transaction), (tx, current_tag, SenderType::Anon));
     state.batch_proposer_tx.send(tx_with_ack_chan_tag).await.unwrap();
 
-    let (resp, _) = rx.recv().await.unwrap();
+    let (resp, _) = match rx.recv().await {
+        Some(resp) => resp,
+        None => {
+            return Err(HttpResponse::InternalServerError().body("Error receiving response"));
+        }
+    };
 
     let resp = resp.as_ref();
     let mut result: Vec<u8> = Vec::new();
