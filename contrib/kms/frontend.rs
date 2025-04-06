@@ -357,7 +357,7 @@ pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::cha
             .service(toggle_byz_wait)
 
     })
-    .workers(actix_threads)            // Otherwise the server doesn't load consensus properly.
+    .workers(batch_size)            // Otherwise the server doesn't load consensus properly.
     .bind(addr)?
     .run()
     .await?;
