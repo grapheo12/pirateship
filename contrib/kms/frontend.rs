@@ -1,5 +1,7 @@
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
+use tokio::sync::mpsc;
 use log::{debug, warn};
+use pft::consensus_v2::batch_proposal::TxWithAckChanTag;
 use prost::Message;
 use serde::Deserialize;
 use sha2::digest::typenum::Integer;
@@ -13,30 +15,27 @@ use pft::config::Config;
 use pft::crypto::{KeyStore, hash};
 use pft::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase};
 use pft::rpc::client::Client;
-use pft::rpc::{MessageRef, PinnedMessage};
+use pft::rpc::{MessageRef, PinnedMessage, SenderType};
 use pft::{config::ClientConfig, proto::{client::{self, ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::channel::{make_channel, Receiver, Sender}};
 use crate::payloads::{RegisterPayload, PubKeyPayload};
 
 use ed25519_dalek::{ed25519, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SigningKey, SecretKey, VerifyingKey};
 
-#[derive(Clone)]
 struct AppState {
-    // Each worker gets its own client instance.
-    client: PinnedClient,
-
-    // Separate client instance for byz commit probe, so it doesn't interfere with other requests
-    // on the same worker thread.
+    /// Global channel to feed into the consensusNode.
+    batch_proposer_tx: Sender<TxWithAckChanTag>,
+    /// Separate client instance for byz commit probe, so it doesn't interfere with other requests
+    /// on the same worker thread.
+    /// Arced since it is shared across threads.
     probe_for_byz_commit: Arc<AtomicBool>,
-    // Only a per-thread client tag counter remains.
-    curr_client_tag: Arc<Mutex<usize>>,
+    /// Only a per-thread client tag counter remains.
+    curr_client_tag: AtomicU64,
 }
 
 #[post("/register")]
 async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
     let username = payload.username.clone();
     let password = payload.password.clone();
-    let client = &data.client;
-    let client_tag = &data.curr_client_tag;
 
     // Query KMS for username.
     let transaction_op = ProtoTransactionOp {
@@ -44,7 +43,7 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
         operands: vec![username.clone().into_bytes()],
     };
 
-    let result = match send(vec![transaction_op], client, client_tag, true, false).await {
+    let result = match send(vec![transaction_op], true, data.as_ref()).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -61,7 +60,7 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
         operands: vec![username.clone().into_bytes(), hash(&password.into_bytes())],
     };
 
-    let _ = match send(vec![create_user_op], client, client_tag, false, data.probe_for_byz_commit.load(Ordering::SeqCst)).await {
+    let _ = match send(vec![create_user_op], false, &data).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -72,7 +71,7 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
         operands: vec!["user".as_bytes().to_vec()],
     };
 
-    let get_user_result = match send(vec![get_user_op], client, client_tag, true, false).await {
+    let get_user_result = match send(vec![get_user_op], true, &data).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -97,7 +96,7 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
         operands: vec!["user_count".as_bytes().to_vec()],
     };
 
-    let _ = match send(vec![update_users_op, user_count_op], client, client_tag, false, data.probe_for_byz_commit.load(Ordering::SeqCst)).await {
+    let _ = match send(vec![update_users_op, user_count_op], false, &data).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -110,11 +109,10 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
 
 #[post("/refresh")]
 async fn refresh(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
-    let client = &data.client;
     let mut csprng = rand::rngs::OsRng;
     let signing_key: SigningKey = SigningKey::generate(&mut csprng);
 
-    match authenticate_user(payload.username.clone(), payload.password.clone(), client, &data.curr_client_tag).await {
+    match authenticate_user(payload.username.clone(), payload.password.clone(), &data).await {
         Ok(valid) => valid,
         Err(e) => return e,
     };
@@ -138,7 +136,7 @@ async fn refresh(payload: web::Json<RegisterPayload>, data: web::Data<AppState>)
         operands: vec![priv_insert_key.into_bytes(), private_key.to_vec()],
     };
 
-    let _ = match send(vec![write_pub_key_op, write_priv_key_op], client, &data.curr_client_tag, false, data.probe_for_byz_commit.load(Ordering::SeqCst)).await {
+    let _ = match send(vec![write_pub_key_op, write_priv_key_op], false, &data).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -164,14 +162,12 @@ async fn toggle_byz_wait(data: web::Data<AppState>) -> impl Responder {
 
 #[get("/listpubkeys")]
 async fn listpubkeys(data: web::Data<AppState>) -> impl Responder {
-    let client = &data.client;
-
     let get_user_op = ProtoTransactionOp {
         op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
         operands: vec!["user".as_bytes().to_vec()],
     };
 
-    let get_user_result = match send(vec![get_user_op], client, &data.curr_client_tag, true, false).await {
+    let get_user_result = match send(vec![get_user_op], true, &data).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -194,7 +190,7 @@ async fn listpubkeys(data: web::Data<AppState>) -> impl Responder {
 
     let mut public_keys = Vec::new();
     for op in user_ops {
-        let user_public_key_result = match send(vec![op], client, &data.curr_client_tag, true, false).await {
+        let user_public_key_result = match send(vec![op], true, &data).await {
             Ok(response) => response,
             Err(e) => return e,
         };
@@ -212,14 +208,12 @@ async fn listpubkeys(data: web::Data<AppState>) -> impl Responder {
 
 #[get("/num_users")]
 async fn num_users(data: web::Data<AppState>) -> impl Responder {
-    let client = &data.client;
-
     let transaction_op = ProtoTransactionOp {
         op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
         operands: vec!["user_count".as_bytes().to_vec()],
     };
 
-    let user_count_result = match send(vec![transaction_op], client, &data.curr_client_tag, true, false).await {
+    let user_count_result = match send(vec![transaction_op], true, &data).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -248,8 +242,6 @@ async fn num_users(data: web::Data<AppState>) -> impl Responder {
 
 #[get("/pubkey")]
 async fn pubkey(payload: web::Json<PubKeyPayload>, data: web::Data<AppState>) -> impl Responder {
-    let client = &data.client;
-
     let mut key = "pub:".to_string();
     key.push_str(&payload.username);
 
@@ -258,7 +250,7 @@ async fn pubkey(payload: web::Json<PubKeyPayload>, data: web::Data<AppState>) ->
         operands: vec![key.into_bytes()],
     };
 
-    let user_public_key_result = match send(vec![transaction_op], client, &data.curr_client_tag, true, false).await {
+    let user_public_key_result = match send(vec![transaction_op], true, &data).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -274,11 +266,7 @@ async fn pubkey(payload: web::Json<PubKeyPayload>, data: web::Data<AppState>) ->
         user_public_key_result.try_into().expect("Vec has incorrect length");
 
     // The client tag is not incremented here.
-    let current_tag = {
-        let tag_guard = data.curr_client_tag.lock().await;
-        *tag_guard as u64
-    };
-
+    let current_tag = data.curr_client_tag.load(Ordering::Relaxed);
     HttpResponse::Ok().json(serde_json::json!({
         "message": "public key of user",
         "username": &payload.username,
@@ -289,9 +277,8 @@ async fn pubkey(payload: web::Json<PubKeyPayload>, data: web::Data<AppState>) ->
 
 #[get("/privkey")]
 async fn privkey(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
-    let client = &data.client;
 
-    match authenticate_user(payload.username.clone(), payload.password.clone(), client, &data.curr_client_tag).await {
+    match authenticate_user(payload.username.clone(), payload.password.clone(), &data).await {
         Ok(valid) => valid,
         Err(e) => return e,
     };
@@ -304,7 +291,7 @@ async fn privkey(payload: web::Json<RegisterPayload>, data: web::Data<AppState>)
         operands: vec![key.into_bytes()],
     };
 
-    let user_priv_key_result = match send(vec![transaction_op], client, &data.curr_client_tag, true, false).await {
+    let user_priv_key_result = match send(vec![transaction_op], true, &data).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -333,7 +320,7 @@ async fn home(_data: web::Data<AppState>) -> impl Responder {
     }))
 }
 
-pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
+pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::channel::AsyncSenderWrapper<TxWithAckChanTag>) -> std::io::Result<()> {
     // Prepare keys.
     let mut keys = KeyStore::empty();
     keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
@@ -348,20 +335,14 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
 
     let batch_size = config.consensus_config.max_backlog_batch_size;
 
-    let client_sub_id = Arc::new(AtomicU64::new(1));
 
     let probe_for_byz_commit = Arc::new(AtomicBool::new(false)); // This is a global state!
 
     HttpServer::new(move || {
-        let _client_sub_id = client_sub_id.clone().fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        // Each worker thread creates its own client instance.
-        let client = Client::new(&config, &keys, true, _client_sub_id).into();
-        
-        let _client_sub_id = client_sub_id.clone().fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let state = AppState {
-            client,
+            batch_proposer_tx: batch_proposer_tx.clone(),
             probe_for_byz_commit: probe_for_byz_commit.clone(),
-            curr_client_tag: Arc::new(Mutex::new(0)),
+            curr_client_tag: AtomicU64::new(0),
         };
 
         App::new()
@@ -383,7 +364,7 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
     Ok(())
 }
 
-async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, client_tag: &Arc<Mutex<usize>>, isRead: bool, probe_for_byz_commit: bool) -> Result<Vec<u8>, HttpResponse> {
+async fn send(transaction_ops: Vec<ProtoTransactionOp>, isRead: bool, state: &AppState) -> Result<Vec<u8>, HttpResponse> {
     let transaction_phase = ProtoTransactionPhase {
         ops: transaction_ops,
     };
@@ -407,38 +388,13 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
     };
     
 
-    // Hold this lock so there can be only one inflight request at a time.
-    let mut tag_guard = client_tag.lock().await;
-    *tag_guard += 1;
+    let current_tag = state.curr_client_tag.fetch_add(1, Ordering::AcqRel);
 
-    let current_tag = *tag_guard as u64;
+    let (tx, mut rx) = mpsc::channel(1);
+    let tx_with_ack_chan_tag: TxWithAckChanTag = (Some(transaction), (tx, current_tag, SenderType::Anon));
+    state.batch_proposer_tx.send(tx_with_ack_chan_tag).await.unwrap();
 
-    let rpc_msg_body = ProtoPayload {
-        message: Some(pft::proto::rpc::proto_payload::Message::ClientRequest(ProtoClientRequest {
-            tx: Some(transaction),
-            origin: "name".to_string(), // Change as needed.
-            sig: vec![0u8; 1],
-            client_tag: current_tag,
-        })),
-    };
-
-    let mut buf = Vec::new();
-    if let Err(e) = rpc_msg_body.encode(&mut buf) {
-        warn!("Error encoding request: {}", e);
-    }
-
-    let sz = buf.len();
-    let request = PinnedMessage::from(buf, sz, pft::rpc::SenderType::Anon);
-
-    let name = &client.0.config.get().net_config.name;
-
-    let resp = match PinnedClient::send_and_await_reply(client, name, request.as_ref()).await {
-        Ok(resp) => resp,
-        Err(e) => {
-            warn!("Error sending request: {}", e);
-            return Err(HttpResponse::InternalServerError().body(format!("Error sending request: {}", e)));
-        }
-    };
+    let (resp, _) = rx.recv().await.unwrap();
 
     let resp = resp.as_ref();
     let mut result: Vec<u8> = Vec::new();
@@ -474,48 +430,27 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
         },
     };
 
-    if !isRead && block_n != 0 && probe_for_byz_commit {
-        *tag_guard += 1;
+    if !isRead && block_n != 0 && state.probe_for_byz_commit.load(Ordering::Relaxed) {
+        let current_tag = state.curr_client_tag.fetch_add(1, Ordering::AcqRel);
+    
+        let probe_transaction = ProtoTransaction {
+            on_receive: Some(ProtoTransactionPhase {
+                ops: vec![ProtoTransactionOp {
+                    op_type: pft::proto::execution::ProtoTransactionOpType::Probe.into(),
+                    operands: vec![block_n.to_be_bytes().to_vec()],
+                }]
+            }),
+            on_crash_commit: None,
+            on_byzantine_commit: None,
+            is_reconfiguration: false,
+            is_2pc: false,
+        };
 
-        let current_tag = *tag_guard as u64;
-    
-        let rpc_msg_body = ProtoPayload {
-            message: Some(pft::proto::rpc::proto_payload::Message::ClientRequest(ProtoClientRequest {
-                tx: Some(ProtoTransaction {
-                    on_receive: Some(ProtoTransactionPhase {
-                        ops: vec![ProtoTransactionOp {
-                            op_type: pft::proto::execution::ProtoTransactionOpType::Probe.into(),
-                            operands: vec![block_n.to_be_bytes().to_vec()],
-                        }]
-                    }),
-                    on_crash_commit: None,
-                    on_byzantine_commit: None,
-                    is_reconfiguration: false,
-                    is_2pc: false,
-                }),
-                origin: "name".to_string(), // Change as needed.
-                sig: vec![0u8; 1],
-                client_tag: current_tag,
-            })),
-        };
-    
-        let mut buf = Vec::new();
-        if let Err(e) = rpc_msg_body.encode(&mut buf) {
-            warn!("Error encoding request: {}", e);
-        }
-    
-        let sz = buf.len();
-        let request = PinnedMessage::from(buf, sz, pft::rpc::SenderType::Anon);
-    
-        let name = &client.0.config.get().net_config.name;
-    
-        let _resp = match PinnedClient::send_and_await_reply(client, name, request.as_ref()).await {
-            Ok(resp) => resp,
-            Err(e) => {
-                warn!("Error sending request: {}", e);
-                return Err(HttpResponse::InternalServerError().body(format!("Error sending request: {}", e)));
-            }
-        };
+        let (tx, mut rx) = mpsc::channel(1);
+        let tx_with_ack_chan_tag: TxWithAckChanTag = (Some(probe_transaction), (tx, current_tag, SenderType::Anon));
+        state.batch_proposer_tx.send(tx_with_ack_chan_tag).await.unwrap();
+
+        let (_resp, _) = rx.recv().await.unwrap();
 
         // Probe replies only after Byz commit
     }
@@ -525,15 +460,14 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
 async fn authenticate_user(
     username: String,
     password: String,
-    client: &PinnedClient,
-    client_tag: &Arc<Mutex<usize>>,
+    data: &AppState,
 ) -> Result<bool, HttpResponse> {
     let transaction_op = ProtoTransactionOp {
         op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
         operands: vec![username.clone().into_bytes()],
     };
 
-    let result = match send(vec![transaction_op], client, client_tag, true, false).await {
+    let result = match send(vec![transaction_op], true, data).await {
         Ok(response) => response,
         Err(e) => return Err(e),
     };

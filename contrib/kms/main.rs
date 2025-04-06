@@ -4,6 +4,8 @@
 use log::{debug, error, info};
 use pft::config::{self, Config};
 use pft::consensus_v2;
+use pft::consensus_v2::batch_proposal::TxWithAckChanTag;
+use pft::utils::channel::{make_channel, Receiver, Sender};
 use tokio::{runtime, signal};
 use std::io::Write;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
@@ -68,8 +70,9 @@ async fn test_run() {
 }
 
 
-async fn run_main(cfg: Config) -> io::Result<()> {
-    let mut node = consensus_v2::ConsensusNode::<KVSAppEngine>::new(cfg);
+async fn run_main(config: Config, batch_proposer_tx: Sender<TxWithAckChanTag>, batch_proposer_rx: Receiver<TxWithAckChanTag>) -> io::Result<()> {    
+    let mut node = consensus_v2::ConsensusNode::<KVSAppEngine>::mew(config.clone(), batch_proposer_tx, batch_proposer_rx);
+
     // let mut handles = consensus::ConsensusNode::run(node);
     let mut handles = node.run().await;
 
@@ -118,6 +121,8 @@ fn main() {
     }
     // let num_threads = 4;
 
+    let (batch_proposer_tx, batch_proposer_rx) = make_channel(cfg.rpc_config.channel_depth as usize);
+
     let start_idx = start_idx * num_threads;
     
     let i = Box::pin(AtomicUsize::new(0));
@@ -144,14 +149,14 @@ fn main() {
     
     //run front end server
 
-    let _ = runtime.spawn(run_main(cfg.clone()));
+    let _ = runtime.spawn(run_main(cfg.clone(), batch_proposer_tx.clone(), batch_proposer_rx));
     
     let frontend_runtime = runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(num_threads) 
         .build()
         .unwrap();
-    match frontend_runtime.block_on(frontend::run_actix_server(cfg)) {
+    match frontend_runtime.block_on(frontend::run_actix_server(cfg, batch_proposer_tx)) {
         Ok(_) => println!("Frontend server ran successfully."),
         Err(e) => eprintln!("Frontend server error: {:?}", e),
     };
