@@ -1,6 +1,6 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::{BTreeMap, HashMap}, sync::Arc};
 
-use log::info;
+use log::{info, trace};
 use prost::Message as _;
 use tokio::{sync::{oneshot, Mutex}, task::JoinSet};
 
@@ -14,12 +14,14 @@ pub enum ClientReplyCommand {
     CrashCommitAck(HashMap<HashType, (u64, Vec<ProtoTransactionResult>)>),
     ByzCommitAck(HashMap<HashType, (u64, Vec<ProtoByzResponse>)>),
     UnloggedRequestAck(oneshot::Receiver<ProtoTransactionResult>, MsgAckChanWithTag),
+    ProbeRequestAck(u64 /* block_n */, MsgAckChanWithTag),
 }
 
 enum ReplyProcessorCommand {
     CrashCommit(u64 /* block_n */, u64 /* tx_n */, HashType, ProtoTransactionResult /* result */, MsgAckChanWithTag, Vec<ProtoByzResponse>),
     ByzCommit(u64 /* block_n */, u64 /* tx_n */, ProtoTransactionResult /* result */, MsgAckChanWithTag),
     Unlogged(oneshot::Receiver<ProtoTransactionResult>, MsgAckChanWithTag),
+    Probe(u64 /* block_n */, MsgAckChanWithTag),
 }
 pub struct ClientReplyHandler {
     config: AtomicConfig,
@@ -37,6 +39,9 @@ pub struct ClientReplyHandler {
 
     reply_processors: JoinSet<()>,
     reply_processor_queue: (async_channel::Sender<ReplyProcessorCommand>, async_channel::Receiver<ReplyProcessorCommand>),
+
+    probe_buffer: BTreeMap<u64 /* block_n */, Vec<MsgAckChanWithTag>>,
+    acked_bci: u64,
 
     must_cancel: bool,
 }
@@ -59,6 +64,8 @@ impl ClientReplyHandler {
             reply_processors: JoinSet::new(),
             reply_processor_queue: async_channel::bounded(_chan_depth),
             byz_response_store: HashMap::new(),
+            probe_buffer: BTreeMap::new(),
+            acked_bci: 0,
             must_cancel: false,
         }
     }
@@ -115,6 +122,31 @@ impl ClientReplyHandler {
                                 client_tag: tag,
                             };
 
+
+                            let reply_ser = reply.encode_to_vec();
+                            let _sz = reply_ser.len();
+                            let reply_msg = PinnedMessage::from(reply_ser, _sz, crate::rpc::SenderType::Anon);
+                            let latency_profile = LatencyProfile::new();
+                            
+                            let _ = reply_chan.send((reply_msg, latency_profile)).await;
+                        },
+
+                        ReplyProcessorCommand::Probe(block_n, (reply_chan, tag, sender)) => {
+                            let reply = ProtoClientReply {
+                                reply: Some(
+                                    crate::proto::client::proto_client_reply::Reply::Receipt(
+                                        ProtoTransactionReceipt {
+                                            req_digest: vec![],
+                                            block_n,
+                                            tx_n: 0,
+                                            results: None,
+                                            await_byz_response: false,
+                                            byz_responses: vec![],
+                                        },
+                                    ),
+                                ),
+                                client_tag: tag,
+                            };
 
                             let reply_ser = reply.encode_to_vec();
                             let _sz = reply_ser.len();
@@ -204,6 +236,12 @@ impl ClientReplyHandler {
                 }
             }
         }
+
+        if n > self.acked_bci {
+            self.acked_bci = n;
+        }
+
+        self.maybe_clear_probe_buf().await;
     }
 
     async fn handle_reply_command(&mut self, cmd: ClientReplyCommand) {
@@ -252,6 +290,36 @@ impl ClientReplyHandler {
                 let client_tag = sender.1;
                 let sender = sender.2;
                 self.reply_processor_queue.0.send(ReplyProcessorCommand::Unlogged(res_rx, (reply_chan, client_tag, sender))).await.unwrap();
+            },
+            ClientReplyCommand::ProbeRequestAck(block_n, sender) => {
+                if let Some(vec) = self.probe_buffer.get_mut(&block_n) {
+                    vec.push(sender);
+                } else {
+                    self.probe_buffer.insert(block_n, vec![sender]);
+                }
+
+                self.maybe_clear_probe_buf().await;
+            },
+        }
+    }
+
+    async fn maybe_clear_probe_buf(&mut self) {
+        let mut remove_vec = vec![];
+        
+        self.probe_buffer.retain(|block_n, reply_vec| {
+            if *block_n <= self.acked_bci {
+                trace!("Clearing probe tx buffer of size {} for block {}", reply_vec.len(), block_n);
+
+                remove_vec.push((*block_n, reply_vec.drain(..).collect::<Vec<_>>()));
+                false
+            } else {
+                true
+            }
+        });
+
+        for (block_n, reply_vec) in remove_vec {
+            for reply_tx in reply_vec {
+                self.reply_processor_queue.0.send(ReplyProcessorCommand::Probe(block_n, reply_tx)).await.unwrap();
             }
         }
     }
