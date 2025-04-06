@@ -350,6 +350,8 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
 
     let client_sub_id = Arc::new(AtomicU64::new(1));
 
+    let probe_for_byz_commit = Arc::new(AtomicBool::new(false)); // This is a global state!
+
     HttpServer::new(move || {
         let _client_sub_id = client_sub_id.clone().fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         // Each worker thread creates its own client instance.
@@ -358,7 +360,7 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
         let _client_sub_id = client_sub_id.clone().fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let state = AppState {
             client,
-            probe_for_byz_commit: Arc::new(AtomicBool::new(false)),
+            probe_for_byz_commit: probe_for_byz_commit.clone(),
             curr_client_tag: Arc::new(Mutex::new(0)),
         };
 
