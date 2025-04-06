@@ -1,3 +1,6 @@
+# Utility scriptsto launch confidential containers in Azure 
+
+
 import subprocess
 import sys
 import yaml
@@ -88,7 +91,7 @@ def launchDeployment(templateFile, resourceGroup, deploymentName, acrPrefix, pri
         print(executeCommandArgs(["docker", "run", "-d", "-p", str(docker_ssh) + ":22",  "--name", deploymentName, primary_image]))
         print("Container {} launched.".format(deploymentName))
        
-
+# Cancels deloyments
 def deleteDeployment(resourceGroup, deploymentName):
     resource_group = " --resource-group " + resourceGroup
     name = " --name " + deploymentName
