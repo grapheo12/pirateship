@@ -216,6 +216,8 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
     /// This is used to compute throughput.
     async fn log_stats(&mut self) {
         self.stats.print();
+
+        info!("Total pending probes: {}", self.probe_tx_buffer.iter().map(|(_, v)| v.len()).sum::<usize>());
     }
 
     async fn checkpoint(&mut self) {
