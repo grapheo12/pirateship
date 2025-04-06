@@ -298,7 +298,7 @@ impl ClientReplyHandler {
                     self.probe_buffer.insert(block_n, vec![sender]);
                 }
 
-                self.maybe_clear_probe_buf().await;
+                // self.maybe_clear_probe_buf().await;
             },
         }
     }
