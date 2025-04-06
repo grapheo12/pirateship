@@ -16,18 +16,21 @@ from pprint import pprint
 import matplotlib
 import matplotlib.pyplot as plt
 
+from autobahn_logs import LogParser as AutobahnLogParser
+from autobahn_experiments import AutobahnExperiment
+
 # Log format follows the log4rs config.
 # Capture the time from the 3rd []
 
 # Sample log: [INFO][pft::execution::engines::logger][2024-08-06T10:28:13.926997933+00:00] fork.last = 2172, fork.last_qc = 2169, commit_index = 2171, byz_commit_index = 2166, pending_acks = 200, pending_qcs = 1 num_crash_committed_txs = 100, num_byz_committed_txs = 100, fork.last_hash = b7da989badce213929ab457e5301b587593e0781e081ba7261d57cd7778e1b7b, total_client_request = 388706, view = 1, view_is_stable = true, i_am_leader: true
 node_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] fork\.last = ([0-9]+), fork\.last_qc = ([0-9]+), commit_index = ([0-9]+), byz_commit_index = ([0-9]+), pending_acks = ([0-9]+), pending_qcs = ([0-9]+) num_crash_committed_txs = ([0-9]+), num_byz_committed_txs = ([0-9]+), fork\.last_hash = (.+), total_client_request = ([0-9]+), view = ([0-9]+), view_is_stable = (.+), i_am_leader\: (.+)")
-node_rgx2 = re.compile(r"\[INFO\]\[.*\]\[(.*)\] num_reads = ([0-9]+)")
+node_rgx2 = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Total unlogged txs: ([0-9]+)")
 
 # Sample log: [INFO][pft::client::logger][2025-02-25T23:33:23.145307984+00:00] Average Crash commit latency: 104390 us, Average Byz commit latency: 29271247 us
 client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Average Crash commit latency: ([0-9]+) us, Average Byz commit latency: ([0-9]+) us")
 
 
-def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, read_points=[[]]) -> List:
+def process_tput(points, duration, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, read_points=[[]]) -> List:
     '''
     Parses given points for throughput information.
     Skipping points before ramp_up and after ramp_down.
@@ -67,7 +70,7 @@ def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, 
     # Filter points, only keep if after ramp_up time and before ramp_down time
 
     start_time = points[0][0] + datetime.timedelta(seconds=ramp_up)
-    end_time = points[-1][0] - datetime.timedelta(seconds=ramp_down)
+    end_time = points[0][0] + datetime.timedelta(seconds=duration) - datetime.timedelta(seconds=ramp_down)
 
     points = [p for p in points if p[0] >= start_time and p[0] <= end_time]
     read_points = [
@@ -99,7 +102,7 @@ def process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, 
     return points
 
 
-def process_latencies(points, ramp_up, ramp_down, latencies, byz=False):
+def process_latencies(points, duration, ramp_up, ramp_down, latencies, byz=False):
     points = [
         (
             isoparse(a[0]),      # ISO format is used in run_remote
@@ -114,7 +117,7 @@ def process_latencies(points, ramp_up, ramp_down, latencies, byz=False):
     # Filter points, only keep if after ramp_up time and before ramp_down time
 
     start_time = points[0][0] + datetime.timedelta(seconds=ramp_up)
-    end_time = points[-1][0] - datetime.timedelta(seconds=ramp_down)
+    end_time = points[0][0] + datetime.timedelta(seconds=duration) - datetime.timedelta(seconds=ramp_down)
 
     points = [p for p in points if p[0] >= start_time and p[0] <= end_time]
 
@@ -126,6 +129,8 @@ def process_latencies(points, ramp_up, ramp_down, latencies, byz=False):
 
 @dataclass
 class Stats:
+    num_nodes: int
+    num_clients: int
     mean_tput: float
     stdev_tput: float
     mean_tput_unbatched: float
@@ -153,7 +158,7 @@ class Result:
     def default_output(self):
         print(f"Default output method: {self}")
 
-    def parse_node_logs(self, log_dir, node_log_names, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False):
+    def parse_node_logs(self, log_dir, node_log_names, duration, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False):
         '''
         Parse node logs for throughput information.
         Only uses the first log to get overall consensus throughput.
@@ -181,14 +186,14 @@ class Result:
             read_points.append(_rp)
 
         try:
-            _points = process_tput(points, ramp_up, ramp_down, tputs, tputs_unbatched, byz, read_points)
+            _points = process_tput(points, duration, ramp_up, ramp_down, tputs, tputs_unbatched, byz, read_points)
         except:
             _points = []
 
         return _points
     
 
-    def parse_client_logs(self, log_dir, client_log_names, ramp_up, ramp_down, latencies, byz=False):
+    def parse_client_logs(self, log_dir, client_log_names, duration, ramp_up, ramp_down, latencies, byz=False):
         points = []
         for log_name in client_log_names:
             fname = os.path.join(log_dir, log_name)
@@ -202,7 +207,7 @@ class Result:
             except:
                 pass
         try:
-            process_latencies(points, ramp_up, ramp_down, latencies, byz=byz)
+            process_latencies(points, duration, ramp_up, ramp_down, latencies, byz=byz)
         except:
             pass
 
@@ -210,14 +215,15 @@ class Result:
         tputs = []
         tputs_unbatched = []
         latencies = []
+        duration = experiment.duration
         for repeat_num in range(experiment.repeats):
             log_dir = os.path.join(experiment.local_workdir, "logs", str(repeat_num))
             # Find the first node log file and all client log files in log_dir
             node_log_files = list(sorted([f for f in os.listdir(log_dir) if f.startswith("node") and f.endswith(".log")]))
             client_log_files = [f for f in os.listdir(log_dir) if f.startswith("client") and f.endswith(".log")]
 
-            self.parse_node_logs(log_dir, node_log_files, ramp_up, ramp_down, tputs, tputs_unbatched, byz=byz)
-            self.parse_client_logs(log_dir, client_log_files, ramp_up, ramp_down, latencies, byz=byz)
+            self.parse_node_logs(log_dir, node_log_files, duration, ramp_up, ramp_down, tputs, tputs_unbatched, byz=byz)
+            self.parse_client_logs(log_dir, client_log_files, duration, ramp_up, ramp_down, latencies, byz=byz)
         print(len(tputs), len(tputs_unbatched), len(latencies))
         if len(latencies) == 0:
             return None
@@ -254,6 +260,8 @@ class Result:
             p99_latency = mean_latency
 
         ret = Stats(
+            num_nodes=experiment.num_nodes,
+            num_clients=experiment.num_clients,
             mean_tput=np.mean(tputs),
             stdev_tput=stdev_tput,
             mean_tput_unbatched=np.mean(tputs_unbatched),
@@ -278,6 +286,49 @@ class Result:
         return ret
 
 
+    def process_autobahn_experiment(self, experiment, ramp_up, ramp_down, byz, tput_scale=1000.0, latency_scale=1.0) -> Stats | None:
+        """
+        For autobahn, we only take the first repeat.
+        """
+        log_dir = os.path.join(experiment.local_workdir, "logs", "0")
+        print(log_dir)
+        try:
+            result = AutobahnLogParser.process(log_dir).result()
+            mean_tput = 0.0
+            mean_latency = 0.0
+            for line in result.split("\n"):
+                print(line)
+                if line.startswith(" Consensus TPS"):
+                    mean_tput = line.split(":")[-1].strip()
+                    mean_tput = mean_tput.replace(",", "")
+                    mean_tput = float(mean_tput.split(" ")[0]) / tput_scale
+
+                if line.startswith(" Client latency"):
+                    mean_latency = line.split(":")[-1].strip()
+                    mean_latency = mean_latency.replace(",", "")
+                    mean_latency = float(mean_latency.split(" ")[0]) / latency_scale
+
+            return Stats(
+                num_nodes=experiment.num_nodes,
+                num_clients=experiment.num_clients,
+                mean_tput=mean_tput,
+                stdev_tput=0,
+                mean_tput_unbatched=0,
+                stdev_tput_unbatched=0,
+                latency_prob_dist=[],
+                mean_latency=mean_latency,
+                median_latency=mean_latency,
+                p25_latency=mean_latency,
+                p75_latency=mean_latency,
+                p99_latency=mean_latency,
+                max_latency=mean_latency,
+                min_latency=mean_latency,
+                stdev_latency=0
+            )
+        except Exception as e:
+            print(e)
+            return None
+
     def tput_latency_sweep_parse(self, ramp_up, ramp_down, legends) -> Dict[str, List[Stats]]:
         plot_dict = {}
 
@@ -294,6 +345,7 @@ class Result:
             if legend is None:
                 print("\x1b[31;1mNo legend found for", group_name, ". Skipping...\x1b[0m")
                 continue
+
             if "+byz" in legend:
                 needs_byz = True
                 needs_crash = True
@@ -321,7 +373,16 @@ class Result:
                     if idx in skip_indices:
                         print("\x1b[31;1mSkipping experiment", experiment.name, "for crash commit\x1b[0m")
                         continue
-                    stats = self.process_experiment(experiment, ramp_up, ramp_down, byz=False)
+
+                    if isinstance(experiment, AutobahnExperiment):
+                        experiment_type = "autobahn"
+                    else:
+                        experiment_type = "pirateship"
+
+                    if experiment_type == "pirateship":
+                        stats = self.process_experiment(experiment, ramp_up, ramp_down, byz=False)
+                    elif experiment_type == "autobahn":
+                        stats = self.process_autobahn_experiment(experiment, ramp_up, ramp_down, byz=False)
                     if stats is not None:
                         final_stats.append(stats)
                     else:
@@ -363,7 +424,7 @@ class Result:
             axes[0, 0].xaxis.set_label_coords(0.5, 0.05, transform=fig.transFigure)
             axes[0, 0].legend(loc='upper center', bbox_to_anchor=(0.5, 1.45), ncol=legends_ncols, fontsize=55, columnspacing=1)
 
-        for ax in axes:
+        for ax in list(axes.flatten()):
             ax.spines.bottom.set_visible(False)
             ax.spines.top.set_visible(False)
             ax.xaxis.tick_top()
@@ -491,11 +552,11 @@ class Result:
             for y in range(total_y_axes):
                 # Put a \ mark on the right of x-axis for all except the last one
                 for x in range(total_x_axes - 1):
-                    axes[x].plot([1, 1], [1, 0], transform=axes[x].transAxes, **kwargs)
+                    axes[y, x].plot([1, 1], [1, 0], transform=axes[y, x].transAxes, **kwargs)
                 
                 # Put a \ mark on the left of x-axis for all except the first one
                 for x in range(1, total_x_axes):
-                    axes[x].plot([0, 0], [1, 0], transform=axes[x].transAxes, **kwargs)
+                    axes[y, x].plot([0, 0], [1, 0], transform=axes[y, x].transAxes, **kwargs)
             
 
 
@@ -542,7 +603,7 @@ class Result:
         num_x_axis_breaks = 0
         num_y_axis_breaks = 0
 
-        GAP_THRESH = 0.05
+        GAP_THRESH = 1.0
 
         x_sorted_box = list(bounding_boxes.items())
         x_sorted_box.sort(key=lambda x: x[1][0])
@@ -628,7 +689,7 @@ class Result:
 
 
         num_lines = len(plot_dict)
-        colors = self.kwargs.get('colors', ['b', 'g', 'r', 'c', 'm', 'y', 'k'])
+        colors = self.kwargs.get('colors', ['b', 'g', 'r', 'c', 'm', 'y', 'k', "orange"])
         markers = self.kwargs.get('markers', ['o', 's', 'D', '^', 'v', 'p', 'P', '*', 'X', 'H'])
         while len(colors) < num_lines:
             colors += colors
@@ -643,26 +704,32 @@ class Result:
     
         try:
             fig.subplots_adjust(hspace=0.1, wspace=0.1)
-            for ax in axes:
+            for ax in list(axes.flatten()):
                 ax.grid()
                 for i, (legend, stat_list) in enumerate(plot_dict.items()):
                     tputs = [stat.mean_tput for stat in stat_list]
-                    latencies = [stat.mean_latency for stat in stat_list]
+                    latencies = [stat.median_latency for stat in stat_list]
                     ax.plot(tputs, latencies, label=legend, color=colors[i], marker=markers[i], mew=6, ms=12, linewidth=6)
 
-            
+        
             self.tput_latency_prepare_plot(fig, axes, x_ranges, y_ranges, is_1d, legends_ncols, total_x_axes, total_y_axes)
         except Exception as e:
             print("Defaulting to normal plot")
+            assert not(isinstance(axes, np.ndarray))
             axes.grid()
             for i, (legend, stat_list) in enumerate(plot_dict.items()):
                 tputs = [stat.mean_tput for stat in stat_list]
-                latencies = [stat.mean_latency for stat in stat_list]
+                latencies = [stat.median_latency for stat in stat_list]
                 axes.plot(tputs, latencies, label=legend, color=colors[i], marker=markers[i], mew=6, ms=12, linewidth=6)
 
             plt.xlabel("Throughput (k req/s)")
             plt.ylabel("Latency (ms)")
-            plt.yscale("symlog")
+
+            y_range_total = max([v[3] for v in bounding_boxes.values()]) - min([v[2] for v in bounding_boxes.values()])
+            # if y_range_total > 200:
+            #     plt.yscale("symlog")
+            # plt.ylim((0, 120))
+            # plt.xlim((50, 550))
             plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.45), ncol=legends_ncols, fontsize=55, columnspacing=1)
 
 
@@ -716,6 +783,18 @@ class Result:
 
         output = self.kwargs.get('output', None)
         self.tput_latency_sweep_plot(plot_dict, output)
+
+        # Print a summary of the results
+        with open(os.path.join(self.workdir, "summary.txt"), "w") as f:
+            for legend, stats in plot_dict.items():
+                f.write(f"{legend}\n")
+                for stat in stats:
+                    f.write(f"=============Num Nodes: {stat.num_nodes}, Num Clients: {stat.num_clients}================\n")
+                    f.write(f"Mean Tput: {stat.mean_tput} ktx/s, Mean Latency: {stat.mean_latency} ms\n")
+                    f.write(f"Median Latency: {stat.median_latency} ms, 99th Percentile Latency: {stat.p99_latency} ms\n")
+                    f.write(f"Max Latency: {stat.max_latency} ms, Min Latency: {stat.min_latency} ms\n")
+                    f.write(f"Stdev Tput: {stat.stdev_tput} ktx/s, Stdev Latency: {stat.stdev_latency} ms\n")
+                    f.write("==================================\n")
 
 
     def stacked_bar_graph_parse(self, ramp_up, ramp_down, legends) -> OrderedDict[str, List[Stats]]:
@@ -780,36 +859,43 @@ class Result:
     def crash_byz_tput_timeseries_plot(self, times, crash_commits, byz_commits, events):
         assert len(times) == len(crash_commits) == len(byz_commits)
 
-        plt.plot(times, crash_commits, label="Crash Commit Throughput")
-        plt.plot(times, byz_commits, label="Byz Commit Throughput")
-        plt.xlabel("Time (s)")
-        plt.ylabel("Throughput (batch/s)")
+        plt.plot(times, crash_commits, label="Crash Commit Throughput", linewidth=3)
+        plt.plot(times, byz_commits, label="Byz Commit Throughput", linewidth=3)
+        plt.xlabel("Time (s)", fontsize=55)
+        plt.ylabel("Throughput (batch/s)", fontsize=55)
 
         plt.yscale("symlog")
-        plt.legend()
+
+        # Legend at lower right
+        plt.legend(loc="lower right", fontsize=30)
         plt.grid()
 
         plt.xlim(times[0], times[-1])
+        plt.xticks(fontsize=55)
+        plt.yticks(fontsize=55)
+
 
         # How low/high can I go?
         ylim_min = min(min(crash_commits), min(byz_commits))
         ylim_max = max(max(crash_commits), max(byz_commits))
 
         # Will use this range for all text boxes for events
-        text_box_locs = list(np.linspace(ylim_min, ylim_max, len(events) + 2)[1:-1])
+        text_box_locs = list(np.linspace(0, ylim_max, len(events) + 4)[2:-2])
         assert len(text_box_locs) == len(events)
 
 
-        line_colors = ['r', 'g', 'b', 'c', 'm', 'y', 'k']
+        line_colors = ['r', 'g', 'b', 'c', 'm', 'y', 'k', "orange"]
         text_props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
 
         for i, (event_time, event_description) in enumerate(events):
-            plt.axvline(x=event_time, color=line_colors.pop(0), linestyle="--")
+            plt.axvline(x=event_time, color=line_colors.pop(0), linestyle="--", linewidth=3)
+            # Large font
             plt.text(
-                event_time, text_box_locs[i],
+                event_time + 0.2 * i, text_box_locs[i] if i % 2 == 0 else -text_box_locs[i],
                 event_description, bbox=text_props,
                 horizontalalignment='center',
-                verticalalignment='center'
+                verticalalignment='center',
+                fontsize=40
             )
 
         plt.gcf().set_size_inches(
@@ -900,6 +986,7 @@ class Result:
             log_dir = f"{expr[0].local_workdir}/logs/0"
             points = self.parse_node_logs(
                 log_dir, [f"{target_node}.log"],
+                expr[0].duration,
                 ramp_up, ramp_down, tputs, tputs_unbatched
             )
 

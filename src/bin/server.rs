@@ -5,12 +5,13 @@ use log::{debug, error, info, warn};
 use pft::config::{self, Config};
 use pft::consensus_v2;
 use tokio::{runtime, signal};
+use std::process::exit;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
-use pft::consensus_v2::engines::null_app::NullApp;
+use pft::consensus_v2::engines::{null_app::NullApp, kvs::KVSAppEngine};
 use std::io::Write;
 
-#[global_allocator]
-static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+// #[global_allocator]
+// static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 /// Fetch json config file from command line path.
 /// Panic if not found or parsed properly.
@@ -48,10 +49,9 @@ fn get_feature_set() -> (&'static str, &'static str) {
 
     #[cfg(feature = "lucky_raft")]{ protocol = "lucky_raft"; }
     #[cfg(feature = "signed_raft")]{ protocol = "signed_raft"; }
-    #[cfg(feature = "diverse_raft")]{ protocol = "diverse_raft"; }
-    #[cfg(feature = "jolteon")]{ protocol = "jolteon"; }
     #[cfg(feature = "chained_pbft")]{ protocol = "chained_pbft"; }
     #[cfg(feature = "pirateship")]{ protocol = "pirateship"; }
+    #[cfg(feature = "engraft")]{ protocol = "engraft"; }
 
     (protocol, app)
 }
@@ -63,7 +63,7 @@ async fn run_main(cfg: Config) -> io::Result<()> {
     // let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
     
     #[cfg(feature = "app_kvs")]
-    let node = Arc::new(consensus::ConsensusNode::<PinnedKVStoreEngine>::new(&cfg));
+    let mut node = consensus_v2::ConsensusNode::<KVSAppEngine>::new(cfg);
     
     #[cfg(feature = "app_sql")]
     let node = Arc::new(consensus::ConsensusNode::<PinnedSQLEngine>::new(&cfg));
@@ -75,6 +75,9 @@ async fn run_main(cfg: Config) -> io::Result<()> {
         Ok(_) => {
             info!("Received SIGINT. Shutting down.");
             handles.abort_all();
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            info!("Force shutdown.");
+            exit(0);
         },
         Err(e) => {
             error!("Signal: {:?}", e);
@@ -126,18 +129,16 @@ fn main() {
             let lcores = _cids.lock().unwrap();
             let id = (start_idx + i.fetch_add(1, std::sync::atomic::Ordering::SeqCst)) % lcores.len();
             let res = core_affinity::set_for_current(lcores[id]);
-            
+    
             if res {
                 debug!("Thread pinned to core {:?}", id);
             }else{
                 debug!("Thread pinning to core {:?} failed", id);
             }
-
             std::io::stdout().flush()
                 .unwrap();
         })
         .build()
         .unwrap();
-
     let _ = runtime.block_on(run_main(cfg));
 }

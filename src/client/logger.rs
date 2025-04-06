@@ -14,6 +14,7 @@ pub struct ClientStatLogger {
     stat_rx: Receiver<ClientWorkerStat>,
     log_timer: Arc<Pin<Box<ResettableTimer>>>,
     average_window: Duration,
+    max_duration: Duration,
 
     crash_commit_latency_window: VecDeque<(Instant /* when it was registered */, Duration /* latency value */)>,
 
@@ -23,7 +24,7 @@ pub struct ClientStatLogger {
 }
 
 impl ClientStatLogger {
-    pub fn new(stat_rx: Receiver<ClientWorkerStat>, interval: Duration, average_window: Duration) -> Self {
+    pub fn new(stat_rx: Receiver<ClientWorkerStat>, interval: Duration, average_window: Duration, max_duration: Duration) -> Self {
         let log_timer = ResettableTimer::new(interval);
         Self {
             stat_rx,
@@ -32,13 +33,16 @@ impl ClientStatLogger {
             crash_commit_latency_window: VecDeque::new(),
             byz_commit_latency_window: VecDeque::new(),
             byz_commit_pending_per_worker: HashMap::new(),
+            max_duration,
         }
     }
 
     pub async fn run(&mut self) {
         self.log_timer.run().await;
 
-        loop {
+        let logger_start_time = Instant::now();
+
+        while logger_start_time.elapsed() < self.max_duration {
 
             tokio::select! {
                 _ = self.log_timer.wait() => {
@@ -53,6 +57,9 @@ impl ClientStatLogger {
                 }
             }
         }
+
+        info!("Logging over after {} s", logger_start_time.elapsed().as_secs());
+        self.log_stats();
     }
 
     fn collect_stat(&mut self, stat: ClientWorkerStat) {

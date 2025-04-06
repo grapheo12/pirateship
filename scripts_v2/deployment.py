@@ -183,9 +183,13 @@ class Deployment:
         plan_path = os.path.join(tf_output_dir, "main.tfplan")
         tfstate_path = os.path.join(tf_output_dir, "terraform.tfstate")
 
+        # Does tfstate already exist?
+        tfstate_exists = os.path.exists(tfstate_path)
+
         # Plan
         run_local([
             f"terraform -chdir={found_path} init",
+            f"terraform -chdir={found_path} refresh -no-color -var-file=\"{var_file}\" -var=\"username={self.ssh_user}\" -out={plan_path} -state={tfstate_path}" if tfstate_exists else "echo 'New plan needed'",
             f"terraform -chdir={found_path} plan -no-color -var-file=\"{var_file}\" -var=\"username={self.ssh_user}\" -out={plan_path} -state={tfstate_path} > {tf_output_dir}/plan.log 2>&1",
         ])
 

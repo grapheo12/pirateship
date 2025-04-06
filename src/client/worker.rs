@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc, time::{Duration, Instant}};
 
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 use nix::libc::stat;
 use prost::Message as _;
 use tokio::{sync::oneshot::error, task::JoinSet, time::sleep};
@@ -22,6 +22,7 @@ struct CheckerTask {
     start_time: Instant,
     wait_from: String,
     id: u64,
+    executor_mode: Executor,
 }
 
 enum CheckerResponse {
@@ -44,6 +45,7 @@ impl OutstandingRequest {
             start_time: self.start_time.clone(),
             wait_from: self.last_sent_to.clone(),
             id: self.id,
+            executor_mode: self.executor_mode.clone(),
         }
     }
 
@@ -104,7 +106,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         });
 
         js.spawn(async move {
-            worker.generator_task(generator_tx, backpressure_rx, _backpressure_tx).await;
+            worker.generator_task(generator_tx, backpressure_rx, _backpressure_tx, id).await;
         });
 
     }
@@ -112,9 +114,18 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
     async fn checker_task(backpressure_tx: Sender<CheckerResponse>, generator_rx: Receiver<CheckerTask>, client: PinnedClient, stat_tx: Sender<ClientWorkerStat>, id: usize) {
         let mut waiting_for_byz_response = HashMap::<u64, CheckerTask>::new();
         let mut out_of_order_byz_response = HashMap::<u64, Instant>::new();
+        let mut alleged_leader = String::new();
         loop {
             match generator_rx.recv().await {
                 Some(req) => {
+                    if alleged_leader.len() == 0 && req.executor_mode == Executor::Leader {
+                        alleged_leader = req.wait_from.clone();
+                    }
+
+                    if alleged_leader != req.wait_from && req.executor_mode == Executor::Leader {
+                        // This is a bug.
+                        trace!("Leader changed from {} to {}. This may be a bug.", alleged_leader, req.wait_from);
+                    }
                     // This is a new request.
                     if let Some(byz_resp_time) = out_of_order_byz_response.remove(&req.id) {
                         // Got the response before, Nice!
@@ -125,9 +136,16 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             error!("Byzantine response received before the request was sent. This is a bug.");
                         }
                     } else {
-                        waiting_for_byz_response.insert(req.id, req.clone());
+
+                        if req.executor_mode == Executor::Leader {
+                            // If it is Executor::Any, it it probably a read request. There will be no byz commit.
+                            waiting_for_byz_response.insert(req.id, req.clone());
+                        }
                     }
-                    let _ = stat_tx.send(ClientWorkerStat::ByzCommitPending(id, waiting_for_byz_response.len())).await;
+
+                    if req.executor_mode == Executor::Leader {
+                        let _ = stat_tx.send(ClientWorkerStat::ByzCommitPending(id, waiting_for_byz_response.len())).await;
+                    }
                     
                     // We will wait for the response.
                     let res = PinnedClient::await_reply(&client, &req.wait_from).await;
@@ -151,6 +169,9 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                         Some(client::proto_client_reply::Reply::Receipt(receipt)) => {
                             let _ = backpressure_tx.send(CheckerResponse::Success(req.id)).await;
                             let _ = stat_tx.send(ClientWorkerStat::CrashCommitLatency(req.start_time.elapsed())).await;
+                            if req.executor_mode == Executor::Any {
+                                trace!("Got reply for read request from {}!", req.wait_from);
+                            }
 
                             for byz_resp in receipt.byz_responses.iter() {
                                 if let Some(task) = waiting_for_byz_response.remove(&byz_resp.client_tag) {
@@ -161,8 +182,11 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             }
                         },
                         Some(client::proto_client_reply::Reply::TryAgain(_try_again)) => {
+<<<<<<< HEAD
                             info!("Trying again after backoff");
                             sleep(Duration::from_secs(1)).await;
+=======
+>>>>>>> origin/crazy_rewrite
                             let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, None, None)).await;
                         },
                         Some(client::proto_client_reply::Reply::TentativeReceipt(_tentative_receipt)) => {
@@ -192,7 +216,14 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             }
                             client.0.config.set(config.clone()); 
                             
-                            info!("Leader changed to {}", curr_leader);
+                            
+                            // There is no point in waiting for responses for older requests.
+                            if alleged_leader != curr_leader {
+                                info!("Leader changed to {}", curr_leader);
+                                waiting_for_byz_response.clear();
+                                out_of_order_byz_response.clear();
+                                alleged_leader = curr_leader;
+                            }
 
                             let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, Some(node_list_vec), new_leader_id)).await;
                         },
@@ -214,22 +245,28 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         }
     }
 
-    async fn generator_task(&mut self, generator_tx: Sender<CheckerTask>, backpressure_rx: Receiver<CheckerResponse>, backpressure_tx: Sender<CheckerResponse>) {
+    async fn generator_task(&mut self, generator_tx: Sender<CheckerTask>, backpressure_rx: Receiver<CheckerResponse>, backpressure_tx: Sender<CheckerResponse>, id: usize) {
         let mut outstanding_requests = HashMap::<u64, OutstandingRequest>::new();
 
         let mut total_requests = 0;
-        let max_requests = self.config.workload_config.num_requests;
+        
+        let duration = Duration::from_secs(self.config.workload_config.duration);
         let mut node_list = self.config.net_config.nodes.keys().map(|e| e.clone()).collect::<Vec<_>>();
         node_list.sort();
 
         let mut curr_leader_id = 0;
-        let mut curr_round_robin_id = 0;
+        let mut curr_round_robin_id = id % node_list.len();
 
         let my_name = self.config.net_config.name.clone();
 
         sleep(Duration::from_secs(1)).await;
 
-        while total_requests < max_requests {
+        let mut backoff_time = Duration::from_millis(1000);
+        let mut curr_complaining_requests = 0;
+        let max_inflight_requests = self.config.workload_config.max_concurrent_requests;
+
+        let experiment_global_start = Instant::now();
+        while experiment_global_start.elapsed() < duration {
             // Wait for the checker task to give a go-ahead.
             match backpressure_rx.recv().await {
                 Some(CheckerResponse::Success(id)) => {
@@ -245,7 +282,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             tx: Some(payload.tx),
                             origin: my_name.clone(),
                             sig: vec![0u8; 1],
-                            client_tag: (total_requests + 1) as u64,
+                            client_tag: req.id,
                         }))
                     };
 
@@ -260,13 +297,42 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                 },
                 Some(CheckerResponse::TryAgain(task, node_vec, leader)) => {
                     // We need to send the same request again.
+                    if leader.is_none() {
+                        // This is a try again. So we need to backoff.
+                        // All inflight requests may have been cancelled. But we can't sleep for all of them.
+                        if curr_complaining_requests == 0 {
+                            info!("Backing off for {} ms", backoff_time.as_millis());
+                            sleep(backoff_time).await;
+                        }
+                        curr_complaining_requests += 1;
+                        if curr_complaining_requests >= max_inflight_requests {
+                            curr_complaining_requests = 0;
+                        }
+
+                    }
+
+                    let old_leader_name = node_list[curr_leader_id].clone();
+
                     if let Some(_leader) = leader {
+<<<<<<< HEAD
                         PinnedClient::drop_all_connections(&self.client).await;
+=======
+                        // PinnedClient::drop_all_connections(&self.client).await;
+>>>>>>> origin/crazy_rewrite
                         curr_leader_id = _leader;
+
                     }
 
                     if let Some(_node_list) = node_vec {
-                        node_list = _node_list;
+                        node_list.clear();
+                        node_list.extend(_node_list.iter().map(|e| e.clone()));
+                    }
+
+                    let new_leader_name = node_list[curr_leader_id].clone();
+
+                    if old_leader_name != new_leader_name {
+                        info!("Leader changed from {} to {}", old_leader_name, new_leader_name);
+                        outstanding_requests.clear();
                     }
 
                     let req = outstanding_requests.remove(&task.id);
@@ -285,6 +351,8 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                 }
             }
         }
+
+        info!("Experiment completed. Total requests: {} Total runtime: {} s", total_requests, experiment_global_start.elapsed().as_secs());
     }
 
     /// Sets the req.last_sent_to.
@@ -311,7 +379,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                 },
                 Executor::Any => {
                     let recv_node = &node_list[(*curr_round_robin_id) % node_list.len()];
-                    *curr_round_robin_id = *curr_round_robin_id + 1;
+                    // *curr_round_robin_id = *curr_round_robin_id + 1;
                     req.last_sent_to = recv_node.clone();
                     PinnedClient::send(
                         &self.client,
@@ -328,7 +396,11 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                         *curr_leader_id = (*curr_leader_id + 1) % node_list.len();
                     },
                     Executor::Any => {
+<<<<<<< HEAD
                         // *curr_round_robin_id = (*curr_round_robin_id + 1) % node_list.len();
+=======
+                        *curr_round_robin_id = (*curr_round_robin_id + 1) % node_list.len();
+>>>>>>> origin/crazy_rewrite
                     }
                 }
 

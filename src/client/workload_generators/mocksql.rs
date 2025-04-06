@@ -41,6 +41,7 @@ impl PerWorkerWorkloadGenerator for MockSQLGenerator {
                 }),
                 on_byzantine_commit: None,
                 is_reconfiguration: false,
+                is_2pc: false,
             },
             executor: Executor::Leader
         }

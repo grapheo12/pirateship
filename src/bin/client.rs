@@ -38,7 +38,7 @@ async fn main() -> std::io::Result<()> {
 
     let (stat_tx, stat_rx) = make_channel(1000);
 
-    let mut stat_worker = ClientStatLogger::new(stat_rx, Duration::from_millis(1000), Duration::from_secs(1));
+    let mut stat_worker = ClientStatLogger::new(stat_rx, Duration::from_millis(1000), Duration::from_secs(1), Duration::from_secs(config.workload_config.duration));
     client_handles.spawn(async move {
         stat_worker.run().await;
     });

@@ -118,6 +118,7 @@ mod test {
                 }),
                 on_byzantine_commit: None,
                 is_reconfiguration: false,
+                is_2pc: false,
             });
         }
         block.tx_list = tx;

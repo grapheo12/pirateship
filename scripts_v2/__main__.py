@@ -1,5 +1,6 @@
 from collections import defaultdict
 import multiprocessing
+import shutil
 from time import sleep
 import time
 from typing import List
@@ -19,10 +20,12 @@ import json
 
 import tqdm
 from crypto import *
+from app_experiments import AppExperiment
 from ssh_utils import *
 from deployment import Deployment
 from deployment_aci import AciDeployment
 from experiments import Experiment
+from autobahn_experiments import AutobahnExperiment
 from results import *
 import pickle
 import re
@@ -134,10 +137,19 @@ def parse_config(path, workdir=None, existing_experiments=None):
             base_client_config, e.get("client_config", {}))
         controller_must_run = e.get("controller_must_run", False)
         git_hash_override = e.get("git_hash", None)
+        experiment_type = e.get("type", "pirateship")
+        if experiment_type == "pirateship":
+            klass = Experiment
+        elif experiment_type == "app":
+            klass = AppExperiment
+        elif experiment_type == "autobahn":
+            klass = AutobahnExperiment
         project_home = toml_dict["project_home"]
 
         if "sweeping_parameters" in e:
             flats = flatten_sweeping_params(e["sweeping_parameters"])
+            # raise Exception(e.get("seq_start", 0))
+            seq_start = int(e.get("seq_start", 0))
             for i, params in enumerate(flats):
                 _e = nested_override(e, params)
                 if "node_config" in _e:
@@ -152,10 +164,10 @@ def parse_config(path, workdir=None, existing_experiments=None):
                 else:
                     _client_config = client_config
 
-                experiments.append(Experiment(
-                    os.path.join(_e['name'], str(i)),
+                experiments.append(klass(
+                    os.path.join(_e['name'], str(i + seq_start)),
                     _e['name'], # Group name
-                    i, # Seq num
+                    i + seq_start, # Seq num
                     int(_e["repeats"]),
                     int(_e["duration"]),
                     int(_e["num_nodes"]),
@@ -170,10 +182,11 @@ def parse_config(path, workdir=None, existing_experiments=None):
                     controller_must_run
                 ))
         else:
-            experiments.append(Experiment(
-                e["name"],
+            seq_start = int(e.get("seq_start", 0))
+            experiments.append(klass(
+                os.path.join(e['name'], str(seq_start)),
                 e["name"],  # Group name
-                0, # Seq num
+                seq_start, # Seq num
                 int(e["repeats"]),
                 int(e["duration"]),
                 int(e["num_nodes"]),
@@ -236,7 +249,7 @@ def all(config, workdir):
             cached_diff = diff
             cached_build_cmd = build_cmd
         except Exception as e:
-            print(f"Error deploying {experiment.name}. Continuing anyway: {e}")
+            print(f"Error deploying {experiment.name}. Continuing anyway: {e} {os.getcwd()}")
             cached_git_hash = ""
             cached_diff = ""
             cached_build_cmd = ""
@@ -377,7 +390,7 @@ def run_command(config, workdir, command):
 )
 @click.option(
     "-d", "--workdir", required=False,
-    type=click.Path(file_okay=False, resolve_path=True),
+    type=click.Path(file_okay=False, resolve_path=False),
     default=None
 )
 def deploy(config, workdir):
@@ -426,7 +439,7 @@ def deploy_experiments(config, workdir):
             cached_diff = diff
             cached_build_cmd = build_cmd
         except Exception as e:
-            print(f"Error deploying {experiment.name}. Continuing anyway: {e}")
+            print(f"Error deploying {experiment.name}. Continuing anyway: {e} {os.getcwd()}")
             cached_git_hash = ""
             cached_diff = ""
             cached_build_cmd = ""
@@ -566,6 +579,51 @@ def clean_dev(config, workdir):
     print(deployment)
 
     deployment.clean_dev_vm()
+
+
+
+@main.command()
+@click.option(
+    "-c", "--config", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
+    "-d", "--workdir", required=True,
+    type=click.Path(file_okay=False, resolve_path=True)
+)
+def clean_logs(config, workdir):
+    # Try to get deployment from the pickle file
+    pickle_path = os.path.join(workdir, "deployment", "deployment.pkl")
+    with open(pickle_path, "rb") as f:
+        deployment = pickle.load(f)
+        assert isinstance(deployment, Deployment)
+
+    print(deployment)
+
+    # Clean dev first
+    print("Cleaning remote")
+    deployment.clean_dev_vm()
+
+    # Now clean all experiment logs
+    for root, dirs, files in os.walk(os.path.join(workdir, "experiments")):
+        if "logs" in dirs:
+            logs_path = os.path.join(root, "logs")
+            print("Cleaning", logs_path)
+            shutil.rmtree(logs_path)
+            os.makedirs(logs_path, exist_ok=True)
+
+        # Delete the stale pkl file
+        if "experiment.pkl" in files:
+            os.remove(os.path.join(root, "experiment.pkl"))
+        
+        if "experiment_pristine.pkl" in files:
+            with open(os.path.join(root, "experiment_pristine.pkl"), "rb") as f:
+                experiment = pickle.load(f)
+                assert isinstance(experiment, Experiment)
+            
+            with open(os.path.join(root, "experiment.pkl"), "wb") as f:
+                pickle.dump(experiment, f)
+    
 
 
 @main.command()

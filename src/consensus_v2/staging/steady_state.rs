@@ -1,12 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use async_recursion::async_recursion;
-use futures::future::try_join_all;
+use bytes::{BufMut as _, BytesMut};
+use futures::{future::try_join_all, FutureExt};
 use log::{debug, error, info, trace, warn};
 use prost::Message;
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, task::spawn_local};
 
 use crate::{
-    consensus_v2::{logserver::LogServerCommand, pacemaker::PacemakerCommand}, crypto::CachedBlock, proto::{
+    consensus_v2::{extra_2pc::{EngraftActionAfterFutureDone, EngraftTwoPCFuture, TwoPCCommand}, logserver::LogServerCommand, pacemaker::PacemakerCommand}, crypto::{CachedBlock, DIGEST_LENGTH}, proto::{
         consensus::{
             proto_block::Sig, ProtoNameWithSignature, ProtoQuorumCertificate,
             ProtoSignatureArrayEntry, ProtoVote,
@@ -109,11 +110,21 @@ impl Staging {
     pub(super) fn byzantine_liveness_threshold(&self) -> usize {
         let config = self.config.get();
         let n = config.consensus_config.node_list.len();
-        let u = config.consensus_config.liveness_u as usize;
+        
+        #[cfg(feature = "platforms")]
+        {
+            let u = config.consensus_config.liveness_u as usize;
+    
+            assert!(n >= u);
+    
+            n - u
+        }
 
-        assert!(n >= u);
-
-        n - u
+        #[cfg(not(feature = "platforms"))]
+        {
+            let f = n / 3;
+            n - f
+        }
     }
 
     fn byzantine_fast_path_threshold(&self) -> usize {
@@ -155,6 +166,9 @@ impl Staging {
     }
 
     pub(super) async fn handle_view_change_timer_tick(&mut self) -> Result<(), ()> {
+        #[cfg(not(feature = "view_change"))]
+        return Ok(());
+
         warn!("View change timer fired");
         if self.view == 0 || self.view_is_stable {
             self.maybe_update_view(self.view + 1, self.config_num).await;
@@ -213,6 +227,9 @@ impl Staging {
             config_num: self.config_num,
         };
 
+        #[cfg(feature = "extra_2pc")]
+        let (_vote_n, _vote_view, _vote_digest) = (vote.n, vote.view, vote.fork_digest.clone());
+
         // If this block is signed, need a signature for the vote.
         if let Some(Sig::ProposerSig(_)) = last_block.block.block.sig {
             let vote_sig = self.crypto.sign(&last_block.block.block_hash).await;
@@ -225,9 +242,47 @@ impl Staging {
 
         self.perf_add_event(&last_block.block, "Vote to Self");
 
-        let res = self.process_vote(name, vote).await;
 
-        res
+
+        #[cfg(feature = "extra_2pc")]
+        {
+            // This is for Engraft.
+            // Need to store Raft meta file which is vote.n || vote.view
+            // And hash of last block.
+            let mut raft_meta_file = BytesMut::with_capacity(16);
+            raft_meta_file.put_u64(_vote_n);
+            raft_meta_file.put_u64(_vote_view);
+
+            let mut log_meta_file = BytesMut::with_capacity(DIGEST_LENGTH);
+            log_meta_file.put_slice(&_vote_digest);
+
+            let raft_meta_2pc_cmd = TwoPCCommand::new("raft_meta".to_string(), raft_meta_file.to_vec(), EngraftActionAfterFutureDone::None);
+            let log_meta_2pc_cmd = TwoPCCommand::new("log_meta".to_string(), log_meta_file.to_vec(), EngraftActionAfterFutureDone::AsLeader(name, vote));
+
+
+            self.two_pc_command_tx.send(raft_meta_2pc_cmd).await.unwrap();
+            self.two_pc_command_tx.send(log_meta_2pc_cmd).await.unwrap();
+
+            // self.engraft_2pc_futures.push_back(
+            //     async move {
+            //         EngraftTwoPCFuture::new(
+            //             _vote_n, raft_meta_2pc_res, log_meta_2pc_res,
+            //             EngraftActionAfterFutureDone::AsLeader(name, vote)
+            //         ).await
+            //     }.boxed()
+            // );
+
+            Ok(())
+            
+        }
+
+        #[cfg(not(feature = "extra_2pc"))]
+        {
+            let res = self.process_vote(name, vote).await;
+            res
+        }
+
+
     }
 
     async fn send_vote_on_last_block_to_leader(
@@ -265,6 +320,9 @@ impl Staging {
             config_num: self.config_num,
         };
 
+        #[cfg(feature = "extra_2pc")]
+        let (_vote_n, _vote_view, _vote_digest) = (vote.n, vote.view, vote.fork_digest.clone());
+
         // If this block is signed, need a signature for the vote.
         if let Some(Sig::ProposerSig(_)) = last_block.block.block.sig {
             let vote_sig = self.crypto.sign(&last_block.block.block_hash).await;
@@ -291,15 +349,50 @@ impl Staging {
         let sz = data.len();
         let data = PinnedMessage::from(data, sz, SenderType::Anon);
 
-        PinnedClient::send(&self.client, &leader, data.as_ref())
-            .await
-            .unwrap();
 
-        if last_block.block.block.view_is_stable {
-            trace!("Sent vote to {} for {}", leader, last_block.block.block.n);
-        } else {
-            info!("Sent vote to {} for {}", leader, last_block.block.block.n);
+        #[cfg(feature = "extra_2pc")]
+        {
+            // This is for Engraft.
+            // Need to store Raft meta file which is vote.n || vote.view
+            // And hash of last block.
+            let mut raft_meta_file = BytesMut::with_capacity(16);
+            raft_meta_file.put_u64(_vote_n);
+            raft_meta_file.put_u64(_vote_view);
+
+            let mut log_meta_file = BytesMut::with_capacity(DIGEST_LENGTH);
+            log_meta_file.put_slice(&_vote_digest);
+
+            let raft_meta_2pc_cmd = TwoPCCommand::new("raft_meta".to_string(), raft_meta_file.to_vec(), EngraftActionAfterFutureDone::None);
+            let log_meta_2pc_cmd = TwoPCCommand::new("log_meta".to_string(), log_meta_file.to_vec(), EngraftActionAfterFutureDone::AsFollower(leader, data));
+
+
+            self.two_pc_command_tx.send(raft_meta_2pc_cmd).await.unwrap();
+            self.two_pc_command_tx.send(log_meta_2pc_cmd).await.unwrap();
+
+            // self.engraft_2pc_futures.push_back(
+            //     async move {
+            //         EngraftTwoPCFuture::new(
+            //             _vote_n, raft_meta_2pc_res, log_meta_2pc_res,
+            //             EngraftActionAfterFutureDone::AsFollower(leader, data)
+            //         ).await
+            //     }.boxed()
+            // );
+            
         }
+
+        #[cfg(not(feature = "extra_2pc"))]
+        {
+            let _ = PinnedClient::send(&self.client, &leader, data.as_ref())
+                .await;
+                // .unwrap();
+    
+            if last_block.block.block.view_is_stable {
+                trace!("Sent vote to {} for {}", leader, last_block.block.block.n);
+            } else {
+                info!("Sent vote to {} for {}", leader, last_block.block.block.n);
+            }
+        }
+
 
         Ok(())
     }
@@ -433,6 +526,8 @@ impl Staging {
             block,
             vote_sigs: HashMap::new(),
             replication_set: HashSet::new(),
+            qc_is_proposed: false,
+            fast_qc_is_proposed: false,
         };
 
         self.pending_blocks.push_back(block_with_votes);
@@ -575,12 +670,18 @@ impl Staging {
             block,
             vote_sigs: HashMap::new(),
             replication_set: HashSet::new(),
+            qc_is_proposed: false,
+            fast_qc_is_proposed: false,
         };
         self.pending_blocks.push_back(block_with_votes);
 
         // Now crash commit blindly
-        self.do_crash_commit(self.ci, ae_stats.ci).await;
+        if this_is_final_block {
+            self.do_crash_commit(self.ci, ae_stats.ci).await;
+        }
 
+        let old_view_is_stable = self.view_is_stable;
+        
         let mut qc_list = self
             .pending_blocks
             .iter().last().unwrap()
@@ -588,7 +689,6 @@ impl Staging {
             .map(|e| e.clone())
             .collect::<Vec<_>>();
 
-        let old_view_is_stable = self.view_is_stable;
         for qc in qc_list.drain(..) {
             if !old_view_is_stable {
                 // Try to see if this QC can stabilize the view.
@@ -599,6 +699,13 @@ impl Staging {
             self.maybe_byzantine_commit(qc).await?;
         }
 
+        #[cfg(feature = "no_qc")]
+        {
+            if this_is_final_block {
+                self.do_byzantine_commit(self.bci, self.ci).await;
+            }   
+        }
+
         // Reply vote to the leader.
         if this_is_final_block {
             self.send_vote_on_last_block_to_leader(storage_ack).await?;
@@ -606,9 +713,7 @@ impl Staging {
             self.__storage_ack_buffer.push_back(storage_ack);
         }
 
-        if old_view_is_stable && self.__ae_seen_in_this_view > 200
-        /* don't trigger unnecessarily on new view messages */
-        && self.ci - self.bci > 500 {
+        if old_view_is_stable /* don't trigger unnecessarily on new view messages */ && self.ci - self.bci > 500 {
             // Trigger a view change
             warn!("Triggering view change due to too much gap between CI and BCI: {} {}", self.ci, self.bci);
             self.view_change_timer.fire_now().await;
@@ -704,7 +809,12 @@ impl Staging {
 
         self.maybe_crash_commit().await?;
 
+        #[cfg(not(feature = "no_qc"))]
         self.maybe_create_qcs().await?;
+
+        #[cfg(feature = "no_qc")]
+        self.do_byzantine_commit(self.bci, self.ci).await;
+        // This is needed to prevent a memory leak.
 
         Ok(())
     }
@@ -748,19 +858,22 @@ impl Staging {
     async fn maybe_crash_commit(&mut self) -> Result<(), ()> {
         let old_ci = self.ci;
 
-        // let n_num_tx = self
-        //     .pending_blocks
-        //     .iter()
-        //     .map(|e| (e.block.block.n, e.block.block.tx_list.len()))
-        //     .collect::<Vec<_>>();
-        // trace!("Pending blocks: {:?}", n_num_tx);
+        let soft_gap = {
+            let config = &self.config.get().consensus_config;
+            config.commit_index_gap_soft
+        };
+        let non_bcied = self.ci as i64 - self.bci as i64;
 
-        let non_bcied = self.ci - self.bci;
-        let thresh = if non_bcied > 200 {
+        #[cfg(feature = "no_qc")]
+        let thresh = self.crash_commit_threshold();
+
+        #[cfg(not(feature = "no_qc"))]
+        let thresh = if non_bcied > soft_gap as i64 {
             self.byzantine_commit_threshold()
         } else {
             self.crash_commit_threshold()
         };
+
         for block in self.pending_blocks.iter() {
             if block.block.block.n <= self.ci {
                 continue;
@@ -780,8 +893,27 @@ impl Staging {
     async fn maybe_create_qcs(&mut self) -> Result<(), ()> {
         let mut qcs = Vec::new();
 
-        for block in &self.pending_blocks {
-            if block.vote_sigs.len() >= self.byzantine_commit_threshold() {
+        let thresh = self.byzantine_commit_threshold();
+        let fast_thresh = self.byzantine_fast_path_threshold();
+        for block in &mut self.pending_blocks {
+            if block.qc_is_proposed && block.fast_qc_is_proposed {
+                continue;
+            }
+
+            // We only want to propose a QC at max twice.
+            // Once when the slow path threshold is reached.
+            // Once when the fast path threshold is reached.
+            // If we already have proposed a slow path QC,
+            // there is no need to propose another until we can safely do the fast path.
+            
+            let thresh = if block.qc_is_proposed {
+                fast_thresh
+            } else {
+                thresh
+            };
+
+
+            if block.vote_sigs.len() >= thresh {
                 let qc = ProtoQuorumCertificate {
                     n: block.block.block.n,
                     view: self.view,
@@ -796,6 +928,11 @@ impl Staging {
                     digest: block.block.block_hash.clone(),
                 };
                 qcs.push(qc);
+                block.qc_is_proposed = true;
+
+                if block.vote_sigs.len() >= fast_thresh {
+                    block.fast_qc_is_proposed = true;
+                }
 
             }
         }
@@ -860,7 +997,7 @@ impl Staging {
         };
 
         // Slow path: 2-hop rule
-        let new_bci_slow_path = self
+        let mut new_bci_slow_path = self
             .pending_blocks
             .iter()
             .rev()
@@ -870,13 +1007,30 @@ impl Staging {
             .max()
             .unwrap_or(old_bci); // All such qc.n must be byz committed, so new_bci = max(all such qc.n)
 
+        #[cfg(feature = "extra_qc_check")]
+        {
+            // Extra QC check for Hotstuff
+            // new_bci_slow_path now has highest QC over QC.
+            // Check one more QC hop for all blocks <= new_bci_slow_path.
+            // This combined with no_pipeline will give maintain Hotstuff-safety.
+
+            if new_bci_slow_path > old_bci {
+                new_bci_slow_path = self.pending_blocks.iter().rev()
+                    .filter(|b| b.block.block.n <= new_bci_slow_path)
+                    .map(|b| b.block.block.qc.iter().map(|qc| qc.n))
+                    .flatten()
+                    .max()
+                    .unwrap_or(old_bci);
+            }
+        }
+
         let new_bci = new_bci_fast_path.max(new_bci_slow_path);
 
         self.do_byzantine_commit(old_bci, new_bci).await;
         Ok(())
     }
 
-    async fn do_byzantine_commit(&mut self, old_bci: u64, new_bci: u64) {
+    pub(crate) async fn do_byzantine_commit(&mut self, old_bci: u64, new_bci: u64) {
         if new_bci <= old_bci {
             return;
         }
@@ -917,5 +1071,22 @@ impl Staging {
         self.pending_signatures.retain(|(_n, _)| *_n <= n);
         self.app_tx.send(AppCommand::Rollback(n)).await.unwrap();
         self.logserver_tx.send(LogServerCommand::Rollback(n)).await.unwrap();
+    }
+
+    pub(crate) async fn process_2pc_result(&mut self, cmd: EngraftActionAfterFutureDone) -> Result<(), ()> {
+        match cmd {
+            EngraftActionAfterFutureDone::None => {},
+            EngraftActionAfterFutureDone::AsLeader(name, vote) => {
+                trace!("Processing continuation as leader");
+                let _ = self.process_vote(name, vote).await;
+            }
+            EngraftActionAfterFutureDone::AsFollower(leader, data) => {
+                trace!("Processing continuation as follower");
+                let _ = PinnedClient::send(&self.client, &leader, data.as_ref())
+                    .await;
+            }
+        }
+        
+        Ok(())
     }
 }

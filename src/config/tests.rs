@@ -50,13 +50,14 @@ fn test_nodeconfig_serialize() {
             String::from("node3"),
         ],
         learner_list: vec![String::from("node4"), String::from("node5")],
-        quorum_diversity_k: 3,
         max_backlog_batch_size: 1000,
         signature_max_delay_blocks: 128,
         signature_max_delay_ms: 100,
         num_crypto_workers: 128,
         view_timeout_ms: 150,
         batch_max_delay_ms: 10,
+        commit_index_gap_soft: 256,
+        commit_index_gap_hard: 512,
 
         #[cfg(feature = "storage")]
         log_storage_config: crate::config::StorageConfig::RocksDB(RocksDBConfig::default()),
@@ -133,7 +134,7 @@ fn test_clientconfig_serialize() {
         rpc_config,
         workload_config: WorkloadConfig {
             num_clients: 100,
-            num_requests: 100000,
+            duration: 60,
             max_concurrent_requests: 10,
             request_config: crate::config::RequestConfig::KVReadWriteUniform(KVReadWriteUniform {
                 num_keys: 1000,
@@ -206,13 +207,14 @@ async fn test_atomic_config_access() {
             String::from("node3"),
         ],
         learner_list: vec![String::from("node4"), String::from("node5")],
-        quorum_diversity_k: 3,
         max_backlog_batch_size: 1000,
         signature_max_delay_blocks: 128,
         signature_max_delay_ms: 100,
         num_crypto_workers: 128,
         view_timeout_ms: 150,
         batch_max_delay_ms: 10,
+        commit_index_gap_soft: 256,
+        commit_index_gap_hard: 512,
 
         #[cfg(feature = "storage")]
         log_storage_config: crate::config::StorageConfig::RocksDB(RocksDBConfig::default()),

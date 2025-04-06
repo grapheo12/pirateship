@@ -1,11 +1,12 @@
 use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, io::Error, pin::Pin, sync::Arc, time::Duration};
 
-use log::{debug, info, trace, warn};
+use futures::{future::BoxFuture, stream::FuturesOrdered, StreamExt as _};
+use log::{debug, error, info, trace, warn};
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
 use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoVote}, rpc::{client::PinnedClient, SenderType}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer, PerfCounter, StorageAck}};
 
-use super::{app::AppCommand, batch_proposal::BatchProposerCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}, logserver::{self, LogServerCommand}, pacemaker::PacemakerCommand};
+use super::{app::AppCommand, batch_proposal::BatchProposerCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, extra_2pc::{EngraftActionAfterFutureDone, EngraftTwoPCFuture, TwoPCCommand}, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}, logserver::{self, LogServerCommand}, pacemaker::PacemakerCommand};
 
 pub(super) mod steady_state;
 pub(super) mod view_change;
@@ -15,7 +16,10 @@ struct CachedBlockWithVotes {
     block: CachedBlock,
     
     vote_sigs: HashMap<String, ProtoSignatureArrayEntry>,
-    replication_set: HashSet<String>
+    replication_set: HashSet<String>,
+
+    qc_is_proposed: bool,
+    fast_qc_is_proposed: bool,
 }
 
 pub type VoteWithSender = (SenderType /* Sender */, ProtoVote);
@@ -68,6 +72,12 @@ pub struct Staging {
     __vc_retry_num: usize,
     __storage_ack_buffer: VecDeque<oneshot::Receiver<Result<(), Error>>>,
     __ae_seen_in_this_view: usize,
+
+    #[cfg(feature = "extra_2pc")]
+    two_pc_command_tx: Sender<TwoPCCommand>,
+
+    #[cfg(feature = "extra_2pc")]
+    engraft_2pc_futures_rx: Receiver<EngraftActionAfterFutureDone>,
 }
 
 impl Staging {
@@ -92,6 +102,12 @@ impl Staging {
         qc_tx: UnboundedSender<ProtoQuorumCertificate>,
         batch_proposer_command_tx: Sender<BatchProposerCommand>,
         logserver_tx: Sender<LogServerCommand>,
+
+        #[cfg(feature = "extra_2pc")]
+        two_pc_command_tx: Sender<TwoPCCommand>,
+
+        #[cfg(feature = "extra_2pc")]
+        engraft_2pc_futures_rx: Receiver<EngraftActionAfterFutureDone>,
     ) -> Self {
         let _config = config.get();
         let _chan_depth = _config.rpc_config.channel_depth as usize;
@@ -114,7 +130,7 @@ impl Staging {
             &leader_staging_event_order,
         ));
 
-        Self {
+        let mut ret = Self {
             config,
             client,
             crypto,
@@ -145,7 +161,22 @@ impl Staging {
             __vc_retry_num: 0,
             __storage_ack_buffer: VecDeque::new(),
             __ae_seen_in_this_view: 0,
+
+            #[cfg(feature = "extra_2pc")]
+            two_pc_command_tx,
+
+            #[cfg(feature = "extra_2pc")]
+            engraft_2pc_futures_rx,
+
+        };
+
+        #[cfg(not(feature = "view_change"))]
+        {
+            ret.view = 1;
+            ret.view_is_stable = true;
         }
+
+        ret
     }
 
     pub async fn run(staging: Arc<Mutex<Self>>) {
@@ -176,6 +207,7 @@ impl Staging {
     async fn worker(&mut self) -> Result<(), ()> {
         let i_am_leader = self.i_am_leader();
 
+        #[cfg(feature = "extra_2pc")]
         tokio::select! {
             _tick = self.view_change_timer.wait() => {
                 self.handle_view_change_timer_tick().await?;
@@ -211,8 +243,59 @@ impl Staging {
                 }
                 let cmd = cmd.unwrap();
                 self.process_view_change_message(cmd).await?;
-            }
+            },
+
+            two_pc_fut = self.engraft_2pc_futures_rx.recv() => {
+                if two_pc_fut.is_none() {
+                    error!("2PC future is none");
+                    return Ok(())
+                }
+                trace!("Processing 2PC future");
+                let cmd = two_pc_fut.unwrap();
+
+                self.process_2pc_result(cmd).await?;
+            },
         }
+
+        #[cfg(not(feature = "extra_2pc"))]
+        tokio::select! {
+            _tick = self.view_change_timer.wait() => {
+                self.handle_view_change_timer_tick().await?;
+            },
+            block = self.block_rx.recv() => {
+                if block.is_none() {
+                    return Err(())
+                }
+                let (block, storage_ack, ae_stats, this_is_final_block) = block.unwrap();
+                trace!("Got block {}", block.block.n);
+                if i_am_leader {
+                    self.process_block_as_leader(block, storage_ack, ae_stats, this_is_final_block).await?;
+                } else {
+                    // TODO: Send in bulk.
+                    self.process_block_as_follower(block, storage_ack, ae_stats, this_is_final_block).await?;
+                }
+            },
+            vote = self.vote_rx.recv() => {
+                if vote.is_none() {
+                    return Err(())
+                }
+                let vote = vote.unwrap();
+                if i_am_leader {
+                    let (sender_name, _) = vote.0.to_name_and_sub_id();
+                    self.verify_and_process_vote(sender_name, vote.1).await?;
+                } else {
+                    warn!("Received vote while being a follower");
+                }
+            },
+            cmd = self.pacemaker_rx.recv() => {
+                if cmd.is_none() {
+                    return Err(())
+                }
+                let cmd = cmd.unwrap();
+                self.process_view_change_message(cmd).await?;
+            },
+        }
+
         Ok(())
     }
 }

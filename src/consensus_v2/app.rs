@@ -1,11 +1,11 @@
-use std::{cell::RefCell, collections::{HashMap, VecDeque}, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
+use std::{cell::RefCell, collections::{BTreeMap, HashMap, VecDeque}, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
 use hex::ToHex;
-use log::{error, info, warn};
+use log::{error, info, trace, warn};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{default_hash, CachedBlock, HashType, DIGEST_LENGTH}, proto::{client::ProtoByzResponse, execution::{ProtoTransaction, ProtoTransactionResult}}, utils::{channel::{Receiver, Sender}, PerfCounter}};
+use crate::{config::AtomicConfig, crypto::{default_hash, CachedBlock, HashType, DIGEST_LENGTH}, proto::{client::ProtoByzResponse, execution::{ProtoTransaction, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionResult}}, utils::{channel::{Receiver, Sender}, PerfCounter}};
 
 use super::{client_reply::ClientReplyCommand, super::utils::timer::ResettableTimer};
 
@@ -14,11 +14,11 @@ pub enum AppCommand {
     NewRequestBatch(u64 /* block.n */, u64 /* view */, bool /* view_is_stable */, bool /* i_am_leader */, usize /* length of new batch of request */, HashType /* hash of the last block */),
     CrashCommit(Vec<CachedBlock> /* all blocks from old_ci + 1 to new_ci */),
     ByzCommit(Vec<CachedBlock> /* all blocks from old_bci + 1 to new_bci */),
-    Rollback(u64 /* new last block */)
+    Rollback(u64 /* new last block */),
 }
 
 pub trait AppEngine {
-    type State: std::fmt::Debug + Clone + Serialize + DeserializeOwned;
+    type State: std::fmt::Debug + std::fmt::Display + Clone + Serialize + DeserializeOwned + Send;
 
     fn new(config: AtomicConfig) -> Self;
     fn handle_crash_commit(&mut self, blocks: Vec<CachedBlock>) -> Vec<Vec<ProtoTransactionResult>>;
@@ -41,11 +41,14 @@ struct LogStats {
     total_crash_committed_txs: u64,
     total_byz_committed_txs: u64,
     total_unlogged_txs: u64,
+
+    #[cfg(feature = "extra_2pc")]
+    total_2pc_txs: u64,
 }
 
 impl LogStats {
     fn new() -> Self {
-        Self {
+        let mut res = Self {
             ci: 0,
             bci: 0,
             view: 0,
@@ -58,7 +61,18 @@ impl LogStats {
             total_crash_committed_txs: 0,
             total_byz_committed_txs: 0,
             total_unlogged_txs: 0,
+
+            #[cfg(feature = "extra_2pc")]
+            total_2pc_txs: 0,
+        };
+
+        #[cfg(not(feature = "view_change"))]
+        {
+            res.view_is_stable = true;
+            res.view = 1;
         }
+
+        res
     }
 
     fn print(&self) {
@@ -68,7 +82,7 @@ impl LogStats {
             self.ci,
             self.bci,
             self.total_requests - (self.total_crash_committed_txs + self.total_unlogged_txs),
-            self.ci - self.bci,
+            self.ci as i64 - self.bci as i64,
             self.total_crash_committed_txs,
             self.total_byz_committed_txs,
             self.last_hash.encode_hex::<String>(),
@@ -77,6 +91,13 @@ impl LogStats {
             self.view_is_stable,
             self.i_am_leader
         );
+
+        info!("Total unlogged txs: {}", self.total_unlogged_txs);
+
+        #[cfg(feature = "extra_2pc")]
+        {
+            info!("Total 2PC txs: {}", self.total_2pc_txs);
+        }
     }
 }
 
@@ -88,6 +109,9 @@ pub struct Application<'a, E: AppEngine + Send + Sync + 'a> {
 
     staging_rx: Receiver<AppCommand>,
     unlogged_rx: Receiver<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)>,
+    
+    #[cfg(feature = "extra_2pc")]
+    twopc_tx: Sender<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)>,
 
     client_reply_tx: Sender<ClientReplyCommand>,
 
@@ -95,6 +119,10 @@ pub struct Application<'a, E: AppEngine + Send + Sync + 'a> {
     log_timer: Arc<Pin<Box<ResettableTimer>>>,
 
     perf_counter: RefCell<PerfCounter<u64>>,
+
+    probe_tx_buffer: BTreeMap<u64 /* block_n */, Vec<oneshot::Sender<ProtoTransactionResult>>>,
+
+    gc_tx: Sender<u64>,
 
     phantom: PhantomData<&'a E>,
 }
@@ -104,7 +132,11 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
     pub fn new(
         config: AtomicConfig,
         staging_rx: Receiver<AppCommand>, unlogged_rx: Receiver<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)>,
-        client_reply_tx: Sender<ClientReplyCommand>) -> Self {
+        client_reply_tx: Sender<ClientReplyCommand>, gc_tx: Sender<u64>,
+
+        #[cfg(feature = "extra_2pc")]
+        twopc_tx: Sender<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)>,
+    ) -> Self {
         let checkpoint_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.checkpoint_interval_ms));
         let log_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.logger_stats_report_ms));
         let engine = E::new(config.clone());
@@ -124,6 +156,11 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
             checkpoint_timer,
             log_timer,
             perf_counter,
+            gc_tx,
+            probe_tx_buffer: BTreeMap::new(),
+
+            #[cfg(feature = "extra_2pc")]
+            twopc_tx,
 
             phantom: PhantomData
         }
@@ -149,6 +186,7 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
 
     async fn worker(&mut self) -> Result<(), ()> {
         tokio::select! {
+            biased;
             cmd = self.staging_rx.recv() => {
                 if cmd.is_none() {
                     return Err(());
@@ -178,16 +216,103 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
     /// This is used to compute throughput.
     async fn log_stats(&mut self) {
         self.stats.print();
+
+        info!("Total pending probes: {}", self.probe_tx_buffer.iter().map(|(_, v)| v.len()).sum::<usize>());
     }
 
     async fn checkpoint(&mut self) {
         let state = self.engine.get_current_state();
         // TODO: Decide on checkpointing strategy
 
-        info!("Current state checkpoint: {:?}", state);
+        info!("Current state checkpoint: {}", state);
+
+        // It should be safe to garbage collect all bcied + executed blocks.
+        // Since the application is single-threaded and self.bci is set inevitably during the execution,
+        // it is safe to gc till self.bci.
+
+        // However, if there is a view change, the policy is to send everything from self.bci onwards (inclusive of self.bci).
+        // So we only GC till self.bci - 1.
+
+        if self.stats.bci > 1 {
+            self.gc_tx.send(self.stats.bci - 1).await.unwrap();
+        } 
+
+    }
+
+    async fn maybe_clear_probes(&mut self) {
+        // Find blocks <= bci in the probe_tx_buffer and clear them.
+        self.probe_tx_buffer.retain(|block_n, reply_vec| {
+            if *block_n <= self.stats.bci {
+                trace!("Clearing probe tx buffer of size {} for block {}", reply_vec.len(), block_n);
+                for reply_tx in reply_vec.drain(..) {
+                    let _ = reply_tx.send(ProtoTransactionResult {
+                        result: vec![ProtoTransactionOpResult { 
+                            success: true,
+                            values: vec![],
+                        }],
+                    });
+                }
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    async fn filter_probe_tx(&mut self, request: ProtoTransaction, reply_tx: oneshot::Sender<ProtoTransactionResult>) -> Option<(ProtoTransaction, oneshot::Sender<ProtoTransactionResult>)> {
+        if request.on_receive.is_none() {
+            return Some((request, reply_tx));
+        }
+
+        if request.on_receive.as_ref().unwrap().ops.len() != 1 {
+            return Some((request, reply_tx));
+        }
+
+        let op = request.on_receive.as_ref().unwrap().ops[0].clone();
+
+        if op.op_type != ProtoTransactionOpType::Probe as i32 {
+            return Some((request, reply_tx));
+        }
+
+        if op.operands.len() != 1 {
+            return Some((request, reply_tx));
+        }
+
+        let block_n = op.operands[0].clone();
+
+        let block_n = match block_n.as_slice().try_into() {
+            Ok(arr) => u64::from_be_bytes(arr),
+            Err(_) => {
+                warn!("Failed to convert block number to u64");
+                return Some((request, reply_tx));
+            }
+        };
+
+        self.probe_tx_buffer.entry(block_n).or_insert_with(Vec::new).push(reply_tx);
+
+        self.maybe_clear_probes().await;
+
+        None
     }
 
     async fn handle_unlogged_request(&mut self, request: ProtoTransaction, reply_tx: oneshot::Sender<ProtoTransactionResult>) {
+        #[cfg(feature = "extra_2pc")]
+        {
+            if request.is_2pc {
+                self.twopc_tx.send((request, reply_tx)).await.unwrap();
+                self.stats.total_2pc_txs += 1;
+                return;
+            }
+        }
+
+        let request_reply = self.filter_probe_tx(request, reply_tx).await;
+
+        if request_reply.is_none() {
+            return;
+        }
+
+        let (request, reply_tx) = request_reply.unwrap();
+        
         let result = self.engine.handle_unlogged_request(request);
         self.stats.total_requests += 1;
         self.stats.total_unlogged_txs += 1;
@@ -287,6 +412,9 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
                 for n in block_ns_cp {
                     self.perf_deregister(n);
                 }
+
+
+                self.maybe_clear_probes().await;
             },
             AppCommand::Rollback(mut new_last_block) => {               
                 if new_last_block <= self.stats.bci {

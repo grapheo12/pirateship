@@ -75,7 +75,7 @@ class Experiment:
             f.write(patch)
 
 
-    def __gen_crypto(self, config_dir, nodelist, client_cnt):
+    def gen_crypto(self, config_dir, nodelist, client_cnt):
         participants = gen_keys_and_certs(nodelist, DEFAULT_CA_NAME, client_cnt, config_dir)
         print(participants)
         return {
@@ -152,7 +152,7 @@ class Experiment:
         else:
             client_vms = deployment.get_all_client_vms_in_region(self.client_region)
 
-        crypto_info = self.__gen_crypto(config_dir, node_list_for_crypto, len(client_vms))
+        crypto_info = self.gen_crypto(config_dir, node_list_for_crypto, len(client_vms))
         
 
         for k, v in node_configs.items():
@@ -192,6 +192,7 @@ class Experiment:
             config["rpc_config"] = {"signing_priv_key_path": signing_priv_key_path}
 
             config["workload_config"]["num_clients"] = num_clients_per_vm[client_num]
+            config["workload_config"]["duration"] = self.duration
 
             self.binary_mapping[client_vms[client_num]].append(client)
 
@@ -211,6 +212,7 @@ class Experiment:
         config["rpc_config"] = {"signing_priv_key_path": signing_priv_key_path}
 
         config["workload_config"]["num_clients"] = 1
+        config["workload_config"]["duration"] = self.duration
 
         with open(os.path.join(config_dir, f"{name}_config.json"), "w") as f:
             json.dump(config, f, indent=4)
@@ -258,7 +260,7 @@ class Experiment:
 
         cmds = [
             f"cd {remote_repo} && git checkout main",       # Move out of DETACHED HEAD state
-            f"cd {remote_repo} && git fetch --all && git pull --all"
+            f"cd {remote_repo} && git fetch --all --recurse-submodules && git pull --all --recurse-submodules",
         ]
         try:
             run_remote_public_ip(cmds, self.dev_ssh_user, self.dev_ssh_key, self.dev_vm)
@@ -276,6 +278,7 @@ class Experiment:
         cmds = [
             f"cd {remote_repo} && git reset --hard",
             f"cd {remote_repo} && git checkout {git_hash}",
+            f"cd {remote_repo} && git submodule update --init --recursive",
             f"cd {remote_repo} && git apply --allow-empty --reject --whitespace=fix diff.patch",
         ]
         
@@ -334,7 +337,7 @@ sleep {self.duration}
 echo -n $PID | xargs -d' ' -I{{}} kill -2 {{}} || true
 echo -n $PID | xargs -d' ' -I{{}} kill -15 {{}} || true
 echo -n $PID | xargs -d' ' -I{{}} kill -9 {{}} || true
-sleep 1
+sleep 10
 
 # Kill the binaries in SSHed VMs as well. Calling SIGKILL on the local SSH process might have left them orphaned.
 # Make sure not to kill the tmux server.
@@ -351,6 +354,8 @@ sleep 1
                 
                 # Copy the logs back
                     _script += f"""
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -2 -c {binary_name}' || true
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -15 -c {binary_name}' || true
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -9 -c {binary_name}' || true
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'rm -rf {self.remote_workdir}/logs/*db' || true
 $SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_num}/{bin}.log {self.remote_workdir}/logs/{repeat_num}/{bin}.log || true
@@ -358,7 +363,7 @@ $SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_n
 """
                     
             _script += f"""
-sleep 1
+sleep 60
 """
                     
             # pkill -9 -c server also kills tmux-server. So we can't run a server on the dev VM.
@@ -406,10 +411,10 @@ sleep 1
         build_dir, config_dir, log_dir_base, log_dirs = self.create_directory(workdir)
         self.tag_source(workdir)
         self.tag_experiment(workdir)
-        self.generate_configs(deployment, config_dir, log_dir_base)
         self.dev_vm = deployment.dev_vm
         self.dev_ssh_user = deployment.ssh_user
         self.dev_ssh_key = deployment.ssh_key
+        self.generate_configs(deployment, config_dir, log_dir_base)
         self.local_workdir = workdir
 
         # Hard dependency on Linux style paths
@@ -424,11 +429,18 @@ sleep 1
         else:
             self.copy_back_build_files()
 
+        # Call order: generate_configs, remote_build, generate_arbiter_script
+        # DO NOT CHANGE THIS ORDER. Subclasses may depend on this order.
+
         # Generate the shell script to run the experiment
         self.generate_arbiter_script()
 
         # Save myself (again)
         with open(os.path.join(workdir, "experiment.pkl"), "wb") as f:
+            pickle.dump(self, f)
+
+        # Save myself (again) to keep the pristine state
+        with open(os.path.join(workdir, "experiment_pristine.pkl"), "wb") as f:
             pickle.dump(self, f)
 
         # Save myself in text (again)

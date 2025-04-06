@@ -110,7 +110,7 @@ impl ForkReceiver {
         broadcaster_tx: Sender<MultipartFork>,
         logserver_query_tx: Sender<LogServerQuery>,
     ) -> Self {
-        Self {
+        let mut ret = Self {
             config,
             crypto,
             client,
@@ -127,7 +127,15 @@ impl ForkReceiver {
                 waiting_on_nack_reply: false
             },
             logserver_query_tx,
+        };
+
+        #[cfg(not(feature = "view_change"))]
+        {
+            ret.view = 1;
+            ret.config_num = 1;
         }
+
+        ret
     }
 
     pub async fn run(fork_receiver: Arc<Mutex<Self>>) {
@@ -474,9 +482,18 @@ impl ForkReceiver {
     }
 
     fn byzantine_liveness_threshold(&self) -> usize {
-        let u = self.config.get().consensus_config.liveness_u as usize;
         let n = self.config.get().consensus_config.node_list.len();
+        
+        #[cfg(feature = "platforms")]
+        {
+            let u = self.config.get().consensus_config.liveness_u as usize;
+            n - u
+        }
 
-        n - u
+        #[cfg(not(feature = "platforms"))]
+        {
+            let f = n / 3;
+            n - f
+        }
     }
 }
