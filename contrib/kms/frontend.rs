@@ -342,10 +342,10 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
     HttpServer::new(move || {
         let _client_sub_id = client_sub_id.clone().fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         // Each worker thread creates its own client instance.
-        let client = Client::new(&config, &keys, true, _client_sub_id).into();
+        let client = Client::new(&config, &keys, false, _client_sub_id).into();
         
         let _client_sub_id = client_sub_id.clone().fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let probe_client = Client::new(&config, &keys, true, _client_sub_id).into();
+        let probe_client = Client::new(&config, &keys, false, _client_sub_id).into();
         let state = AppState {
             client,
             probe_client,
