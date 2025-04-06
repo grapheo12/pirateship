@@ -373,6 +373,8 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
             .service(privkey)
             .service(home)
             .service(num_users)
+            .service(toggle_byz_wait)
+
     })
     .workers(batch_size)            // Otherwise the server doesn't load consensus properly.
     .bind(addr)?
