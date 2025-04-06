@@ -62,14 +62,28 @@ class AciDeployment(Deployment):
         self.mode = config["mode"]
 
         self.ssh_user = config["ssh_user"]
-
         if os.path.isabs(config["ssh_pub_key"]):
-            self.ssh_pub_key = config["ssh_pub_key"]
+             # Extract final name of file, removing path
+            ssh_key_name = os.path.basename(config["ssh_pub_key"])
+            print(ssh_key_name)
+            # Copy the key into workdir/deployment
+            print(executeCommandArgs(["mkdir","-p", config["ssh_pub_key"], os.path.join(workdir, "deployment")]))
+            print(executeCommandArgs(["cp", config["ssh_pub_key"], os.path.join(workdir, "deployment",ssh_key_name)]))
+            self.ssh_pub_key = os.path.join(workdir, "deployment", ssh_key_name)
+            print(workdir)
+            print(f"SSH KEY IS {self.ssh_pub_key}")
         else:
             self.ssh_pub_key = os.path.join(workdir, "deployment", config["ssh_pub_key"])
 
         if os.path.isabs(config["ssh_key"]):
-            self.ssh_key = config["ssh_key"]
+             # Extract final name of file, removing path
+            ssh_key_name = os.path.basename(config["ssh_key"])
+            print(ssh_key_name)
+            # Copy the key into workdir/deployment
+            print(executeCommandArgs(["mkdir"," -p", config["ssh_pub_key"], os.path.join(workdir, "deployment")]))
+            print(executeCommandArgs(["cp", config["ssh_key"], os.path.join(workdir, "deployment",ssh_key_name)]))
+            self.ssh_key = os.path.join(workdir, "deployment", ssh_key_name)
+            print(f"SSH KEY IS {self.ssh_key}")
         else:
             self.ssh_key = os.path.join(workdir, "deployment", config["ssh_key"])
 
@@ -252,7 +266,7 @@ class AciDeployment(Deployment):
           base_port = self.node_port_base
           for i in range(0, launch_count):
             nodepool_container_tag_i = self.generate_node_container_tag(total_idx,platform_idx, i)
-            cu.launchDeployment(self.template, self.resource_group, nodepool_container_tag_i, self.registry_name, self.image_name, self.ssh_pub_key, token , location, base_port, docker_ssh, self.local, self.confidential)
+            #cu.launchDeployment(self.template, self.resource_group, nodepool_container_tag_i, self.registry_name, self.image_name, self.ssh_pub_key, token , location, base_port, docker_ssh, self.local, self.confidential)
             ip = cu.obtainIpAddress(self.resource_group, nodepool_container_tag_i, self.local)
             nodelist[nodepool_container_tag_i] = {
                 "private_ip": "127.0.0.1" if self.local else ip ,
@@ -272,7 +286,7 @@ class AciDeployment(Deployment):
           total_idx = 0
           for i in range(0, launch_count):
               client_container_tag_i = self.generate_client_container_tag(total_idx,platform_idx,i)
-              cu.launchDeployment(self.template, self.resource_group, client_container_tag_i, self.registry_name, self.image_name, self.ssh_pub_key, token , location, base_port, docker_ssh, self.local, self.confidential)
+              #cu.launchDeployment(self.template, self.resource_group, client_container_tag_i, self.registry_name, self.image_name, self.ssh_pub_key, token , location, base_port, docker_ssh, self.local, self.confidential)
               ip = cu.obtainIpAddress(self.resource_group, client_container_tag_i, self.local)
               nodelist[client_container_tag_i] = {
                 "private_ip":  ip,
