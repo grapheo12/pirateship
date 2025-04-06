@@ -451,7 +451,7 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, isRead: bool, state: &Ap
         let tx_with_ack_chan_tag: TxWithAckChanTag = (Some(probe_transaction), (tx, current_tag, SenderType::Anon));
         state.batch_proposer_tx.send(tx_with_ack_chan_tag).await.unwrap();
 
-        let (_resp, _) = rx.recv().await.unwrap();
+        let _ = rx.recv().await;
 
         // Probe replies only after Byz commit
     }
