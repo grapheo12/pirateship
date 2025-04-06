@@ -44,21 +44,7 @@ fn process_args() -> Config {
 
 #[allow(unused_assignments)]
 fn get_feature_set() -> (&'static str, &'static str) {
-    let mut app = "";
-    let mut protocol = "";
-
-    #[cfg(feature = "app_logger")]{ app = "app_logger"; }
-    #[cfg(feature = "app_kvs")]{ app = "app_kvs"; }
-    #[cfg(feature = "app_sql")]{ app = "app_sql"; }
-
-    #[cfg(feature = "lucky_raft")]{ protocol = "lucky_raft"; }
-    #[cfg(feature = "signed_raft")]{ protocol = "signed_raft"; }
-    #[cfg(feature = "diverse_raft")]{ protocol = "diverse_raft"; }
-    #[cfg(feature = "jolteon")]{ protocol = "jolteon"; }
-    #[cfg(feature = "chained_pbft")]{ protocol = "chained_pbft"; }
-    #[cfg(feature = "pirateship")]{ protocol = "pirateship"; }
-
-    (protocol, app)
+    ("pirateship", "kms")
 }
 
 async fn test_run() {
@@ -102,10 +88,6 @@ fn main() {
     let (protocol, app) = get_feature_set();
     info!("Protocol: {}, App: {}", protocol, app);
 
-    #[cfg(feature = "evil")]
-    if cfg.evil_config.simulate_byzantine_behavior {
-        warn!("Will simulate Byzantine behavior!");
-    }
 
     let core_ids = 
         Arc::new(Mutex::new(Box::pin(core_affinity::get_core_ids().unwrap())));
