@@ -4,6 +4,7 @@ use prost::Message;
 use serde::Deserialize;
 use sha2::digest::typenum::Integer;
 use tokio::sync::Mutex;
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::Arc;
 use std::time::Instant;
 use async_recursion::async_recursion;
@@ -332,9 +333,12 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
 
     let batch_size = config.consensus_config.max_backlog_batch_size;
 
+    let client_sub_id = Arc::new(AtomicU64::new(1));
+
     HttpServer::new(move || {
+        let _client_sub_id = client_sub_id.clone().fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         // Each worker thread creates its own client instance.
-        let client = Client::new(&config, &keys, false, 0 as u64).into();
+        let client = Client::new(&config, &keys, true, _client_sub_id).into();
         let state = AppState {
             client,
             curr_client_tag: Arc::new(Mutex::new(0)),
