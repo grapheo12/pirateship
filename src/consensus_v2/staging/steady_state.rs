@@ -713,7 +713,14 @@ impl Staging {
             self.__storage_ack_buffer.push_back(storage_ack);
         }
 
-        if old_view_is_stable /* don't trigger unnecessarily on new view messages */ && self.ci - self.bci > 500 {
+        let (hard_gap, soft_gap) = {
+            let config = &self.config.get().consensus_config;
+            (config.commit_index_gap_hard, config.commit_index_gap_soft)
+        };
+
+        if old_view_is_stable && self.__ae_seen_in_this_view > soft_gap as usize
+        /* don't trigger unnecessarily on new view messages */
+        && self.ci as i64 - self.bci as i64 > hard_gap as i64 {
             // Trigger a view change
             warn!("Triggering view change due to too much gap between CI and BCI: {} {}", self.ci, self.bci);
             self.view_change_timer.fire_now().await;
