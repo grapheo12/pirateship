@@ -62,7 +62,7 @@ impl ClientReplyHandler {
             crash_commit_reply_buf: HashMap::new(),
             byz_commit_reply_buf: HashMap::new(),
             reply_processors: JoinSet::new(),
-            reply_processor_queue: async_channel::bounded(_chan_depth),
+            reply_processor_queue: async_channel::unbounded(),
             byz_response_store: HashMap::new(),
             probe_buffer: BTreeMap::new(),
             acked_bci: 0,
@@ -301,8 +301,6 @@ impl ClientReplyHandler {
                 } else {
                     self.probe_buffer.insert(block_n, vec![sender]);
                 }
-
-                info!("Probe added for block {}", block_n);
 
                 self.maybe_clear_probe_buf().await;
             },
