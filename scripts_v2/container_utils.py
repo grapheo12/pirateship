@@ -64,7 +64,7 @@ def cancelDeployment(resourceGroup, deploymentName):
 
 # Update the ARM template with the appropriate primary image, region, deployment etc. 
 # and launch deployment
-def launchDeployment(templateFile, resourceGroup, deploymentName, acrPrefix, primary_image, sshKey, acrToken, location, server_port, docker_ssh, local, confidential):
+def launchDeployment(templateFile, resourceGroup, deploymentName, acrPrefix, primary_image, sshKey, acrToken, location, server_port, docker_ssh, local, confidential, spot = True):
     print("Launching deployment")
     if not local:  
         if (confidential): 

@@ -22,13 +22,13 @@
       }
     },
     "ssh": {
-      "type": "string",
+      "type": "securestring",
       "metadata": {
         "description": "SSH key for access"
       }
     },
     "acr-token": {
-      "type": "string",
+      "type": "securestring",
       "metadata": {
         "description": "Access token for ACR if necessary"
       }
