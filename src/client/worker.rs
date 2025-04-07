@@ -309,11 +309,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                     let old_leader_name = node_list[curr_leader_id].clone();
 
                     if let Some(_leader) = leader {
-<<<<<<< HEAD
                         PinnedClient::drop_all_connections(&self.client).await;
-=======
-                        // PinnedClient::drop_all_connections(&self.client).await;
->>>>>>> origin/crazy_rewrite
                         curr_leader_id = _leader;
 
                     }
