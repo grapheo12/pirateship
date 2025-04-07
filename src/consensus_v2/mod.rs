@@ -20,7 +20,14 @@ use batch_proposal::{BatchProposer, TxWithAckChanTag};
 use block_broadcaster::BlockBroadcaster;
 use block_sequencer::BlockSequencer;
 use client_reply::ClientReplyHandler;
+<<<<<<< HEAD
 use extra_2pc::TwoPCHandler;
+=======
+<<<<<<< HEAD
+=======
+use extra_2pc::TwoPCHandler;
+>>>>>>> origin/crazy_rewrite
+>>>>>>> bec92011fc8043b38cec319ff626bd723f7aca78
 use fork_receiver::{ForkReceiver, ForkReceiverCommand};
 use log::{debug, info, warn};
 use logserver::LogServer;
@@ -265,10 +272,6 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         let fork_receiver_crypto = crypto.get_connector();
         let pacemaker_crypto = crypto.get_connector();
 
-<<<<<<< HEAD
-        let ctx = PinnedConsensusServerContext::new(config.clone(), keystore.clone(), batch_proposer_tx, fork_tx, fork_receiver_command_tx.clone(), vote_tx, view_change_tx, backfill_request_tx);
-        let batch_proposer = BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, app_tx.clone(), batch_proposer_command_rx);
-=======
         #[cfg(feature = "extra_2pc")]
         let (extra_2pc_command_tx, extra_2pc_command_rx) = make_channel(10 * _chan_depth);
         #[cfg(feature = "extra_2pc")]
@@ -278,7 +281,6 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
 
         let ctx = PinnedConsensusServerContext::new(config.clone(), keystore.clone(), batch_proposer_tx.clone(), fork_tx, fork_receiver_command_tx.clone(), vote_tx, view_change_tx, backfill_request_tx);
         let batch_proposer = BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, client_reply_command_tx.clone(), unlogged_tx, batch_proposer_command_rx);
->>>>>>> origin/crazy_rewrite
         let block_sequencer = BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto);
         let block_broadcaster = BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_crypto2, block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, fork_receiver_command_tx.clone(), app_tx.clone());
         let staging = Staging::new(config.clone(), staging_client.into(), staging_crypto, staging_rx, vote_rx, pacemaker_cmd_rx, pacemaker_cmd_tx2, client_reply_command_tx.clone(), app_tx, broadcaster_control_command_tx, control_command_tx, fork_receiver_command_tx, qc_tx, batch_proposer_command_tx, logserver_tx,
