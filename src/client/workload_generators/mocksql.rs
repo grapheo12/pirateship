@@ -1,6 +1,6 @@
-use crate::{proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}, utils::workload_generators::Executor};
+use crate::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult};
 
-use super::{PerWorkerWorkloadGenerator, WorkloadUnit};
+use super::{PerWorkerWorkloadGenerator, WorkloadUnit, Executor};
 
 pub struct MockSQLGenerator { 
     pub query_num: usize
@@ -41,6 +41,7 @@ impl PerWorkerWorkloadGenerator for MockSQLGenerator {
                 }),
                 on_byzantine_commit: None,
                 is_reconfiguration: false,
+                is_2pc: false,
             },
             executor: Executor::Leader
         }

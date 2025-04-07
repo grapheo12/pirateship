@@ -31,6 +31,7 @@ RUN apt-get update && apt-get install -y \
     librocksdb-dev \
     libprotobuf-dev \ 
     openssh-server \
+    tmux \
     rsync \
     git \
     sudo

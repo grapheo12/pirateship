@@ -68,7 +68,11 @@ class Deployment:
         self.ssh_user = config["ssh_user"]
 
         if os.path.isabs(config["ssh_key"]):
-            self.ssh_key = config["ssh_key"]
+            # Extract final name of file, removing path
+            ssh_key_name = os.path.basename(config["ssh_key"])
+            # Copy the key into workdir/deployment
+            executeCommandArgs(["cp", config["ssh_key"], os.path.join(workdir, "deployment",ssh_key_name)])
+            self.ssh_key = os.path.join(workdir, "deployment", ssh_key_name)
         else:
             self.ssh_key = os.path.join(workdir, "deployment", config["ssh_key"])
         self.node_port_base = int(config["node_port_base"])
@@ -179,9 +183,13 @@ class Deployment:
         plan_path = os.path.join(tf_output_dir, "main.tfplan")
         tfstate_path = os.path.join(tf_output_dir, "terraform.tfstate")
 
+        # Does tfstate already exist?
+        tfstate_exists = os.path.exists(tfstate_path)
+
         # Plan
         run_local([
             f"terraform -chdir={found_path} init",
+            f"terraform -chdir={found_path} refresh -no-color -var-file=\"{var_file}\" -var=\"username={self.ssh_user}\" -out={plan_path} -state={tfstate_path}" if tfstate_exists else "echo 'New plan needed'",
             f"terraform -chdir={found_path} plan -no-color -var-file=\"{var_file}\" -var=\"username={self.ssh_user}\" -out={plan_path} -state={tfstate_path} > {tf_output_dir}/plan.log 2>&1",
         ])
 
@@ -304,7 +312,7 @@ class Deployment:
 
     def populate_nodelist(self):
         if self.mode != "manual":
-            self.populate_raw_node_list_from_()
+            self.populate_raw_node_list_from_terraform()
     
         first_client = False
         for name, info in self.raw_config["node_list"].items():

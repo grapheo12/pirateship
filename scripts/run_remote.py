@@ -148,11 +148,11 @@ def run_nodes(node_conns: Dict[str, Connection], repeat_num: int, wd: str) -> Li
 
     return promises
 
-def run_nodes_with_net_perf(node_conns: Dict[str, Connection], repeat_num: int, wd: str) -> List:
+def run_nodes_with_net_perf(node_conns: Dict[str, Connection], repeat_num: int, wd: str, payload_sz = 4096) -> List:
     promises = []
     
     for node, conn in node_conns.items():
-        prom = conn.run(f"cd pft/{wd} && ./target/release/net-perf configs/{node}{CONFIG_SUFFIX} > logs/{repeat_num}/{node}.log 2> logs/{repeat_num}/{node}.err",
+        prom = conn.run(f"cd pft/{wd} && ./target/release/net-perf configs/{node}{CONFIG_SUFFIX} {payload_sz} > logs/{repeat_num}/{node}.log 2> logs/{repeat_num}/{node}.err",
                  pty=True, asynchronous=True, hide=True)
         promises.append(prom)
 

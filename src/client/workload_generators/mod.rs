@@ -1,5 +1,10 @@
 use crate::proto::execution::{ProtoTransaction, ProtoTransactionResult};
 
+<<<<<<< HEAD
+#[derive(Clone)]
+=======
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
+>>>>>>> origin/crazy_rewrite
 pub enum Executor {
     Leader = 1,
     Any = 2

@@ -20,7 +20,7 @@ use crate::{
         client::{
             ProtoClientReply, ProtoClientRequest, ProtoTentativeReceipt
         }, consensus::{
-            DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoForkValidation, ProtoQuorumCertificate, ProtoViewChange
+            DefferedSignature, ProtoAppendEntries, ProtoBlock, ProtoFork, ProtoForkValidation, ProtoQuorumCertificate, ProtoTransactionList, ProtoViewChange
         }, execution::ProtoTransaction, rpc::ProtoPayload
     },
     rpc::{
@@ -358,7 +358,7 @@ fn verify_view_change_msg(vc: &ProtoViewChange, keys: &KeyStore, sender: &String
 pub async fn do_reply_all_with_tentative_receipt(ctx: &PinnedServerContext) {
     let mut lack_pend = ctx.client_ack_pending.lock().await;
 
-    for ((bn, txn), (chan, profile, _sender)) in lack_pend.iter_mut() {
+    for ((bn, txn), (chan, profile, _sender, client_tag)) in lack_pend.iter_mut() {
         profile.register("Tentative chan wait");
         let response = ProtoClientReply {
             reply: Some(
@@ -369,6 +369,7 @@ pub async fn do_reply_all_with_tentative_receipt(ctx: &PinnedServerContext) {
                     },
                 ),
             ),
+            client_tag: *client_tag
         };
 
         let v = response.encode_to_vec();
@@ -809,7 +810,7 @@ pub async fn do_init_new_leader<Engine>(
     let mut chosen_fork_last_qc = None;
     // Broadcast fork and wait for responses.
     let mut block = ProtoBlock {
-        tx: Vec::new(),
+        tx: Some(crate::proto::consensus::proto_block::Tx::TxList(ProtoTransactionList { tx_list: Vec::new() })),
         n: last_n + 1,
         parent: last_hash,
         view,
@@ -931,12 +932,13 @@ pub async fn force_noop(ctx: &PinnedServerContext) {
         // sig: vec![0u8; SIGNATURE_LENGTH],
         sig: vec![0u8; 1],
         origin: _cfg.net_config.name.clone(),
+        client_tag: 0,
     };
 
     let request = crate::proto::rpc::proto_payload::Message::ClientRequest(client_req);
     let profile = LatencyProfile::new();
 
-    let _ = client_tx.send((request, _cfg.net_config.name.clone(), ctx.__client_black_hole_channel.0.clone(), profile));
+    let _ = client_tx.send((Box::new(request), _cfg.net_config.name.clone(), ctx.__client_black_hole_channel.0.clone(), profile));
 
     
 }

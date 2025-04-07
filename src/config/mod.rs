@@ -70,19 +70,32 @@ pub struct RpcConfig {
 pub struct ConsensusConfig {
     pub node_list: Vec<String>, // This better be in the same order in all nodes.
     pub learner_list: Vec<String>,
-    pub quorum_diversity_k: usize,
     pub max_backlog_batch_size: usize,
     pub batch_max_delay_ms: u64,
     pub signature_max_delay_ms: u64,
     pub view_timeout_ms: u64,
     pub signature_max_delay_blocks: u64,
-    pub vote_processing_workers: u16,
-
-    #[cfg(feature="storage")]
+    pub num_crypto_workers: usize,
     pub log_storage_config: StorageConfig,
-
-    #[cfg(feature = "platforms")]
     pub liveness_u: u64,
+    pub commit_index_gap_soft: u64, // ci - bci >= this -> even for crash commits, honest leader needs (n - u) votes
+    pub commit_index_gap_hard: u64, // ci - bci >= this -> followers trigger view change.
+}
+
+impl ConsensusConfig {
+    pub fn get_leader_for_view(&self, view: u64) -> String {
+
+        #[cfg(feature = "round_robin_leader")]
+        {
+            let n = self.node_list.len() as u64;
+            self.node_list[((view - 1) % n) as usize].clone()
+        }
+
+        #[cfg(feature = "fixed_leader")]
+        {
+            self.node_list[0].clone()
+        }
+    }
 }
 
 #[cfg(feature = "platforms")]
@@ -99,7 +112,8 @@ impl ConsensusConfig {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
-    pub logger_stats_report_ms: u64,         // This is only for the logger app
+    pub logger_stats_report_ms: u64,
+    pub checkpoint_interval_ms: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -137,7 +151,8 @@ pub struct ClientRpcConfig {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkloadConfig {
     pub num_clients: usize,
-    pub num_requests: usize,
+    pub duration: u64,
+    pub max_concurrent_requests: usize,
     pub request_config: RequestConfig
 }
 
@@ -146,7 +161,8 @@ pub struct WorkloadConfig {
 pub struct ClientConfig {
     pub net_config: ClientNetConfig,
     pub rpc_config: ClientRpcConfig,
-    pub workload_config: WorkloadConfig
+    pub workload_config: WorkloadConfig,
+    pub full_duplex: bool
 }
 
 impl Config {
@@ -190,22 +206,22 @@ impl ClientConfig {
             consensus_config: ConsensusConfig {
                 node_list: Vec::new(),
                 learner_list: Vec::new(),
-                quorum_diversity_k: 0,
                 batch_max_delay_ms: 10,
                 max_backlog_batch_size: 1,
                 signature_max_delay_blocks: 128,
                 signature_max_delay_ms: 100,
                 view_timeout_ms: 150,
-                vote_processing_workers: 128,
+                num_crypto_workers: 128,
+                commit_index_gap_soft: 256,
+                commit_index_gap_hard: 512,
 
-                #[cfg(feature = "platforms")]
                 liveness_u: 1,
 
-                #[cfg(feature = "storage")]
                 log_storage_config: StorageConfig::RocksDB(RocksDBConfig::default()),
             },
             app_config: AppConfig {
                 logger_stats_report_ms: 100,
+                checkpoint_interval_ms: 60000,
             },
             
             #[cfg(feature = "evil")]

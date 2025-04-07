@@ -12,5 +12,7 @@
         "num_clients": 1,
         "num_requests": 10000000,
         "request_config": "Blanks"
-    }
+    },
+    "full_duplex": true,
+    "client_sub_id": 0
 }

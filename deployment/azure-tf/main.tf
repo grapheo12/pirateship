@@ -249,7 +249,8 @@ resource "azurerm_linux_virtual_machine" "sevpool_vm" {
   location              = var.platform_locations[local.sevpool_ids_flattened_[count.index][0]]
   resource_group_name   = azurerm_resource_group.rg.name
   network_interface_ids = [azurerm_network_interface.sevpool_nic[count.index].id]
-  size                  = "Standard_DC8ads_v5"
+  size                  = "Standard_DC16ads_v5"
+  # size                  = "Standard_EC16eds_v5"
 
 #   delete_os_disk_on_termination    = true
 #   delete_data_disks_on_termination = true
@@ -265,8 +266,8 @@ resource "azurerm_linux_virtual_machine" "sevpool_vm" {
 
   source_image_reference {
     publisher = "canonical"
-    offer = "ubuntu-24_04-lts"
-    sku = "cvm"
+    offer = "0001-com-ubuntu-confidential-vm-jammy"
+    sku = "22_04-lts-cvm"
     version = "latest"
   }
 
@@ -295,7 +296,7 @@ resource "azurerm_linux_virtual_machine" "tdxpool_vm" {
   location              = var.platform_locations[local.tdxpool_ids_flattened_[count.index][0]]
   resource_group_name   = azurerm_resource_group.rg.name
   network_interface_ids = [azurerm_network_interface.tdxpool_nic[count.index].id]
-  size                  = "Standard_DC8eds_v5"
+  size                  = "Standard_DC16eds_v5"
 
 #   delete_os_disk_on_termination    = true
 #   delete_data_disks_on_termination = true
@@ -354,12 +355,20 @@ resource "azurerm_linux_virtual_machine" "clientpool_vm" {
     storage_account_type = "StandardSSD_LRS"
   }
 
+  # source_image_reference {
+  #   publisher = "Canonical"
+  #   offer     = "ubuntu-24_04-lts"
+  #   sku       = "server"
+  #   version   = "latest"
+  # }
+
   source_image_reference {
     publisher = "Canonical"
-    offer     = "ubuntu-24_04-lts"
-    sku       = "server"
-    version   = "latest"
+    offer     = "0001-com-ubuntu-server-focal"
+    sku       = "20_04-lts-gen2"
+    version   = "20.04.202410020"
   }
+  
 
   computer_name  = "client${count.index}"
   admin_username = var.username
@@ -382,7 +391,7 @@ resource "azurerm_linux_virtual_machine" "nonteepool_vm" {
   location              = var.platform_locations[local.nonteepool_ids_flattened_[count.index][0]]
   resource_group_name   = azurerm_resource_group.rg.name
   network_interface_ids = [azurerm_network_interface.nonteepool_nic[count.index].id]
-  size                  = "Standard_E8ds_v5"
+  size                  = "Standard_E16ds_v6"
 
 #   delete_os_disk_on_termination    = true
 #   delete_data_disks_on_termination = true

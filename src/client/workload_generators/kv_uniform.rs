@@ -68,6 +68,7 @@ impl PerWorkerWorkloadGenerator for KVReadWriteUniformGenerator {
                 on_crash_commit: None,
                 on_byzantine_commit: None,
                 is_reconfiguration: false,
+                is_2pc: false,
             },
             executor: Executor::Leader
         };

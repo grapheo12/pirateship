@@ -11,11 +11,13 @@ message ProtoClientRequest {
     proto.execution.ProtoTransaction tx = 1;
     string origin = 2;
     bytes sig = 3;
+    uint64 client_tag = 4;
 }
 
 message ProtoByzResponse {
     uint64 block_n = 1;
     uint64 tx_n = 2;
+    uint64 client_tag = 3;
     // bytes req_digest = 3;
 }
 
@@ -51,6 +53,7 @@ message ProtoClientReply {
         ProtoCurrentLeader leader = 3;
         ProtoTentativeReceipt tentative_receipt = 4; 
     }
+    uint64 client_tag = 5;
 }
 
 message ProtoByzPollRequest {

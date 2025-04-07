@@ -4,16 +4,27 @@
 
 use sha2::{Digest, Sha256};
 
+
 pub const DIGEST_LENGTH: usize = 32;
 
-pub fn hash(data: &Vec<u8>) -> Vec<u8> {
+pub fn hash(data: &[u8]) -> Vec<u8> {
     Sha256::new()
         .chain_update(data)
         .finalize()
         .as_slice()
         .to_vec()
+
+    // [0u8; DIGEST_LENGTH].to_vec()
 }
 
 pub fn cmp_hash(one: &Vec<u8>, two: &Vec<u8>) -> bool {
     one.as_slice() == two.as_slice()
+    // true
+}
+
+
+pub type HashType = Vec<u8>;
+
+pub fn default_hash() -> HashType {
+    vec![0u8; DIGEST_LENGTH]
 }

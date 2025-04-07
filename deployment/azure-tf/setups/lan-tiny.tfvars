@@ -1,0 +1,5 @@
+platform_locations = ["eastus"]
+sevpool_count = [0]
+tdxpool_count = [0]
+nonteepool_count = [1]
+clientpool_count = [2]

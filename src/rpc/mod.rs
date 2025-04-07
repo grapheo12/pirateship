@@ -13,10 +13,28 @@ pub mod server;
 #[cfg(test)]
 mod tests;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum SenderType {
     Anon,
-    Auth(String),
+    Auth(String, u64 /* client_sub_id */),
+}
+
+impl SenderType {
+    pub fn to_name_and_sub_id(&self) -> (String, u64) {
+        match self {
+            SenderType::Anon => (String::from("Anon"), 0),
+            SenderType::Auth(s, id) => (s.to_owned(), *id),
+        }
+    }
+}
+
+impl SenderType {
+    fn to_string(&self) -> String {
+        match self {
+            SenderType::Anon => String::from("Anon"),
+            SenderType::Auth(s, id) => s.to_owned() + "#" + &id.to_string(),
+        }
+    }
 }
 
 #[derive(Clone)]

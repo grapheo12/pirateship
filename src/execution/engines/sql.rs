@@ -9,7 +9,7 @@ use log::{error, info, warn};
 use prost::Message;
 use tokio::{sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, task::yield_now};
 
-use crate::{config::NodeInfo, consensus::{handler::PinnedServerContext, log::Log}, crypto::hash, execution::Engine, proto::{client::{ProtoClientReply, ProtoTransactionReceipt, ProtoTryAgain}, execution::{ProtoTransactionOpResult, ProtoTransactionResult}}, rpc::PinnedMessage};
+use crate::{config::NodeInfo, consensus::{handler::PinnedServerContext, log::Log}, crypto::hash, execution::Engine, get_tx_list, proto::{client::{ProtoClientReply, ProtoTransactionReceipt, ProtoTryAgain}, execution::{ProtoTransactionOpResult, ProtoTransactionResult}}, rpc::PinnedMessage};
 
 enum Event {
     CiUpd(u64),
@@ -87,7 +87,7 @@ impl SQLEngine {
             let block = &fork.get(pos).unwrap().block;
             let mut txn = 0;
             self.last_executed_tx_id.store(-1, Ordering::SeqCst);
-            for tx in &block.tx {
+            for tx in get_tx_list!(block) {
                 let ops = match &tx.on_crash_commit {
                     Some(ops) => &ops.ops,
                     None => continue
@@ -231,7 +231,7 @@ impl SQLEngine {
         // First execute the on_byz_commit transaction phases.s
         for pos in (old_bci + 1)..(bci + 1) {
             let block = &fork.get(pos).unwrap().block;
-            for tx in &block.tx {
+            for tx in get_tx_list!(block) {
                 let ops = match &tx.on_byzantine_commit {
                     Some(ops) => &ops.ops,
                     None => continue
