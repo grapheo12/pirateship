@@ -1,5 +1,5 @@
 platforms: 
  - location: "East US"
-   nodepool_count: "1" #"7"
-   clientpool_count: "1" #"3"
+   nodepool_count: "7"
+   clientpool_count: "3" 
  
