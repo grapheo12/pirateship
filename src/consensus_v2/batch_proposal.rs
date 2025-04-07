@@ -290,15 +290,50 @@ impl BatchProposer {
 
             let (res_tx, res_rx) = oneshot::channel();
 
-            self.unlogged_tx.send((tx, res_tx)).await.unwrap();
+            let (is_probe, block_n) = self.is_probe_tx(&tx);
 
-            self.reply_tx.send(ClientReplyCommand::UnloggedRequestAck(res_rx, ack_chan)).await.unwrap();
+            if !is_probe {
+                self.unlogged_tx.send((tx, res_tx)).await.unwrap();
+                self.reply_tx.send(ClientReplyCommand::UnloggedRequestAck(res_rx, ack_chan)).await.unwrap();
+            } else {
+                self.reply_tx.send(ClientReplyCommand::ProbeRequestAck(block_n, ack_chan)).await.unwrap();
+            }
+                
+
 
             return None;
         }
 
 
         Some((Some(tx), ack_chan))
+
+    }
+
+    fn is_probe_tx(&self, tx: &ProtoTransaction) -> (bool, u64) {
+        if tx.on_receive.is_none() {
+            return (false, 0);
+        }
+
+        if tx.on_receive.as_ref().unwrap().ops.len() != 1 {
+            return (false, 0);
+        }
+
+        if tx.on_receive.as_ref().unwrap().ops[0].op_type != crate::proto::execution::ProtoTransactionOpType::Probe as i32 {
+            return (false, 0);
+        }
+
+        if tx.on_receive.as_ref().unwrap().ops[0].operands.len() != 1 {
+            return (false, 0);
+        }
+
+        let block_n = tx.on_receive.as_ref().unwrap().ops[0].operands[0].clone();
+
+        let block_n = match block_n.as_slice().try_into() {
+            Ok(arr) => u64::from_be_bytes(arr),
+            Err(_) => return (false, 0),
+        };
+
+        (true, block_n)
 
     }
 
