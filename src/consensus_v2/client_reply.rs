@@ -247,15 +247,12 @@ impl ClientReplyHandler {
             ClientReplyCommand::StopCancelling => {
                 self.must_cancel = false;
             },
-<<<<<<< HEAD
-=======
             ClientReplyCommand::UnloggedRequestAck(res_rx, sender) => {
                 let reply_chan = sender.0;
                 let client_tag = sender.1;
                 let sender = sender.2;
                 self.reply_processor_queue.0.send(ReplyProcessorCommand::Unlogged(res_rx, (reply_chan, client_tag, sender))).await.unwrap();
             }
->>>>>>> origin/crazy_rewrite
         }
     }
 
