@@ -256,7 +256,7 @@ PID="$PID $!"
             toggle_duration = self.duration // 3
             _script += f"""
 # Run the toggle program
-$SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} 'python3 {self.remote_workdir}/build/toggle.py {host} {toggle_ramp_up} {toggle_duration}' &
+$SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} 'python3 {self.remote_workdir}/build/toggle.py {host} {toggle_ramp_up} {toggle_duration} > {self.remote_workdir}/logs/{repeat_num}/toggle.log 2> {self.remote_workdir}/logs/{repeat_num}/toggle.err' &
 PID="$PID $!"
 """
             
