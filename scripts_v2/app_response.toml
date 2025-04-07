@@ -55,7 +55,7 @@ repeats = 1
 num_nodes = 7
 num_clients = 30_000
 build_command = "make contrib"
-duration = 180
+duration = 300
 
 
 [[results]]
