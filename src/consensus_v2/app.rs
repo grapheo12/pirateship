@@ -1,11 +1,11 @@
-use std::{cell::RefCell, collections::{HashMap, VecDeque}, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
+use std::{cell::RefCell, collections::{BTreeMap, HashMap, VecDeque}, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
 use hex::ToHex;
-use log::{error, info, warn};
+use log::{error, info, trace, warn};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{default_hash, CachedBlock, HashType, DIGEST_LENGTH}, proto::{client::ProtoByzResponse, execution::{ProtoTransaction, ProtoTransactionResult}}, utils::{channel::{Receiver, Sender}, PerfCounter}};
+use crate::{config::AtomicConfig, crypto::{default_hash, CachedBlock, HashType, DIGEST_LENGTH}, proto::{client::ProtoByzResponse, execution::{ProtoTransaction, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionResult}}, utils::{channel::{Receiver, Sender}, PerfCounter}};
 
 use super::{client_reply::ClientReplyCommand, super::utils::timer::ResettableTimer};
 
@@ -243,6 +243,7 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
                 return;
             }
         }
+
         
         let result = self.engine.handle_unlogged_request(request);
         self.stats.total_requests += 1;
@@ -343,6 +344,7 @@ impl<'a, E: AppEngine + Send + Sync + 'a> Application<'a, E> {
                 for n in block_ns_cp {
                     self.perf_deregister(n);
                 }
+
             },
             AppCommand::Rollback(mut new_last_block) => {               
                 if new_last_block <= self.stats.bci {

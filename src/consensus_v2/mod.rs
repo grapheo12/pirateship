@@ -1,4 +1,4 @@
-mod batch_proposal;
+pub mod batch_proposal;
 mod block_sequencer;
 mod block_broadcaster;
 mod staging;
@@ -28,7 +28,7 @@ use pacemaker::Pacemaker;
 use prost::Message;
 use staging::{Staging, VoteWithSender};
 use tokio::{sync::{mpsc::unbounded_channel, Mutex}, task::JoinSet};
-use crate::{proto::{checkpoint::ProtoBackfillNack, consensus::{ProtoAppendEntries, ProtoViewChange}}, rpc::{client::Client, SenderType}, utils::{channel::{make_channel, Sender}, RocksDBStorageEngine, StorageService}};
+use crate::{proto::{checkpoint::ProtoBackfillNack, consensus::{ProtoAppendEntries, ProtoViewChange}}, rpc::{client::Client, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, RocksDBStorageEngine, StorageService}};
 
 use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::rpc::ProtoPayload, rpc::{server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef}};
 
@@ -56,7 +56,6 @@ impl PinnedConsensusServerContext {
         vote_receiver_tx: Sender<VoteWithSender>,
         view_change_receiver_tx: Sender<(ProtoViewChange, SenderType)>,
         backfill_request_tx: Sender<ProtoBackfillNack>,
-
     ) -> Self {
         Self(Arc::new(Box::pin(ConsensusServerContext {
             config, keystore, batch_proposal_tx,
@@ -180,10 +179,25 @@ pub struct ConsensusNode<E: AppEngine + Send + Sync + 'static> {
 
     /// TODO: When all wiring is done, this will be empty.
     __sink_handles: JoinSet<()>,
+
+
+    /// Use this to feed transactions from within the same process.
+    pub batch_proposer_tx: Sender<TxWithAckChanTag>,
 }
 
 impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
     pub fn new(config: Config) -> Self {
+        let (batch_proposer_tx, batch_proposer_rx) = make_channel(config.rpc_config.channel_depth as usize);
+        Self::mew(config, batch_proposer_tx, batch_proposer_rx)
+    }
+    
+    /// mew() must be called from within a Tokio context with channel passed in.
+    /// This is new()'s cat brother.
+    ///
+    ///  /\_/\
+    /// ( o.o )
+    ///  > ^ < 
+    pub fn mew(config: Config, batch_proposer_tx: Sender<TxWithAckChanTag>, batch_proposer_rx: Receiver<TxWithAckChanTag>) -> Self {
         let _chan_depth = config.rpc_config.channel_depth as usize;
         let _num_crypto_tasks = config.consensus_config.num_crypto_workers;
 
@@ -215,7 +229,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         #[cfg(feature = "extra_2pc")]
         let extra_2pc_client = Client::new_atomic(config.clone(), keystore.clone(), true, 50);
 
-        let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
+        // let (batch_proposer_tx, batch_proposer_rx) = make_channel(_chan_depth);
         let (batch_proposer_command_tx, batch_proposer_command_rx) = make_channel(_chan_depth);
 
         let (block_maker_tx, block_maker_rx) = make_channel(_chan_depth);
@@ -258,7 +272,7 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
         #[cfg(feature = "extra_2pc")]
         let (extra_2pc_staging_tx, extra_2pc_staging_rx) = make_channel(10 * _chan_depth);
 
-        let ctx = PinnedConsensusServerContext::new(config.clone(), keystore.clone(), batch_proposer_tx, fork_tx, fork_receiver_command_tx.clone(), vote_tx, view_change_tx, backfill_request_tx);
+        let ctx = PinnedConsensusServerContext::new(config.clone(), keystore.clone(), batch_proposer_tx.clone(), fork_tx, fork_receiver_command_tx.clone(), vote_tx, view_change_tx, backfill_request_tx);
         let batch_proposer = BatchProposer::new(config.clone(), batch_proposer_rx, block_maker_tx, client_reply_command_tx.clone(), unlogged_tx, batch_proposer_command_rx);
         let block_sequencer = BlockSequencer::new(config.clone(), control_command_rx, block_maker_rx, qc_rx, block_broadcaster_tx, client_reply_tx, block_maker_crypto);
         let block_broadcaster = BlockBroadcaster::new(config.clone(), client.into(), block_broadcaster_crypto2, block_broadcaster_rx, other_block_rx, broadcaster_control_command_rx, block_broadcaster_storage, staging_tx, fork_receiver_command_tx.clone(), app_tx.clone());
@@ -307,6 +321,8 @@ impl<E: AppEngine + Send + Sync> ConsensusNode<E> {
             __sink_handles: handles,
 
             app: Arc::new(Mutex::new(app)),
+
+            batch_proposer_tx,
         }
     }
 

@@ -27,6 +27,7 @@ log4rs = "1.3.0"
 
 
 pft = { path = "../"}
+async-recursion = "1.1.1"
 
 [[bin]]
 name = "kms"
@@ -35,3 +36,4 @@ path = "kms/main.rs"
 [[bin]]
 name = "svr3"
 path = "svr3/main.rs"
+

@@ -1,5 +1,5 @@
 import random
-from locust import FastHttpUser, task, between, events
+from locust import FastHttpUser, task, between, events, constant_throughput
 import requests, time, collections
 import uuid
 import random
@@ -50,6 +50,8 @@ def on_test_setup(environment, **kwargs):
 
 
 class testClass(FastHttpUser):
+    wait_time = constant_throughput(50)
+
     def on_start(self):
         # We need to magically generate unique usernames without any kind of central coordination.
         # Since with distributed load testing, we can't guarantee that the same username won't be used by another user.

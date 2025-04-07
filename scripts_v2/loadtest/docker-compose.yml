@@ -1,0 +1,44 @@
+# Source: https://raw.githubusercontent.com/SvenskaSpel/locust-plugins/refs/heads/master/locust_plugins/dashboards/docker-compose.yml
+# Grafana exposed to outside world
+
+version: "3"
+
+services:
+  postgres:
+    image: cyberw/locust-timescale:6
+    networks:
+      - timenet
+    expose:
+      - 5432
+    ports:
+      # remove the 127.0.0.1 to expose postgres to other machines (including load gen workers outside this machine) 
+      - 5432:5432
+    environment:
+      # change the password if you intend to expose postgres to other machines
+      - POSTGRES_PASSWORD=password
+      - TIMESCALEDB_TELEMETRY=off
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  grafana:
+    image: cyberw/locust-grafana:3
+    environment:
+      # these settings are not particularly safe, dont go exposing Grafana externally without changing this.
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_LOG_LEVEL=warn # reduce log spamming. Remove this if you need to debug grafana.
+    ports:
+      - 3000:3000
+    networks:
+      - timenet
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+networks:
+  timenet: null
+
+volumes:
+  postgres_data: null
+  grafana_data: null

@@ -2,7 +2,7 @@ workdir = "deployment_artifacts"
 project_home = "https://github.com/grapheo12/pirateship"
 
 [deployment_config]
-mode = "lan-tiny"
+mode = "lan"
 ssh_key = "cluster_key.pem"
 ssh_user = "pftadmin"
 node_port_base = 3000
@@ -20,8 +20,8 @@ channel_depth = 1000
 [node_config.consensus_config]
 commit_index_gap_soft = 250
 commit_index_gap_hard = 500
-liveness_u = 0
-max_backlog_batch_size = 1000
+liveness_u = 2
+max_backlog_batch_size = 100
 signature_max_delay_blocks = 10
 signature_max_delay_ms = 102 # roughly batch_max_delay_ms * signature_max_delay_blocks
 num_crypto_workers = 5
@@ -52,10 +52,10 @@ workload = "kms"
 name = "kms"
 type = "app"
 repeats = 1
-num_nodes = 1
-num_clients = 5000
+num_nodes = 7
+num_clients = 30_000
 build_command = "make contrib"
-duration = 20
+duration = 180
 
 
 [[results]]
@@ -74,7 +74,7 @@ force_parse = true
 # hotstuff = "hotstuff+onlybyz"
 # engraft = "engraft+onlybyz"
 # signed_raft = "signed_raft"
-autobahn = "autobahn"
+# autobahn = "autobahn"
 
 [results.font]
 size = 55
