@@ -387,11 +387,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                         *curr_leader_id = (*curr_leader_id + 1) % node_list.len();
                     },
                     Executor::Any => {
-<<<<<<< HEAD
-                        // *curr_round_robin_id = (*curr_round_robin_id + 1) % node_list.len();
-=======
                         *curr_round_robin_id = (*curr_round_robin_id + 1) % node_list.len();
->>>>>>> origin/crazy_rewrite
                     }
                 }
 

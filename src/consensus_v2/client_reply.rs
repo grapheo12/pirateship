@@ -148,22 +148,6 @@ impl ClientReplyHandler {
                 if batch_hash.is_empty() || self.must_cancel {
                     // This is called when !listen_on_new_batch
                     // This must be cancelled.
-<<<<<<< HEAD
-                    if !reply_vec.is_empty() {
-                        info!("Clearing out queued replies of size {}", reply_vec.len());
-                    }
-                    let node_infos = NodeInfo {
-                        nodes: self.config.get().net_config.nodes.clone()
-                    };
-                    for (chan, tag, _) in reply_vec.drain(..) {
-                        let reply = Self::get_try_again_message(tag, &node_infos);
-                        let reply_ser = reply.encode_to_vec();
-                        let _sz = reply_ser.len();
-                        let reply_msg = PinnedMessage::from(reply_ser, _sz, crate::rpc::SenderType::Anon);
-                        let _ = chan.send((reply_msg, LatencyProfile::new())).await;
-                    }
-
-=======
                     if reply_vec.len() > 0 {
                         info!("Clearing out queued replies of size {}", reply_vec.len());
                         let node_infos = NodeInfo {
@@ -177,7 +161,6 @@ impl ClientReplyHandler {
                             let _ = chan.send((reply_msg, LatencyProfile::new())).await;
                         }
                     }
->>>>>>> origin/crazy_rewrite
                     return Ok(());
                 }
 
