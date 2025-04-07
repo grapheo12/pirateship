@@ -182,11 +182,6 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             }
                         },
                         Some(client::proto_client_reply::Reply::TryAgain(_try_again)) => {
-<<<<<<< HEAD
-                            info!("Trying again after backoff");
-                            sleep(Duration::from_secs(1)).await;
-=======
->>>>>>> origin/crazy_rewrite
                             let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, None, None)).await;
                         },
                         Some(client::proto_client_reply::Reply::TentativeReceipt(_tentative_receipt)) => {
