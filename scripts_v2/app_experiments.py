@@ -20,7 +20,7 @@ class AppExperiment(Experiment):
             copy_file_from_remote_public_ip(f"{remote_repo}/target/release/{bin}", os.path.join(self.local_workdir, "build", bin), self.dev_ssh_user, self.dev_ssh_key, self.dev_vm)
 
         remote_script_dir = f"{remote_repo}/scripts_v2/loadtest"
-        TARGET_SCRIPTS = ["load.py", "locustfile.py", "docker-compose.yml"]
+        TARGET_SCRIPTS = ["load.py", "locustfile.py", "docker-compose.yml", "toggle.py"]
 
         # Copy the scripts to build directory
         for script in TARGET_SCRIPTS:
@@ -32,7 +32,7 @@ class AppExperiment(Experiment):
         remote_repo = f"/home/{self.dev_ssh_user}/repo"
 
         remote_script_dir = f"{remote_repo}/scripts_v2/loadtest"
-        TARGET_SCRIPTS = ["load.py", "locustfile.py", "docker-compose.yml"]
+        TARGET_SCRIPTS = ["load.py", "locustfile.py", "docker-compose.yml", "toggle.py"]
 
 
         res1 = run_remote_public_ip([
@@ -178,8 +178,11 @@ set -o xtrace
 SSH_CMD="ssh -o StrictHostKeyChecking=no -i {self.dev_ssh_key}"
 SCP_CMD="scp -o StrictHostKeyChecking=no -i {self.dev_ssh_key}"
 
-# Start up Grafana in dev vm.
 
+# Stop old Grafana in dev vm.
+$SSH_CMD {self.dev_ssh_user}@{self.dev_vm.public_ip} 'docker compose -f {self.remote_workdir}/build/docker-compose.yml down -v' || true
+
+# Start up Grafana in dev vm.
 $SSH_CMD {self.dev_ssh_user}@{self.dev_vm.public_ip} 'docker compose -f {self.remote_workdir}/build/docker-compose.yml up -d' || true
 
 # SSH into each VM and run the binaries
@@ -248,6 +251,20 @@ $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '/home/pftadmin/.local/bin/locust -f
 PID="$PID $!"
 """
             
+            # Run the toggle program in the locust master
+            toggle_ramp_up = self.duration // 3
+            if toggle_ramp_up > 60:
+                toggle_ramp_up = 60
+            toggle_duration = self.duration // 3
+            if toggle_duration > 60:
+                toggle_duration = 60
+
+            _script += f"""
+# Run the toggle program
+$SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} 'python3 {self.remote_workdir}/build/toggle.py {host} {toggle_ramp_up} {toggle_duration} > {self.remote_workdir}/logs/{repeat_num}/toggle.log 2> {self.remote_workdir}/logs/{repeat_num}/toggle.err' &
+PID="$PID $!"
+"""
+            
             
                     
             _script += f"""
@@ -284,8 +301,7 @@ $SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_n
             _script += f"""
 sleep 10
 
-# Stop Grafana in dev vm.
-$SSH_CMD {self.dev_ssh_user}@{self.dev_vm.public_ip} 'docker compose -f {self.remote_workdir}/build/docker-compose.yml down -v' || true
+# We keep the Grafana container running until the next experiment.
 """
                     
             # pkill -9 -c server also kills tmux-server. So we can't run a server on the dev VM.
