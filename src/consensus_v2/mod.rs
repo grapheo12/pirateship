@@ -20,14 +20,7 @@ use batch_proposal::{BatchProposer, TxWithAckChanTag};
 use block_broadcaster::BlockBroadcaster;
 use block_sequencer::BlockSequencer;
 use client_reply::ClientReplyHandler;
-<<<<<<< HEAD
 use extra_2pc::TwoPCHandler;
-=======
-<<<<<<< HEAD
-=======
-use extra_2pc::TwoPCHandler;
->>>>>>> origin/crazy_rewrite
->>>>>>> bec92011fc8043b38cec319ff626bd723f7aca78
 use fork_receiver::{ForkReceiver, ForkReceiverCommand};
 use log::{debug, info, warn};
 use logserver::LogServer;
