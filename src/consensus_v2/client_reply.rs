@@ -21,7 +21,7 @@ enum ReplyProcessorCommand {
     CrashCommit(u64 /* block_n */, u64 /* tx_n */, HashType, ProtoTransactionResult /* result */, MsgAckChanWithTag, Vec<ProtoByzResponse>),
     ByzCommit(u64 /* block_n */, u64 /* tx_n */, ProtoTransactionResult /* result */, MsgAckChanWithTag),
     Unlogged(oneshot::Receiver<ProtoTransactionResult>, MsgAckChanWithTag),
-    Probe(u64 /* block_n */, MsgAckChanWithTag),
+    Probe(u64 /* block_n */, Vec<MsgAckChanWithTag>),
 }
 pub struct ClientReplyHandler {
     config: AtomicConfig,
@@ -131,7 +131,7 @@ impl ClientReplyHandler {
                             let _ = reply_chan.send((reply_msg, latency_profile)).await;
                         },
 
-                        ReplyProcessorCommand::Probe(block_n, (reply_chan, tag, sender)) => {
+                        ReplyProcessorCommand::Probe(block_n, reply_vec) => {
                             let reply = ProtoClientReply {
                                 reply: Some(
                                     crate::proto::client::proto_client_reply::Reply::Receipt(
@@ -145,15 +145,19 @@ impl ClientReplyHandler {
                                         },
                                     ),
                                 ),
-                                client_tag: tag,
+                                client_tag: 0,  // TODO: this should be a real tag; but currently probe is not done over the network so we are ok.
                             };
 
                             let reply_ser = reply.encode_to_vec();
                             let _sz = reply_ser.len();
                             let reply_msg = PinnedMessage::from(reply_ser, _sz, crate::rpc::SenderType::Anon);
-                            let latency_profile = LatencyProfile::new();
                             
-                            let _ = reply_chan.send((reply_msg, latency_profile)).await;
+                            for (reply_chan, tag, sender) in reply_vec {
+                                let latency_profile = LatencyProfile::new();
+                                
+                                let _ = reply_chan.send((reply_msg.clone(), latency_profile)).await;
+                            }
+                            
                         }
                     }
                 }
@@ -320,10 +324,7 @@ impl ClientReplyHandler {
         });
 
         for (block_n, reply_vec) in remove_vec {
-            for reply_tx in reply_vec {
-                info!("Probe clear for block {}", block_n);
-                self.reply_processor_queue.0.send(ReplyProcessorCommand::Probe(block_n, reply_tx)).await.unwrap();
-            }
+            self.reply_processor_queue.0.send(ReplyProcessorCommand::Probe(block_n, reply_vec)).await.unwrap();
         }
     }
 
