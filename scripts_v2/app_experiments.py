@@ -160,7 +160,7 @@ class AppExperiment(Experiment):
                 f"sudo apt-get update",
                 f"sudo apt-get install -y python3-pip",
                 f"pip3 install locust",
-                f"pip3 install locust-plugins",
+                f"pip3 install locust-plugins[dashboards]",
                 f"pip3 install aiohttp",
                 f"pip3 install requests",
             ], self.dev_ssh_user, self.dev_ssh_key, vm, hide=False)
