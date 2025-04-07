@@ -7,6 +7,7 @@ import asyncio
 import aiohttp
 import random
 import uuid
+import shamir
 
 MAX_CONCURRENT_REQUESTS = 200
 
@@ -27,7 +28,24 @@ async def register_user(host, usernames, password, session):
         print(f"An error occurred: {e}")
 
 
-async def register_users(host, num_users, password="pirateship", workers_per_client=2, num_client_nodes=1):
+async def create_secret(host, usernames, password, session, nodes, threshold):
+    try:
+        secret = 123456789
+        splits = shamir.split_secret(secret, nodes, threshold, 10)
+        for username in usernames:
+            async with session.post(f"{host}/auth", json={"username": username, "password": password}) as response:
+                if response.status != 200:
+                    print(f"Error registering {username}: {await response.text()}")
+
+            async with session.post(f"{host}/storesecret", json={"username": username, "password": password, "val": str(secret), "pin": "1234"}) as response:
+                if response.status != 200:
+                    print(f"Error storing secret {username}: {await response.text()}")
+    except Exception as e:
+        await session.close()
+        print(f"An error occurred: {e}")
+
+
+async def register_users(host, num_users, application, password="pirateship", workers_per_client=2, num_client_nodes=1, threshold=1):
     max_user_id_length = len(str(num_users))
 
     tasks = []
@@ -58,7 +76,10 @@ async def register_users(host, num_users, password="pirateship", workers_per_cli
     
     async with aiohttp.ClientSession(connector=connector) as session:
         for chunk in username_chunks:
-            tasks.append(register_user(host, chunk, password, session))
+            if application == "kms":
+                tasks.append(register_user(host, chunk, password, session))
+            if application == "svr3":
+                tasks.append(create_secret(host, chunk, password, session, total_machines, threshold))
 
         await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -75,7 +96,8 @@ if __name__ == "__main__":
     num_users = int(sys.argv[2])
     num_client_nodes = int(sys.argv[3])
     workers_per_client = int(sys.argv[4])
+    application = str(sys.argv[5])
 
     
     print("Performing Load Phase...")
-    asyncio.run(register_users(host, num_users, password="pirateship", workers_per_client=workers_per_client, num_client_nodes=num_client_nodes))
+    asyncio.run(register_users(host, num_users, application, password="pirateship", workers_per_client=workers_per_client, num_client_nodes=num_client_nodes))

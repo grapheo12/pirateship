@@ -23,7 +23,7 @@ struct AppState {
     curr_client_tag: Arc<Mutex<usize>>,
 }
 
-#[get("/auth")]
+#[post("/auth")]
 async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
     let username = payload.username.clone();
     let password = payload.password.clone();
@@ -75,8 +75,7 @@ async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) ->
     }
 
     users.push(username.clone());
-    let serialized_users: Vec<u8> =
-        serde_json::to_vec(&users).expect("Serialization failed");
+    let serialized_users: Vec<u8> = serde_json::to_vec(&users).expect("Serialization failed");
 
     let update_users_op = ProtoTransactionOp {
         op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
@@ -94,7 +93,7 @@ async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) ->
     }))
 }
 
-#[post("/storeSecret")]
+#[post("/storesecret")]
 async fn storeSecret(payload: web::Json<StoreSecretPayload>, data: web::Data<AppState>) -> impl Responder {
     let username = payload.username.clone();
     let password = payload.password.clone();
@@ -136,7 +135,7 @@ async fn storeSecret(payload: web::Json<StoreSecretPayload>, data: web::Data<App
     }))
 }
 
-#[get("/recoverSecret")]
+#[get("/recoversecret")]
 async fn recoverSecret(payload: web::Json<RecoverSecretPayload>, data: web::Data<AppState>) -> impl Responder {
     let username = payload.username.clone();
     let password = payload.password.clone();
@@ -151,13 +150,9 @@ async fn recoverSecret(payload: web::Json<RecoverSecretPayload>, data: web::Data
     };
 
     //compare pin if correct --> return secret; else --> increment pin count
-
-
     let mut user_pin = "pin:".to_string();
     let mut user_retry_count = "retries:".to_string();
     let mut user_secret = "secret:".to_string();
-
-
 
     user_pin.push_str(&payload.username);
     user_retry_count.push_str(&payload.username);
@@ -347,7 +342,7 @@ async fn authenticate_user(
     };
 
     let result = match send(vec![transaction_op], client, client_tag, true).await {
-        Ok(response) => response[0].clone(),
+        Ok(response) => response,
         Err(e) => return Err(e),
     };
 
@@ -358,7 +353,7 @@ async fn authenticate_user(
         })));
     }
 
-    if hash(&password.into_bytes()) != result {
+    if hash(&password.into_bytes()) != result[0] {
         return Err(HttpResponse::Unauthorized().json(serde_json::json!({
             "message": "incorrect password",
             "user": username,
@@ -369,5 +364,6 @@ async fn authenticate_user(
 
 /*
 Example usage:
+curl -X POST "http://localhost:8080/auth" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"hi"}'
 
 */
