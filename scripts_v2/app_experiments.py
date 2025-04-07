@@ -227,7 +227,7 @@ sleep {load_phase_seconds}
 # Run phase start
 
 # Run the locust master
-$SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} '/home/pftadmin/.local/bin/locust -f {self.remote_workdir}/build/locustfile.py --timescale --headless --master --users {self.num_clients} --spawn-rate {int(self.total_worker_processes * 1000)} --host {host} --run-time {self.duration}s --config-users {config_users_str} > {self.remote_workdir}/logs/{repeat_num}/locust-master.log 2> {self.remote_workdir}/logs/{repeat_num}/locust-master.err' &
+$SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} '/home/pftadmin/.local/bin/locust -f {self.remote_workdir}/build/locustfile.py --timescale --headless --master --users {self.num_clients} --spawn-rate {int(self.total_worker_processes * 1000)} --host {host} --run-time {self.duration}s --config-users {config_users_str} --pguser postgres --pgpassword password > {self.remote_workdir}/logs/{repeat_num}/locust-master.log 2> {self.remote_workdir}/logs/{repeat_num}/locust-master.err' &
 PID="$PID $!"
 sleep 1
 
@@ -244,7 +244,7 @@ sleep 1
                         continue
 
                     _script += f"""
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '/home/pftadmin/.local/bin/locust -f {self.remote_workdir}/build/locustfile.py --timescale --headless --worker --master-host {self.locust_master.private_ip} --processes 1 --run-time {self.duration}s --config-users {config_users_str} > {self.remote_workdir}/logs/{repeat_num}/{bin}.log 2> {self.remote_workdir}/logs/{repeat_num}/{bin}.err' &
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '/home/pftadmin/.local/bin/locust -f {self.remote_workdir}/build/locustfile.py --timescale --headless --worker --master-host {self.locust_master.private_ip} --processes 1 --run-time {self.duration}s --config-users {config_users_str} --pguser postgres --pgpassword password --pghost {self.locust_master.private_ip} --pgport 5432 > {self.remote_workdir}/logs/{repeat_num}/{bin}.log 2> {self.remote_workdir}/logs/{repeat_num}/{bin}.err' &
 PID="$PID $!"
 """
             
