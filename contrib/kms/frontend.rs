@@ -151,12 +151,10 @@ async fn refresh(payload: web::Json<RegisterPayload>, data: web::Data<AppState>)
 
 #[post("/toggle_byz_wait")]
 async fn toggle_byz_wait(data: web::Data<AppState>) -> impl Responder {
-    let mut state = data.probe_for_byz_commit.load(Ordering::SeqCst);
-    state = !state;
-    data.probe_for_byz_commit.store(state, Ordering::SeqCst);
+    data.probe_for_byz_commit.fetch_not(Ordering::Relaxed);
     HttpResponse::Ok().json(serde_json::json!({
         "message": "byzantine wait toggled",
-        "probe_for_byz_commit": state,
+        "probe_for_byz_commit": data.probe_for_byz_commit.load(Ordering::Relaxed),
     }))
 }
 
