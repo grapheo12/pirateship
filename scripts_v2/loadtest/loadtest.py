@@ -88,7 +88,7 @@ async def register_users(host, num_users, application, password="pirateship", wo
 
 def run_locust(locust_file, host, num_users, getDistribution, getRequestHosts=[], master_host="localhost", workers_per_client=2, num_client_nodes=1):
     custom_user_config = {
-        "user_class_name":"testClass", 
+        "user_class_name":"Svr3User",   
         "getDistribution": getDistribution,
         "getRequestHosts": getRequestHosts
     } 

@@ -1,5 +1,4 @@
 import json
-import requests
 import subprocess
 import sys
 import time
@@ -89,7 +88,7 @@ async def register_users(host, num_users, application, password="pirateship", wo
 
 if __name__ == "__main__":
     if len(sys.argv) < 5:
-        print("Usage: python load.py <host> <num_users> <num_client_node> <workers_per_client>")
+        print("Usage: python load.py <host> <num_users> <num_client_node> <workers_per_client> <application> <threshold>")
         sys.exit(1)
     
     host = sys.argv[1]
@@ -97,7 +96,8 @@ if __name__ == "__main__":
     num_client_nodes = int(sys.argv[3])
     workers_per_client = int(sys.argv[4])
     application = str(sys.argv[5])
+    threshold = int(sys.argv[6])
 
     
     print("Performing Load Phase...")
-    asyncio.run(register_users(host, num_users, application, password="pirateship", workers_per_client=workers_per_client, num_client_nodes=num_client_nodes))
+    asyncio.run(register_users(host, num_users, application, password="pirateship", workers_per_client=workers_per_client, num_client_nodes=num_client_nodes, threshold=threshold))
