@@ -1,33 +1,37 @@
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
 use log::{debug, warn};
+use pft::consensus_v2::batch_proposal::TxWithAckChanTag;
 use prost::Message;
 use serde_json::value;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use pft::config::Config;
 use pft::crypto::{KeyStore, hash};
 use pft::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase};
 use pft::rpc::client::Client;
-use pft::rpc::{PinnedMessage};
+use pft::rpc::{PinnedMessage, SenderType};
 use pft::{proto::{client::{self, ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::channel::{make_channel, Receiver, Sender}};
 use crate::payloads::{RecoverSecretPayload, RegisterPayload, StoreSecretPayload};
 
 
 
-#[derive(Clone)]
 struct AppState {
-    // Each worker gets its own client instance.
-    client: PinnedClient,
-    // Only a per-thread client tag counter remains.
-    curr_client_tag: Arc<Mutex<usize>>,
+    /// Global channel to feed into the consensusNode.
+    batch_proposer_tx: Sender<TxWithAckChanTag>,
+    /// Separate client instance for byz commit probe, so it doesn't interfere with other requests
+    /// on the same worker thread.
+    /// Arced since it is shared across threads.
+    probe_for_byz_commit: Arc<AtomicBool>,
+    /// Only a per-thread client tag counter remains.
+    curr_client_tag: AtomicU64,
 }
 
 #[post("/auth")]
 async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
     let username = payload.username.clone();
     let password = payload.password.clone();
-    let client = &data.client;
     let client_tag = &data.curr_client_tag;
 
     // Query KMS for username.
@@ -36,7 +40,7 @@ async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) ->
         operands: vec![username.clone().into_bytes()],
     };
 
-    let result = match send(vec![transaction_op], client, client_tag, true).await {
+    let result = match send(vec![transaction_op], true, &data).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -53,7 +57,7 @@ async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) ->
         operands: vec![username.clone().into_bytes(), hash(&password.into_bytes())],
     };
 
-    let _ = match send(vec![create_user_op], client, client_tag, false).await {
+    let _ = match send(vec![create_user_op], false, &data).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -64,7 +68,7 @@ async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) ->
         operands: vec!["user".as_bytes().to_vec()],
     };
 
-    let get_user_result = match send(vec![get_user_op], client, client_tag, true).await {
+    let get_user_result = match send(vec![get_user_op], true, &data).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -82,7 +86,7 @@ async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) ->
         operands: vec!["user".as_bytes().to_vec(), serialized_users],
     };
 
-    let _ = match send(vec![update_users_op], client, client_tag, false).await {
+    let _ = match send(vec![update_users_op],false, &data).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -100,10 +104,9 @@ async fn storeSecret(payload: web::Json<StoreSecretPayload>, data: web::Data<App
     let val = payload.val.clone();
     let pin = payload.pin.clone();
 
-    let client = &data.client;
     let client_tag = &data.curr_client_tag;
 
-    match authenticate_user(username, password, client, client_tag).await {
+    match authenticate_user(username, password,&data).await {
         Ok(valid) => valid,
         Err(e) => return e,
     };
@@ -125,7 +128,7 @@ async fn storeSecret(payload: web::Json<StoreSecretPayload>, data: web::Data<App
         operands: vec![user_secret.into_bytes(), val.into_bytes()],
     };
 
-    let result = match send(vec![write_user_pin_op, write_user_secret_op], client, &data.curr_client_tag, false).await {
+    let result = match send(vec![write_user_pin_op, write_user_secret_op], false, &data).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -140,11 +143,9 @@ async fn recoverSecret(payload: web::Json<RecoverSecretPayload>, data: web::Data
     let username = payload.username.clone();
     let password = payload.password.clone();
     let pin = payload.pin.clone();
-
-    let client = &data.client;
     let client_tag = &data.curr_client_tag;
 
-    match authenticate_user(username, password, client, client_tag).await {
+    match authenticate_user(username, password, &data).await {
         Ok(valid) => valid,
         Err(e) => return e,
     };
@@ -164,7 +165,7 @@ async fn recoverSecret(payload: web::Json<RecoverSecretPayload>, data: web::Data
         operands: vec![user_pin.into_bytes()]
     };
 
-    let result = match send(vec![write_user_pin_op], client, &data.curr_client_tag, false).await {
+    let result = match send(vec![write_user_pin_op], false, &data).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -175,7 +176,7 @@ async fn recoverSecret(payload: web::Json<RecoverSecretPayload>, data: web::Data
             operands: vec![user_retry_count.into_bytes()]
         };
 
-        let increment_user_pin_result = match send(vec![increment_user_pin_op], client, &data.curr_client_tag, false).await {
+        let increment_user_pin_result = match send(vec![increment_user_pin_op],false, &data).await {
             Ok(response) => response[0].clone(),
             Err(e) => return e,
         };
@@ -194,7 +195,7 @@ async fn recoverSecret(payload: web::Json<RecoverSecretPayload>, data: web::Data
         operands: vec![user_secret.into_bytes()]
     };
 
-    let get_user_secret_result = match send(vec![get_user_secret_op], client, &data.curr_client_tag, false).await {
+    let get_user_secret_result = match send(vec![get_user_secret_op], false, &data).await {
         Ok(response) => response[0].clone(),
         Err(e) => return e,
     };
@@ -210,6 +211,17 @@ async fn recoverSecret(payload: web::Json<RecoverSecretPayload>, data: web::Data
     }))
 }
 
+#[post("/toggle_byz_wait")]
+async fn toggle_byz_wait(data: web::Data<AppState>) -> impl Responder {
+    let mut state = data.probe_for_byz_commit.load(Ordering::SeqCst);
+    state = !state;
+    data.probe_for_byz_commit.store(state, Ordering::SeqCst);
+    HttpResponse::Ok().json(serde_json::json!({
+        "message": "byzantine wait toggled",
+        "probe_for_byz_commit": state,
+    }))
+}
+
 #[get("/")]
 async fn home(_data: web::Data<AppState>) -> impl Responder {
     HttpResponse::Ok().json(serde_json::json!({
@@ -217,18 +229,25 @@ async fn home(_data: web::Data<AppState>) -> impl Responder {
     }))
 }
 
-pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
-    // Prepare keys.
-    let mut keys = KeyStore::empty();
-    keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
-    let keys = keys.clone();
+pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::channel::AsyncSenderWrapper<TxWithAckChanTag>, actix_threads: usize) -> std::io::Result<()> {
+    let addr = config.net_config.addr.clone();
+    // Add 1000 to the port.
+    let (host, port) = addr.split_once(':').unwrap();
+    let port: u16 = port.parse().unwrap();
+    let port = port + 1000;
+    let addr = format!("{}:{}", host, port);
+
+    let batch_size = config.consensus_config.max_backlog_batch_size.max(256);
+
+
+    let probe_for_byz_commit = Arc::new(AtomicBool::new(false)); // This is a global state!
 
     HttpServer::new(move || {
         // Each worker thread creates its own client instance.
-        let client = Client::new(&config, &keys, false, 0 as u64).into();
         let state = AppState {
-            client,
-            curr_client_tag: Arc::new(Mutex::new(0)),
+            batch_proposer_tx: batch_proposer_tx.clone(),
+            probe_for_byz_commit: probe_for_byz_commit.clone(),
+            curr_client_tag: AtomicU64::new(0),
         };
 
         App::new()
@@ -237,6 +256,7 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
             .service(auth)
             .service(storeSecret)
             .service(recoverSecret)
+            .service(toggle_byz_wait)
     })
     .bind("127.0.0.1:8080")?
     .run()
@@ -244,12 +264,12 @@ pub async fn run_actix_server(config: Config) -> std::io::Result<()> {
     Ok(())
 }
 
-async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, client_tag: &Arc<Mutex<usize>>, on_receive: bool) -> Result<Vec<Vec<u8>>, HttpResponse> {
+async fn send(transaction_ops: Vec<ProtoTransactionOp>, isRead: bool, state: &AppState) -> Result<Vec<Vec<u8>>, HttpResponse> {
     let transaction_phase = ProtoTransactionPhase {
         ops: transaction_ops,
     };
 
-    let transaction = if on_receive {
+    let transaction = if isRead {
         ProtoTransaction {
             on_receive: Some(transaction_phase.clone()),
             on_crash_commit: None,
@@ -267,33 +287,16 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
         }
     };
     
+    let current_tag = state.curr_client_tag.fetch_add(1, Ordering::AcqRel);
 
-    let mut tag_guard = client_tag.lock().await;
-    *tag_guard += 1;
-    let current_tag = *tag_guard as u64;
+    let (tx, mut rx) = mpsc::channel(1);
+    let tx_with_ack_chan_tag: TxWithAckChanTag = (Some(transaction), (tx, current_tag, SenderType::Anon));
+    state.batch_proposer_tx.send(tx_with_ack_chan_tag).await.unwrap();
 
-    let rpc_msg_body = ProtoPayload {
-        message: Some(pft::proto::rpc::proto_payload::Message::ClientRequest(ProtoClientRequest {
-            tx: Some(transaction),
-            origin: "name".to_string(), // Change as needed.
-            sig: vec![0u8; 1],
-            client_tag: current_tag,
-        })),
-    };
-
-    let mut buf = Vec::new();
-    if let Err(e) = rpc_msg_body.encode(&mut buf) {
-        warn!("Error encoding request: {}", e);
-    }
-
-    let sz = buf.len();
-    let request = PinnedMessage::from(buf, sz, pft::rpc::SenderType::Anon);
-
-    let resp = match PinnedClient::send_and_await_reply(client, &"node1".to_string(), request.as_ref()).await {
-        Ok(resp) => resp,
-        Err(e) => {
-            warn!("Error sending request: {}", e);
-            return Err(HttpResponse::InternalServerError().body(format!("Error sending request: {}", e)));
+    let (resp, _) = match rx.recv().await {
+        Some(resp) => resp,
+        None => {
+            return Err(HttpResponse::InternalServerError().body("Error receiving response"));
         }
     };
 
@@ -333,15 +336,14 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, client: &PinnedClient, c
 async fn authenticate_user(
     username: String,
     password: String,
-    client: &PinnedClient,
-    client_tag: &Arc<Mutex<usize>>,
+    data: &AppState,
 ) -> Result<bool, HttpResponse> {
     let transaction_op = ProtoTransactionOp {
         op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
         operands: vec![username.clone().into_bytes()],
     };
 
-    let result = match send(vec![transaction_op], client, client_tag, true).await {
+    let result = match send(vec![transaction_op], true, data).await {
         Ok(response) => response,
         Err(e) => return Err(e),
     };
