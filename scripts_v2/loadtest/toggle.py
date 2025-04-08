@@ -11,7 +11,11 @@ def toggle_byz_commit(host, ramp_up, duration):
     sleep(ramp_up)
     try:
         logger.info("Toggling byz commit")
-        requests.post(f"{host}/toggle_byz_wait")
+        resp = requests.post(f"{host}/toggle_byz_wait")
+        if resp.status_code != 200:
+            logger.error(f"Failed to toggle byz commit: {resp.status_code}")
+            return
+        logger.info(f"Byz commit toggled: {resp.json()}")
     except Exception as e:
         logger.error(f"Failed to toggle byz commit: {e}")
         return
@@ -21,7 +25,11 @@ def toggle_byz_commit(host, ramp_up, duration):
 
     try:
         logger.info("Toggling byz commit back")
-        requests.post(f"{host}/toggle_byz_wait")
+        resp = requests.post(f"{host}/toggle_byz_wait")
+        if resp.status_code != 200:
+            logger.error(f"Failed to toggle byz commit: {resp.status_code}")
+            return
+        logger.info(f"Byz commit toggled back: {resp.json()}")
     except Exception as e:
         logger.error(f"Failed to toggle byz commit: {e}")
         return
