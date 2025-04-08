@@ -53,7 +53,7 @@ name = "kms"
 type = "app"
 repeats = 1
 num_nodes = 7
-num_clients = 30_000
+num_clients = 3_000
 build_command = "make contrib"
 duration = 300
 
