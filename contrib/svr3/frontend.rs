@@ -1,12 +1,18 @@
+use actix_web::cookie::time::macros::datetime;
+use actix_web::cookie::time::OffsetDateTime;
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
+use chrono::{DateTime, TimeZone};
+use hex::ToHex;
 use log::{debug, warn};
 use pft::consensus_v2::batch_proposal::TxWithAckChanTag;
 use prost::Message;
+use serde::ser::Error;
 use serde_json::value;
 use tokio::sync::{mpsc, Mutex};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use pft::config::Config;
 use pft::crypto::{KeyStore, hash};
@@ -14,7 +20,7 @@ use pft::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransacti
 use pft::rpc::client::Client;
 use pft::rpc::{PinnedMessage, SenderType};
 use pft::{proto::{client::{self, ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::channel::{make_channel, Receiver, Sender}};
-use crate::payloads::{RecoverSecretPayload, RegisterPayload, StoreSecretPayload};
+use crate::payloads::{AuthToken, GetTokenPayload, RecoverSecretPayload, RegisterPayload, StoreSecretPayload};
 
 
 
@@ -27,7 +33,8 @@ struct AppState {
     probe_for_byz_commit: Arc<AtomicBool>,
     /// Only a per-thread client tag counter remains.
     curr_client_tag: AtomicU64,
-
+    keys: KeyStore,
+    leader_name: String,
 
     secret_store: Arc<Mutex<HashMap<String, String>>>,
 }
@@ -35,10 +42,8 @@ struct AppState {
 #[post("/auth")]
 async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
     let username = payload.username.clone();
-    let password = payload.password.clone();
-    let client_tag = &data.curr_client_tag;
+    let pin = payload.pin.clone();
 
-    // Query KMS for username.
     let transaction_op = ProtoTransactionOp {
         op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
         operands: vec![username.clone().into_bytes()],
@@ -58,7 +63,7 @@ async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) ->
     // Username does not exist; create new username and password.
     let create_user_op = ProtoTransactionOp {
         op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-        operands: vec![username.clone().into_bytes(), hash(&password.into_bytes())],
+        operands: vec![username.clone().into_bytes(), hash(&pin.into_bytes())],
     };
 
     let _ = match send(vec![create_user_op], false, &data).await {
@@ -103,126 +108,109 @@ async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) ->
 
 #[post("/storesecret")]
 async fn storeSecret(payload: web::Json<StoreSecretPayload>, data: web::Data<AppState>) -> impl Responder {
-    let username = payload.username.clone();
-    let password = payload.password.clone();
+    let token = payload.token.clone();
     let val = payload.val.clone();
-    let pin = payload.pin.clone();
 
-    let client_tag = &data.curr_client_tag;
-
-    match authenticate_user(username.clone(), password, &data).await {
-        Ok(valid) => valid,
-        Err(e) => return e,
-    };
-
-    //register pin ,store secret
-    let mut user_pin = "pin:".to_string();
-    let mut user_secret = "secret:".to_string();
-
-    user_pin.push_str(&payload.username);
-    user_secret.push_str(&payload.username);
-
-    let write_user_pin_op = ProtoTransactionOp {
-        op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-        operands: vec![user_pin.into_bytes(), pin.into_bytes()],
-    };
-
-    let result = match send(vec![write_user_pin_op], false, &data).await {
-        Ok(response) => response,
-        Err(e) => return e,
-    };
-
-    // let write_user_secret_op = ProtoTransactionOp {
-    //     op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-    //     operands: vec![user_secret.into_bytes(), val.into_bytes()],
-    // };
-
-    // let result = match send(vec![write_user_secret_op], true, &data).await {
-    //     Ok(response) => response,
-    //     Err(e) => return e,
-    // };
+    if let val @ Ok(false) | val @ Err(_) = validate_token(&token, &data).await {
+        return HttpResponse::Unauthorized().json(serde_json::json!({
+            "message": "incorrect token",
+            "result": format!("{:?}", val),
+        }))
+    }
 
     {
         let mut secret_store = data.secret_store.lock().await;
-        secret_store.insert(username.clone(), val.clone());
+        secret_store.insert(token.username.clone(), val.clone());
     }
 
     HttpResponse::Ok().json(serde_json::json!({
         "message": "user secret store",
+        "user secret": val,
+    }))
+}
+
+const MAX_GUESSES: i64 = 3;
+
+#[get("/gettoken")]
+async fn getToken(payload: web::Json<GetTokenPayload>, data: web::Data<AppState>) -> impl Responder {
+    let username = payload.username.clone();
+    let pin = payload.pin.clone();
+
+    // Increment the pin guess.
+    let mut user_retry_count = "retries:".to_string();
+    user_retry_count.push_str(&payload.username);
+
+    let increment_user_pin_op = ProtoTransactionOp {
+        op_type: pft::proto::execution::ProtoTransactionOpType::Increment.into(),
+        operands: vec![user_retry_count.clone().into_bytes()]
+    };
+
+    let increment_user_pin_result = match send(vec![increment_user_pin_op],false, &data).await {
+        Ok(response) => response[0].clone(),
+        Err(e) => return e,
+    };
+
+    let total_guesses = match increment_user_pin_result.as_slice().try_into() {
+        Ok(arr) => {
+            i64::from_be_bytes(arr)
+        }
+        _ => { 0 }
+    };
+
+    if total_guesses > MAX_GUESSES {
+        return HttpResponse::Unauthorized().json(serde_json::json!({
+            "message": "too many guesses",
+            "retries": total_guesses,
+        }))
+    }
+
+    let res = authenticate_user(username.clone(), pin, &data).await;
+
+    if res.is_ok() {
+        // Reset the pin guess.
+        let reset_user_pin_op = ProtoTransactionOp {
+            op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
+            operands: vec![user_retry_count.into_bytes(), 0i64.to_be_bytes().to_vec()]
+        };
+
+        let _ = match send(vec![reset_user_pin_op], false, &data).await {
+            Ok(response) => response,
+            Err(e) => return e,
+        };
+    } else {
+        // Return the number of retries.
+        return HttpResponse::Unauthorized().json(serde_json::json!({
+            "message": "incorrect pin",
+            "retries": total_guesses,
+        }))
+    }
+
+
+    let one_hour_from_now = chrono::Utc::now() + chrono::Duration::hours(1);
+    let one_hour_from_now_str = one_hour_from_now.to_rfc3339();
+    let sig = one_hour_from_now_str.clone() + &username + &data.leader_name;
+    let signature = data.keys.sign(&sig.into_bytes());
+    let signature_string: String = signature.encode_hex();
+    
+    HttpResponse::Ok().json(serde_json::json!({
+        "valid_until": one_hour_from_now_str, 
+        "username": username,
+        "signature": signature_string,
+        "leader_name": &data.leader_name
     }))
 }
 
 #[get("/recoversecret")]
-async fn recoverSecret(payload: web::Json<RecoverSecretPayload>, data: web::Data<AppState>) -> impl Responder {
-    let username = payload.username.clone();
-    let password = payload.password.clone();
-    let pin = payload.pin.clone();
-    let client_tag = &data.curr_client_tag;
-
-    match authenticate_user(username, password, &data).await {
-        Ok(valid) => valid,
-        Err(e) => return e,
-    };
-
-    //compare pin if correct --> return secret; else --> increment pin count
-    let mut user_pin = "pin:".to_string();
-    let mut user_retry_count = "retries:".to_string();
-    let mut user_secret = "secret:".to_string();
-
-    user_pin.push_str(&payload.username);
-    user_retry_count.push_str(&payload.username);
-    user_secret.push_str(&payload.username);
-
-
-    let write_user_pin_op = ProtoTransactionOp {
-        op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
-        operands: vec![user_pin.into_bytes()]
-    };
-
-    let result = match send(vec![write_user_pin_op], false, &data).await {
-        Ok(response) => response,
-        Err(e) => return e,
-    };
-
-    if pin.into_bytes() != result[0] {
-        let increment_user_pin_op = ProtoTransactionOp {
-            op_type: pft::proto::execution::ProtoTransactionOpType::Increment.into(),
-            operands: vec![user_retry_count.into_bytes()]
-        };
-
-        let increment_user_pin_result = match send(vec![increment_user_pin_op],false, &data).await {
-            Ok(response) => response[0].clone(),
-            Err(e) => return e,
-        };
-
+async fn recoverSecret(token: web::Json<AuthToken>, data: web::Data<AppState>) -> impl Responder {
+    if let Ok(false) | Err(_) = validate_token(&token, &data).await {
         return HttpResponse::Unauthorized().json(serde_json::json!({
-            "message": "incorrect pin",
-            "pin": payload.pin.clone(),
-            "pinpin":payload.pin.clone().into_bytes(),
-            "real pin": result[0],
-            "retries": increment_user_pin_result,
+            "message": "incorrect token",
         }))
     }
 
-    // let get_user_secret_op = ProtoTransactionOp {
-    //     op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
-    //     operands: vec![user_secret.into_bytes()]
-    // };
-
-    // let get_user_secret_result = match send(vec![get_user_secret_op], false, &data).await {
-    //     Ok(response) if response.len() > 0 => response[0].clone(),
-    //     Err(e) => return e,
-    //     _ => return HttpResponse::InternalServerError().body("Invalid UTF-8 data"),
-    // };
-
-    // let user_secret = match String::from_utf8(get_user_secret_result) {
-    //     Ok(user_secret) => user_secret,
-    //     Err(e) => return HttpResponse::InternalServerError().body("Invalid UTF-8 data"),
-    // };
-
     let user_secret = {
         let secret_store = data.secret_store.lock().await;
-        match secret_store.get(&payload.username) {
+        match secret_store.get(&token.username) {
             Some(secret) => secret.clone(),
             None => return HttpResponse::NotFound().json(serde_json::json!({
                 "message": "user not found",
@@ -255,6 +243,11 @@ async fn home(_data: web::Data<AppState>) -> impl Responder {
 }
 
 pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::channel::AsyncSenderWrapper<TxWithAckChanTag>, actix_threads: usize) -> std::io::Result<()> {
+    let keys = KeyStore::new(&config.rpc_config.allowed_keylist_path, &config.rpc_config.signing_priv_key_path);
+    // keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
+    // let keys = keys.clone();
+    let name =  config.net_config.name.clone();
+
     let addr = config.net_config.addr.clone();
     // Add 1000 to the port.
     let (host, port) = addr.split_once(':').unwrap();
@@ -275,6 +268,8 @@ pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::cha
             probe_for_byz_commit: probe_for_byz_commit.clone(),
             curr_client_tag: AtomicU64::new(0),
             secret_store: secret_store.clone(),
+            keys: keys.clone(),
+            leader_name: name.clone(),
         };
 
         App::new()
@@ -284,6 +279,7 @@ pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::cha
             .service(storeSecret)
             .service(recoverSecret)
             .service(toggle_byz_wait)
+            .service(getToken)
     })
     .bind("127.0.0.1:8080")?
     .run()
@@ -362,9 +358,9 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, isRead: bool, state: &Ap
 
 async fn authenticate_user(
     username: String,
-    password: String,
+    pin: String,
     data: &AppState,
-) -> Result<bool, HttpResponse> {
+) -> Result<(), HttpResponse> {
     let transaction_op = ProtoTransactionOp {
         op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
         operands: vec![username.clone().into_bytes()],
@@ -382,15 +378,26 @@ async fn authenticate_user(
         })));
     }
 
-    if hash(&password.into_bytes()) != result[0] {
+    if hash(&pin.into_bytes()) != result[0] {
         return Err(HttpResponse::Unauthorized().json(serde_json::json!({
-            "message": "incorrect password",
+            "message": "incorrect pin",
             "user": username,
         })));
     }
-    Ok(true)
+    Ok(())
 }
 
+
+async fn validate_token(token: &AuthToken, data: &AppState) -> Result< bool, Box<dyn std::error::Error>> {
+    let parsed_time = DateTime::parse_from_rfc3339(&token.valid_until)?;
+
+    if parsed_time.time() < chrono::Utc::now().time() {
+        return Ok(false);
+    }
+
+    let check = token.valid_until.clone() + &token.username + &token.leader_name;
+    Ok(data.keys.verify(&token.leader_name, hex::decode(token.signature.clone())?.as_slice().try_into()?, &check.into_bytes()))
+}
 /*
 Example usage:
 curl -X POST "http://localhost:8080/auth" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"hi"}'
