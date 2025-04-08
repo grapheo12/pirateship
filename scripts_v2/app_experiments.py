@@ -94,9 +94,10 @@ class AppExperiment(Experiment):
                 "addr": connect_addr,
                 "domain": domain
             }
-            self.getRequestHosts.append(f"http://{private_ip}:{port + 1000}") # This +1000 is hardcoded in contrib/kms/main.rs
             if node_num == 1:
                 self.probableLeader = f"http://{private_ip}:{port + 1000}"
+            else:
+                self.getRequestHosts.append(f"http://{private_ip}:{port + 1000}") # This +1000 is hardcoded in contrib/kms/main.rs
 
             node_list_for_crypto[name] = (connect_addr, domain)
 
