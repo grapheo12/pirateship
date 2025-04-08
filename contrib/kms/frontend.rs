@@ -319,11 +319,6 @@ async fn home(_data: web::Data<AppState>) -> impl Responder {
 }
 
 pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::channel::AsyncSenderWrapper<TxWithAckChanTag>, actix_threads: usize) -> std::io::Result<()> {
-    // Prepare keys.
-    let mut keys = KeyStore::empty();
-    keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
-    let keys = keys.clone();
-
     let addr = config.net_config.addr.clone();
     // Add 1000 to the port.
     let (host, port) = addr.split_once(':').unwrap();

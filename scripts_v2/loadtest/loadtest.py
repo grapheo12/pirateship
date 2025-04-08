@@ -1,5 +1,4 @@
 import json
-import requests
 import subprocess
 import sys
 import time
@@ -7,6 +6,8 @@ import asyncio
 import aiohttp
 import random
 import uuid
+import shamir
+import argparse
 
 MAX_CONCURRENT_REQUESTS = 200
 
@@ -27,7 +28,23 @@ async def register_user(host, usernames, password, connector):
             await session.close()
             print(f"An error occurred: {e}")
 
-async def register_users(host, num_users, password="pirateship", workers_per_client=2, num_client_nodes=1):
+async def create_secret(host, usernames, password, session, nodes, threshold):
+    try:
+        secret = 123456789
+        splits = shamir.split_secret(secret, nodes, threshold, 10)
+        for username in usernames:
+            async with session.post(f"{host}/auth", json={"username": username, "password": password}) as response:
+                if response.status != 200:
+                    print(f"Error registering {username}: {await response.text()}")
+
+            async with session.post(f"{host}/storesecret", json={"username": username, "password": password, "val": str(secret), "pin": "1234"}) as response:
+                if response.status != 200:
+                    print(f"Error storing secret {username}: {await response.text()}")
+    except Exception as e:
+        await session.close()
+        print(f"An error occurred: {e}")
+
+async def register_users(host, num_users, application, password="pirateship", workers_per_client=2, num_client_nodes=1, threshold=1):
     max_user_id_length = len(str(num_users))
 
     tasks = []
@@ -56,10 +73,14 @@ async def register_users(host, num_users, password="pirateship", workers_per_cli
         username_chunks.append(usernames[i:i + chunk_size])
 
     
-    for chunk in username_chunks:
-        tasks.append(register_user(host, chunk, password, connector))
+    async with aiohttp.ClientSession(connector=connector) as session:
+        for chunk in username_chunks:
+            if application == "kms":
+                tasks.append(register_user(host, chunk, password, session))
+            if application == "svr3":
+                tasks.append(create_secret(host, chunk, password, session, total_machines, threshold))
 
-    await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     await connector.close()
 
@@ -67,10 +88,10 @@ async def register_users(host, num_users, password="pirateship", workers_per_cli
 
 def run_locust(locust_file, host, num_users, getDistribution, getRequestHosts=[], master_host="localhost", workers_per_client=2, num_client_nodes=1):
     custom_user_config = {
-        "user_class_name":"testClass", 
+        "user_class_name":"Svr3User",   
         "getDistribution": getDistribution,
         "getRequestHosts": getRequestHosts
-    }
+    } 
     json_config = json.dumps(custom_user_config)
     json_config = "'" + json_config + "'"
 
@@ -120,23 +141,44 @@ def run_locust(locust_file, host, num_users, getDistribution, getRequestHosts=[]
 
 if __name__ == "__main__":
     if len(sys.argv) < 5:
-        print("Usage: python run_test.py <host> <num_users> <locust_file> <get_ratio> [<get_request_hosts>]")
+        print("Usage: python run_test.py <host> <num_users> <locust_file> <get_ratio> <application> [<get_request_hosts>]")
         sys.exit(1)
     
-    host = sys.argv[1]
-    num_users = int(sys.argv[2])
-    locust_file = sys.argv[3]
-    get_ratio = int(sys.argv[4])
-    get_request_hosts = sys.argv[5:]
+    parser = argparse.ArgumentParser(description="Run load tests with locust")
+    
+    # Define all command-line arguments with '--' prefix for named parameters.
+    parser.add_argument("--host", required=True)
+    parser.add_argument("--num_users", type=int, required=True)
+    parser.add_argument("--locust_file", required=True, help="Path to the locust file")
+    parser.add_argument("--get_ratio", type=int, default=100, help="Ratio of GET requests")
+    parser.add_argument("--application", required=True, choices=["kms", "svr3"])
+    parser.add_argument("--nodes", type=int, default=1)
+    parser.add_argument("--get_request_hosts", nargs="+", default=[])
+    #svr3 specific arguments
+    parser.add_argument("--threshold", type=int, default=1)
 
-    
-    print("Performing Load Phase...")
-    asyncio.run(register_users(host, num_users))
-    
-    time.sleep(2)
+    args = parser.parse_args()
+
+    host = args.host
+    num_users = args.num_users
+    locust_file = args.locust_file
+    get_ratio = args.get_ratio
+    application = args.application
+    nodes = args.nodes
+    get_request_hosts = args.get_request_hosts
+    threshold = args.threshold
+
+    if application == "kms":
+        print("Performing Load Phase with KMS...")
+        asyncio.run(register_users(host, num_users, application))
+        
+        time.sleep(2)
+    elif application == "svr3":
+        print("Performing Load Phase with SVR3...")
+        asyncio.run(register_users(host, num_users, application, threshold=threshold))
 
     print("Performing Run Phase...")
-    
+        
     run_locust(locust_file, host, num_users, get_ratio, get_request_hosts)
 
     print("Load test completed.")
