@@ -1,6 +1,7 @@
 use std::{collections::{HashMap, VecDeque}, pin::Pin, sync::Arc, time::{Duration, Instant}};
 
 use log::info;
+use nix::libc::exit;
 
 use crate::utils::{channel::Receiver, timer::ResettableTimer};
 
@@ -60,6 +61,8 @@ impl ClientStatLogger {
 
         info!("Logging over after {} s", logger_start_time.elapsed().as_secs());
         self.log_stats();
+
+        panic!("Client stat logger is exiting");
     }
 
     fn collect_stat(&mut self, stat: ClientWorkerStat) {

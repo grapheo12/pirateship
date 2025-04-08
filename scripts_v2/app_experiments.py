@@ -259,12 +259,12 @@ PID="$PID $!"
 """
             
             # Run the toggle program in the locust master
-            toggle_ramp_up = self.duration // 3
-            if toggle_ramp_up > 90:
-                toggle_ramp_up = 90
-            toggle_duration = self.duration // 3
-            if toggle_duration > 90:
-                toggle_duration = 90
+            if self.duration > 200:
+                toggle_ramp_up = 120
+                toggle_duration = 60
+            else:
+                toggle_duration = self.duration // 3
+                toggle_duration = self.duration // 3
 
             _script += f"""
 # Run the toggle program
