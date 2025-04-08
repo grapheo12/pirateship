@@ -22,20 +22,21 @@ rnd = random.Random()
 curr_num_users = 0
 max_users = 1
 glob_seed = None
+workload = None
 
 
 #setup phase -- this is synchronous with the load test.
 @events.test_start.add_listener
 def on_test_setup(environment, **kwargs):
-    global getWeight, getRequestHosts, glob_seed, max_users, curr_num_users, rnd, threshold
+    global getWeight, getRequestHosts, glob_seed, max_users, curr_num_users, rnd, threshold, workload
 
     user_config = environment.parsed_options.config_users[0]
 
-    user_config = environment.parsed_options.config_users[0][0]
-    print(user_config)
     try:
         if type(user_config) == str:
             user_config = json.loads(user_config)
+        else:
+            user_config = environment.parsed_options.config_users[0][0]
         logger.info(user_config)
         getWeight = user_config["getDistribution"]
         print("getDistribution: ", getWeight, "postDistribution: ", 100 - getWeight)
@@ -51,7 +52,11 @@ def on_test_setup(environment, **kwargs):
 
         machineId = user_config.get("machineId", 0)
 
-        threshold = user_config.get("threshold", len(getRequestHosts) - 1)
+        workload = user_config.get("workload", "kms")
+
+        if workload == "svr3":
+            threshold = user_config.get("threshold", len(getRequestHosts) - 1)
+
 
     except Exception as e:
         raise Exception(environment.parsed_options.config_users)
@@ -62,40 +67,11 @@ def on_test_setup(environment, **kwargs):
     rnd.seed(seed)
     glob_seed = seed
 
-# class testClass(FastHttpUser):
-#     # wait_time = constant_throughput(50)
-
-#     def on_start(self):
-#         # We need to magically generate unique usernames without any kind of central coordination.
-#         # Since with distributed load testing, we can't guarantee that the same username won't be used by another user.
-#         self.username = "user" + str(uuid.UUID(int=rnd.getrandbits(128)))
-#         self.password = "pirateship"
-
-
-#         # For optimal load balancing, need to hash the username to a get_host
-#         hsh = hashlib.sha256(self.username.encode()).digest()
-#         val = int.from_bytes(hsh, 'big')
-
-#         if len(getRequestHosts) == 0:
-#             self.my_get_host = "" # Use the default host
-#         else:
-#             self.my_get_host = getRequestHosts[val % len(getRequestHosts)]
-
-
-#     #run phase 
-#     @task
-#     def task1(self):
-#         choice = random.uniform(0, 100)
-#         if choice < getWeight:
-#             self.client.get(f"{self.my_get_host}/pubkey", json={"username": self.username})
-#         else:
-#             self.client.post("/refresh", json={"username": self.username, "password": "pirateship"})
-
-class Svr3User(FastHttpUser):
+class TestUser(FastHttpUser):
     # wait_time = constant_throughput(50)
 
     def on_start(self):
-        global getWeight, getRequestHosts, glob_seed, max_users, curr_num_users, rnd
+        global getWeight, getRequestHosts, glob_seed, max_users, curr_num_users, rnd, workload
 
         if curr_num_users >= max_users:
             curr_num_users = 0
@@ -118,12 +94,33 @@ class Svr3User(FastHttpUser):
         else:
             self.my_get_host = getRequestHosts[val % len(getRequestHosts)]
 
-        
-        secretKeyHosts = [getRequestHosts[i] for i in random.sample(range(len(getRequestHosts)), k=threshold)]
-        logger.info(f"{threshold}, {secretKeyHosts}")
-        
+        if workload == "svr3":
+            self.secretKeyHosts = [getRequestHosts[i] for i in random.sample(range(len(getRequestHosts)), k=threshold)]
+            logger.info(f"{threshold}, {secretKeyHosts}")
+
+
+    #run phase 
     @task
     def task1(self):
+        global workload
+
+        assert workload is not None
+
+        if workload == "kms":
+            self.kms_task()
+        elif workload == "svr3":
+            self.svr3_task()
+
+
+    def kms_task(self):
+        choice = random.uniform(0, 100)
+        if choice < getWeight:
+            self.client.get(f"{self.my_get_host}/pubkey", json={"username": self.username})
+        else:
+            self.client.post("/refresh", json={"username": self.username, "password": "pirateship"})
+
+
+    def svr3_task(self):
         choice = random.uniform(0, 100)
         if choice < getWeight:
             self.client.get(f"{self.my_get_host}/recoversecret", json={"username": self.username, "password":self.password, "pin":"1234"})
