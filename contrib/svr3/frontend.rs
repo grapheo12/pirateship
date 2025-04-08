@@ -123,12 +123,17 @@ async fn storeSecret(payload: web::Json<StoreSecretPayload>, data: web::Data<App
         operands: vec![user_pin.into_bytes(), pin.into_bytes()],
     };
 
+    let result = match send(vec![write_user_pin_op], false, &data).await {
+        Ok(response) => response,
+        Err(e) => return e,
+    };
+
     let write_user_secret_op = ProtoTransactionOp {
         op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
         operands: vec![user_secret.into_bytes(), val.into_bytes()],
     };
 
-    let result = match send(vec![write_user_pin_op, write_user_secret_op], false, &data).await {
+    let result = match send(vec![write_user_secret_op], true, &data).await {
         Ok(response) => response,
         Err(e) => return e,
     };
