@@ -96,8 +96,7 @@ class AppExperiment(Experiment):
             }
             if node_num == 1:
                 self.probableLeader = f"http://{private_ip}:{port + 1000}"
-            else:
-                self.getRequestHosts.append(f"http://{private_ip}:{port + 1000}") # This +1000 is hardcoded in contrib/kms/main.rs
+            self.getRequestHosts.append(f"http://{private_ip}:{port + 1000}") # This +1000 is hardcoded in contrib/kms/main.rs
 
             node_list_for_crypto[name] = (connect_addr, domain)
 
@@ -261,15 +260,15 @@ PID="$PID $!"
             
             # Run the toggle program in the locust master
             toggle_ramp_up = self.duration // 3
-            if toggle_ramp_up > 60:
-                toggle_ramp_up = 60
+            if toggle_ramp_up > 90:
+                toggle_ramp_up = 90
             toggle_duration = self.duration // 3
-            if toggle_duration > 60:
-                toggle_duration = 60
+            if toggle_duration > 90:
+                toggle_duration = 90
 
             _script += f"""
 # Run the toggle program
-# $SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} 'python3 {self.remote_workdir}/build/toggle.py {host} {toggle_ramp_up} {toggle_duration} > {self.remote_workdir}/logs/{repeat_num}/toggle.log 2> {self.remote_workdir}/logs/{repeat_num}/toggle.err' &
+$SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} 'python3 {self.remote_workdir}/build/toggle.py {host} {toggle_ramp_up} {toggle_duration} > {self.remote_workdir}/logs/{repeat_num}/toggle.log 2> {self.remote_workdir}/logs/{repeat_num}/toggle.err' &
 PID="$PID $!"
 """
             
