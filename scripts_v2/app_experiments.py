@@ -94,9 +94,9 @@ class AppExperiment(Experiment):
                 "addr": connect_addr,
                 "domain": domain
             }
-            self.getRequestHosts.append(f"http://{private_ip}:{port + 1000}") # This +1000 is hardcoded in contrib/kms/main.rs
             if node_num == 1:
                 self.probableLeader = f"http://{private_ip}:{port + 1000}"
+            self.getRequestHosts.append(f"http://{private_ip}:{port + 1000}") # This +1000 is hardcoded in contrib/kms/main.rs
 
             node_list_for_crypto[name] = (connect_addr, domain)
 
@@ -145,6 +145,12 @@ class AppExperiment(Experiment):
         self.total_worker_processes = self.total_client_vms * self.workers_per_client
         self.locust_master = self.client_vms[0]
         self.workload = self.base_client_config.get("workload", "kms")
+        self.total_machines = self.workers_per_client * self.total_client_vms
+
+        users_per_clients = [self.num_clients // self.total_machines] * self.total_machines
+        users_per_clients[-1] += self.num_clients - sum(users_per_clients)
+        self.users_per_clients = users_per_clients
+
 
         for client_vm_num in range(len(client_vms)):
             for worker_num in range(self.workers_per_client):
@@ -230,7 +236,7 @@ sleep {load_phase_seconds}
 # Run phase start
 
 # Run the locust master
-$SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} '/home/pftadmin/.local/bin/locust -f {self.remote_workdir}/build/locustfile.py --timescale --headless --master --users {self.num_clients} --spawn-rate {int(self.total_worker_processes * 1000)} --host {host} --run-time {self.duration}s --config-users {config_users_str} --pguser postgres --pgpassword password > {self.remote_workdir}/logs/{repeat_num}/locust-master.log 2> {self.remote_workdir}/logs/{repeat_num}/locust-master.err' &
+$SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} '/home/pftadmin/.local/bin/locust -f {self.remote_workdir}/build/locustfile.py --timescale --headless --master --users {self.num_clients} --spawn-rate {int(self.total_worker_processes * 100)} --host {host} --run-time {self.duration}s --config-users {config_users_str} --pguser postgres --pgpassword password > {self.remote_workdir}/logs/{repeat_num}/locust-master.log 2> {self.remote_workdir}/logs/{repeat_num}/locust-master.err' &
 PID="$PID $!"
 sleep 1
 
@@ -242,6 +248,7 @@ sleep 1
                     if "client" in bin:
                         machineId = int(bin[6:])
                         config_users["machineId"] = machineId
+                        config_users["max_users"] = self.users_per_clients[machineId]
                         config_users_str = "'\"'\"'" + json.dumps(config_users) + "'\"'\"'"
                     else:
                         continue
@@ -252,12 +259,12 @@ PID="$PID $!"
 """
             
             # Run the toggle program in the locust master
-            toggle_ramp_up = self.duration // 3
-            if toggle_ramp_up > 60:
-                toggle_ramp_up = 60
-            toggle_duration = self.duration // 3
-            if toggle_duration > 60:
+            if self.duration > 200:
+                toggle_ramp_up = 120
                 toggle_duration = 60
+            else:
+                toggle_duration = self.duration // 3
+                toggle_duration = self.duration // 3
 
             _script += f"""
 # Run the toggle program
