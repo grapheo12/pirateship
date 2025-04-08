@@ -146,6 +146,12 @@ class AppExperiment(Experiment):
         self.total_worker_processes = self.total_client_vms * self.workers_per_client
         self.locust_master = self.client_vms[0]
         self.workload = self.base_client_config.get("workload", "kms")
+        self.total_machines = self.workers_per_client * self.total_client_vms
+
+        users_per_clients = [self.num_clients // self.total_machines] * self.total_machines
+        users_per_clients[-1] += self.num_clients - sum(users_per_clients)
+        self.users_per_clients = users_per_clients
+
 
         for client_vm_num in range(len(client_vms)):
             for worker_num in range(self.workers_per_client):
@@ -243,6 +249,7 @@ sleep 1
                     if "client" in bin:
                         machineId = int(bin[6:])
                         config_users["machineId"] = machineId
+                        config_users["max_users"] = self.users_per_clients[machineId]
                         config_users_str = "'\"'\"'" + json.dumps(config_users) + "'\"'\"'"
                     else:
                         continue
@@ -262,7 +269,7 @@ PID="$PID $!"
 
             _script += f"""
 # Run the toggle program
-$SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} 'python3 {self.remote_workdir}/build/toggle.py {host} {toggle_ramp_up} {toggle_duration} > {self.remote_workdir}/logs/{repeat_num}/toggle.log 2> {self.remote_workdir}/logs/{repeat_num}/toggle.err' &
+# $SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} 'python3 {self.remote_workdir}/build/toggle.py {host} {toggle_ramp_up} {toggle_duration} > {self.remote_workdir}/logs/{repeat_num}/toggle.log 2> {self.remote_workdir}/logs/{repeat_num}/toggle.err' &
 PID="$PID $!"
 """
             

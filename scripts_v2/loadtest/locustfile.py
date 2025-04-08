@@ -16,10 +16,15 @@ getRequestHosts = []
 RAND_SEED_LIST = [42, 120, 430, 82, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110]
 rnd = random.Random()
 
+curr_num_users = 0
+max_users = 1
+glob_seed = None
+
+
 #setup phase -- this is synchronous with the load test.
 @events.test_start.add_listener
 def on_test_setup(environment, **kwargs):
-    global getWeight, getRequestHosts
+    global getWeight, getRequestHosts, glob_seed, max_users, curr_num_users, rnd
 
     user_config = environment.parsed_options.config_users[0]
 
@@ -37,6 +42,9 @@ def on_test_setup(environment, **kwargs):
 
         getRequestHosts = user_config.get("getRequestHosts", [])
 
+        if "max_users" in user_config:
+            max_users = int(user_config["max_users"])
+
         machineId = user_config.get("machineId", 0)
     except Exception as e:
         raise Exception(environment.parsed_options.config_users)
@@ -45,6 +53,7 @@ def on_test_setup(environment, **kwargs):
     # This ensures the same seed is used between load and run phase to generate user names
     seed = RAND_SEED_LIST[machineId % len(RAND_SEED_LIST)] * (1 + machineId // len(RAND_SEED_LIST))
     rnd.seed(seed)
+    glob_seed = seed
 
 
 
@@ -53,6 +62,14 @@ class testClass(FastHttpUser):
     wait_time = constant_throughput(50)
 
     def on_start(self):
+        global getWeight, getRequestHosts, glob_seed, max_users, curr_num_users, rnd
+
+        if curr_num_users >= max_users:
+            curr_num_users = 0
+            rnd.seed(glob_seed)
+        
+        curr_num_users += 1
+
         # We need to magically generate unique usernames without any kind of central coordination.
         # Since with distributed load testing, we can't guarantee that the same username won't be used by another user.
         self.username = "user" + str(uuid.UUID(int=rnd.getrandbits(128)))
