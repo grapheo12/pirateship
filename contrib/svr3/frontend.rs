@@ -4,6 +4,7 @@ use pft::consensus_v2::batch_proposal::TxWithAckChanTag;
 use prost::Message;
 use serde_json::value;
 use tokio::sync::{mpsc, Mutex};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -26,6 +27,9 @@ struct AppState {
     probe_for_byz_commit: Arc<AtomicBool>,
     /// Only a per-thread client tag counter remains.
     curr_client_tag: AtomicU64,
+
+
+    secret_store: Arc<Mutex<HashMap<String, String>>>,
 }
 
 #[post("/auth")]
@@ -106,7 +110,7 @@ async fn storeSecret(payload: web::Json<StoreSecretPayload>, data: web::Data<App
 
     let client_tag = &data.curr_client_tag;
 
-    match authenticate_user(username, password,&data).await {
+    match authenticate_user(username.clone(), password, &data).await {
         Ok(valid) => valid,
         Err(e) => return e,
     };
@@ -128,15 +132,20 @@ async fn storeSecret(payload: web::Json<StoreSecretPayload>, data: web::Data<App
         Err(e) => return e,
     };
 
-    let write_user_secret_op = ProtoTransactionOp {
-        op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-        operands: vec![user_secret.into_bytes(), val.into_bytes()],
-    };
+    // let write_user_secret_op = ProtoTransactionOp {
+    //     op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
+    //     operands: vec![user_secret.into_bytes(), val.into_bytes()],
+    // };
 
-    let result = match send(vec![write_user_secret_op], true, &data).await {
-        Ok(response) => response,
-        Err(e) => return e,
-    };
+    // let result = match send(vec![write_user_secret_op], true, &data).await {
+    //     Ok(response) => response,
+    //     Err(e) => return e,
+    // };
+
+    {
+        let mut secret_store = data.secret_store.lock().await;
+        secret_store.insert(username.clone(), val.clone());
+    }
 
     HttpResponse::Ok().json(serde_json::json!({
         "message": "user secret store",
@@ -195,19 +204,30 @@ async fn recoverSecret(payload: web::Json<RecoverSecretPayload>, data: web::Data
         }))
     }
 
-    let get_user_secret_op = ProtoTransactionOp {
-        op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
-        operands: vec![user_secret.into_bytes()]
-    };
+    // let get_user_secret_op = ProtoTransactionOp {
+    //     op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+    //     operands: vec![user_secret.into_bytes()]
+    // };
 
-    let get_user_secret_result = match send(vec![get_user_secret_op], false, &data).await {
-        Ok(response) => response[0].clone(),
-        Err(e) => return e,
-    };
+    // let get_user_secret_result = match send(vec![get_user_secret_op], false, &data).await {
+    //     Ok(response) if response.len() > 0 => response[0].clone(),
+    //     Err(e) => return e,
+    //     _ => return HttpResponse::InternalServerError().body("Invalid UTF-8 data"),
+    // };
 
-    let user_secret = match String::from_utf8(get_user_secret_result) {
-        Ok(user_secret) => user_secret,
-        Err(e) => return HttpResponse::InternalServerError().body("Invalid UTF-8 data"),
+    // let user_secret = match String::from_utf8(get_user_secret_result) {
+    //     Ok(user_secret) => user_secret,
+    //     Err(e) => return HttpResponse::InternalServerError().body("Invalid UTF-8 data"),
+    // };
+
+    let user_secret = {
+        let secret_store = data.secret_store.lock().await;
+        match secret_store.get(&payload.username) {
+            Some(secret) => secret.clone(),
+            None => return HttpResponse::NotFound().json(serde_json::json!({
+                "message": "user not found",
+            })),
+        }
     };
 
     HttpResponse::Ok().json(serde_json::json!({
@@ -246,6 +266,7 @@ pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::cha
 
 
     let probe_for_byz_commit = Arc::new(AtomicBool::new(false)); // This is a global state!
+    let secret_store = Arc::new(Mutex::new(HashMap::new()));
 
     HttpServer::new(move || {
         // Each worker thread creates its own client instance.
@@ -253,6 +274,7 @@ pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::cha
             batch_proposer_tx: batch_proposer_tx.clone(),
             probe_for_byz_commit: probe_for_byz_commit.clone(),
             curr_client_tag: AtomicU64::new(0),
+            secret_store: secret_store.clone(),
         };
 
         App::new()
