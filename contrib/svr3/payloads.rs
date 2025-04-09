@@ -16,8 +16,6 @@ pub struct StoreSecretPayload {
 
 #[derive(Deserialize)]
 pub struct RecoverSecretPayload {
-    pub username: String,
-    // pub password: String,
     pub token: AuthToken,
 }
 
@@ -26,11 +24,13 @@ pub struct AuthToken {
     pub valid_until: String,
     pub username: String,
     pub signature: String,
-    pub leader_name: String
+    pub leader_name: String, 
+    pub version: u32,           // Optional, new total ordered version that can be used to store secrets atomically.
 }
 
 #[derive(Deserialize)]
 pub struct GetTokenPayload {
     pub username: String,
     pub pin: String,
+    pub increment_version: bool,
 }

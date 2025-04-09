@@ -44,7 +44,7 @@ async def create_secret(host, usernames, password, session, nodes, threshold):
         await session.close()
         print(f"An error occurred: {e}")
 
-async def register_users(host, num_users, application, password="pirateship", workers_per_client=2, num_client_nodes=1, threshold=1):
+async def register_users(host, num_users, application, password="pirateship", workers_per_client=2, num_client_nodes=2, threshold=1):
     max_user_id_length = len(str(num_users))
 
     tasks = []
@@ -62,8 +62,12 @@ async def register_users(host, num_users, application, password="pirateship", wo
         rnd = random.Random()
         rnd.seed(RAND_SEED_LIST[i % len(RAND_SEED_LIST)] * (1 + i // len(RAND_SEED_LIST)))
 
-        _usernames = ["user" + str(uuid.UUID(int=rnd.getrandbits(128))) for _ in range(users_per_clients[i])]
+        _usernames = ["user" + str(uuid.UUID(int=rnd.getrandbits(128))) for j in range(users_per_clients[i])]
         usernames.extend(_usernames)
+
+    with open("Usernames.txt", "w") as f:
+        for username in usernames:
+            f.write(username + "\n")
         
 
     # Split the usernames into chunks to avoid overwhelming the server
@@ -87,7 +91,7 @@ async def register_users(host, num_users, application, password="pirateship", wo
 
 
 
-def run_locust(locust_file, host, num_users, getDistribution, getRequestHosts=[], master_host="localhost", workers_per_client=2, num_client_nodes=1):
+def run_locust(locust_file, host, num_users, getDistribution, getRequestHosts=[], master_host="localhost", workers_per_client=2, num_client_nodes=2):
     custom_user_config = {
         "user_class_name": "TestUser",   
         "getDistribution": getDistribution,

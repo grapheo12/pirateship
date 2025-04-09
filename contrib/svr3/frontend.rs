@@ -10,6 +10,7 @@ use serde::ser::Error;
 use serde_json::value;
 use tokio::sync::{mpsc, Mutex};
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -36,7 +37,7 @@ struct AppState {
     keys: KeyStore,
     leader_name: String,
 
-    secret_store: Arc<Mutex<HashMap<String, String>>>,
+    secret_store: Arc<Mutex<HashMap<String, HashMap<u32, String>>>>,
 }
 
 #[post("/auth")]
@@ -120,7 +121,12 @@ async fn storeSecret(payload: web::Json<StoreSecretPayload>, data: web::Data<App
 
     {
         let mut secret_store = data.secret_store.lock().await;
-        secret_store.insert(token.username.clone(), val.clone());
+        let vec = secret_store.entry(token.username.clone())
+            .or_insert_with(HashMap::new);
+
+        vec.insert(payload.token.version, val.clone());
+
+
     }
 
     HttpResponse::Ok().json(serde_json::json!({
@@ -136,67 +142,131 @@ async fn getToken(payload: web::Json<GetTokenPayload>, data: web::Data<AppState>
     let username = payload.username.clone();
     let pin = payload.pin.clone();
 
-    // Increment the pin guess.
-    let mut user_retry_count = "retries:".to_string();
-    user_retry_count.push_str(&payload.username);
-
-    let increment_user_pin_op = ProtoTransactionOp {
-        op_type: pft::proto::execution::ProtoTransactionOpType::Increment.into(),
-        operands: vec![user_retry_count.clone().into_bytes()]
-    };
-
-    let increment_user_pin_result = match send(vec![increment_user_pin_op],false, &data).await {
-        Ok(response) => response[0].clone(),
-        Err(e) => return e,
-    };
-
-    let total_guesses = match increment_user_pin_result.as_slice().try_into() {
-        Ok(arr) => {
-            i64::from_be_bytes(arr)
-        }
-        _ => { 0 }
-    };
-
-    if total_guesses > MAX_GUESSES {
-        return HttpResponse::Unauthorized().json(serde_json::json!({
-            "message": "too many guesses",
-            "retries": total_guesses,
-        }))
-    }
-
     let res = authenticate_user(username.clone(), pin, &data).await;
+    if res.is_err() {
+        if let Err(e) = res {
+            if e.status() == actix_web::http::StatusCode::NOT_FOUND {
+                return e;
+            }
+        }
+        // Blindly increment the pin guess.
+        let mut user_retry_count = "retries:".to_string();
+        user_retry_count.push_str(&payload.username);
 
-    if res.is_ok() {
-        // Reset the pin guess.
-        let reset_user_pin_op = ProtoTransactionOp {
-            op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-            operands: vec![user_retry_count.into_bytes(), 0i64.to_be_bytes().to_vec()]
+        let increment_user_pin_op = ProtoTransactionOp {
+            op_type: pft::proto::execution::ProtoTransactionOpType::Increment.into(),
+            operands: vec![user_retry_count.clone().into_bytes()]
         };
 
-        let _ = match send(vec![reset_user_pin_op], false, &data).await {
-            Ok(response) => response,
+        let increment_user_pin_result = match send(vec![increment_user_pin_op],false, &data).await {
+            Ok(response) => response[0].clone(),
             Err(e) => return e,
         };
-    } else {
-        // Return the number of retries.
+
+        let total_guesses = match increment_user_pin_result.as_slice().try_into() {
+            Ok(arr) => {
+                i64::from_be_bytes(arr)
+            }
+            _ => { 0 }
+        };
+
         return HttpResponse::Unauthorized().json(serde_json::json!({
             "message": "incorrect pin",
             "retries": total_guesses,
         }))
-    }
 
+
+    } else {
+        // Check the pin guess.
+        let transaction_op = ProtoTransactionOp {
+            op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+            operands: vec![("retries:".to_string() + &username).into_bytes()],
+        };
+
+        let read_user_pin_result = match send(vec![transaction_op], true, &data).await {
+            Ok(response) if response.len() > 0 => response[0].clone(),
+            Err(e) => return e,
+            _ => {
+                0i64.to_be_bytes().to_vec()
+            }
+        };
+
+        let total_guesses = match read_user_pin_result.as_slice().try_into() {
+            Ok(arr) => {
+                i64::from_be_bytes(arr)
+            }
+            _ => { 0 }
+        };
+
+        if total_guesses > MAX_GUESSES {
+            return HttpResponse::Unauthorized().json(serde_json::json!({
+                "message": "too many guesses",
+                "retries": total_guesses,
+            }))
+        }
+
+        // Or try to CAS it 0.
+        // If it fails, we don't retry.
+        let reset_user_pin_op = ProtoTransactionOp {
+            op_type: pft::proto::execution::ProtoTransactionOpType::Cas.into(),
+            operands: vec![("retries:".to_string() + &username).into_bytes(), 0i64.to_be_bytes().to_vec(), total_guesses.to_be_bytes().to_vec()]
+        };
+
+        let _ = send(vec![reset_user_pin_op], false, &data).await;
+    }
 
     let one_hour_from_now = chrono::Utc::now() + chrono::Duration::hours(1);
     let one_hour_from_now_str = one_hour_from_now.to_rfc3339();
     let sig = one_hour_from_now_str.clone() + &username + &data.leader_name;
     let signature = data.keys.sign(&sig.into_bytes());
     let signature_string: String = signature.encode_hex();
+
+    let version = if payload.increment_version {
+        let increment_user_version_op = ProtoTransactionOp {
+            op_type: pft::proto::execution::ProtoTransactionOpType::Increment.into(),
+            operands: vec![("version:".to_string() + &username).into_bytes()]
+        };
+
+        let increment_user_version_result = match send(vec![increment_user_version_op], false, &data).await {
+            Ok(response) => response,
+            Err(e) => return e,
+        };
+
+        let next_version = match increment_user_version_result[0].as_slice().try_into() {
+            Ok(arr) => {
+                i64::from_be_bytes(arr)
+            }
+            _ => { 0 }
+        } as u32;
+
+        next_version
+    } else {
+        // Just read the version.
+        let transaction_op = ProtoTransactionOp {
+            op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+            operands: vec![("version:".to_string() + &username).into_bytes()],
+        };
+
+        let read_user_version_result = match send(vec![transaction_op], true, &data).await {
+            Ok(response) => response[0].clone(),
+            Err(e) => return e,
+        };
+        let curr_version = match read_user_version_result.as_slice().try_into() {
+            Ok(arr) => {
+                i64::from_be_bytes(arr)
+            }
+            _ => { 0 }
+        } as u32;
+
+        curr_version
+    };
     
     HttpResponse::Ok().json(serde_json::json!({
         "valid_until": one_hour_from_now_str, 
         "username": username,
         "signature": signature_string,
-        "leader_name": &data.leader_name
+        "leader_name": &data.leader_name,
+        "version": version,
     }))
 }
 
@@ -211,7 +281,12 @@ async fn recoverSecret(token: web::Json<AuthToken>, data: web::Data<AppState>) -
     let user_secret = {
         let secret_store = data.secret_store.lock().await;
         match secret_store.get(&token.username) {
-            Some(secret) => secret.clone(),
+            Some(secret) => match secret.get(&token.version) {
+                Some(secret_value) => secret_value.clone(),
+                None => return HttpResponse::NotFound().json(serde_json::json!({
+                    "message": "user secret not found",
+                })),
+            },
             None => return HttpResponse::NotFound().json(serde_json::json!({
                 "message": "user not found",
             })),

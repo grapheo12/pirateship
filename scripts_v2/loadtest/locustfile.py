@@ -17,6 +17,8 @@ getWeight = 100
 getRequestHosts = []
 secretKeyHosts = []
 threshold = len(getRequestHosts)
+valid_usernames = [""]
+active_users = set()
 
 
 
@@ -56,12 +58,14 @@ def on_test_setup(environment, **kwargs):
             max_users = int(user_config["max_users"])
 
         machineId = user_config.get("machineId", 0)
+        print("my machineId: ", machineId)
 
         workload = user_config.get("workload", "kms")
 
         if workload == "svr3":
             threshold = user_config.get("threshold", len(getRequestHosts))
 
+        
 
     except Exception as e:
         raise Exception(environment.parsed_options.config_users)
@@ -72,11 +76,17 @@ def on_test_setup(environment, **kwargs):
     rnd.seed(seed)
     glob_seed = seed
 
+    for i in range(max_users):
+        valid_usernames.append("user" + str(uuid.UUID(int=rnd.getrandbits(128))))
+
+    print("valid_usernames: ", valid_usernames)
+
+
 class TestUser(FastHttpUser):
     # wait_time = constant_throughput(50)
 
     def on_start(self):
-        global getWeight, getRequestHosts, glob_seed, max_users, curr_num_users, rnd, workload
+        global getWeight, getRequestHosts, glob_seed, max_users, curr_num_users, rnd, workload, active_users
 
         if curr_num_users >= max_users:
             curr_num_users = 0
@@ -86,7 +96,7 @@ class TestUser(FastHttpUser):
 
         # We need to magically generate unique usernames without any kind of central coordination.
         # Since with distributed load testing, we can't guarantee that the same username won't be used by another user.
-        self.username = "user" + str(uuid.UUID(int=rnd.getrandbits(128)))
+        self.username = valid_usernames[curr_num_users] # "user" + str(uuid.UUID(int=rnd.getrandbits(128)))
         self.password = "pirateship"
 
 
@@ -108,6 +118,17 @@ class TestUser(FastHttpUser):
 
             self.current_secret = None
 
+        if self.username in active_users:
+            self.active = False
+        else:
+            self.active = True
+            active_users.add(self.username)
+
+    def on_stop(self):
+        global active_users
+        if self.username in active_users:
+            active_users.remove(self.username)
+
 
     #run phase 
     @task
@@ -115,6 +136,9 @@ class TestUser(FastHttpUser):
         global workload
 
         assert workload is not None
+
+        if not self.active:
+            return
 
         if workload == "kms":
             self.kms_task()
@@ -150,15 +174,15 @@ class TestUser(FastHttpUser):
         # Shamir secret sharing
         shares = split_secret(self.current_secret, n, t, PRIME)
 
-        resp = self.client.get("/gettoken", json={"username": self.username, "pin": self.password})
+        resp = self.client.get("/gettoken", json={"username": self.username, "pin": self.password, "increment_version": True})
         token = resp.json()
 
         if not "valid_until" in token:
             logger.warning(f"Token not valid for {self.username} {self.password}: {token}")
             return
         else:
-            # print(f"Token: {token} Password: {self.password}")
-            pass
+            print(f"Token: {token} Password: {self.password}")
+            # pass
         
 
         for i in range(n):
@@ -177,14 +201,14 @@ class TestUser(FastHttpUser):
 
     def retrieve_secret_flow(self):
         # Retrieve the shares from the secretKeyHosts
-        resp = self.client.get("/gettoken", json={"username": self.username, "pin": self.password})
+        resp = self.client.get("/gettoken", json={"username": self.username, "pin": self.password, "increment_version": False})
         token = resp.json()
         if not "valid_until" in token:
             logger.warning(f"Token not valid for {self.username} {self.password}: {token}")
             return
         else:
-            # print(f"Token: {token} Password: {self.password}")
-            pass
+            print(f"Token: {token} Password: {self.password}")
+            # pass
         
         shares = []
         for host in self.secretKeyHosts:
