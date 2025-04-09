@@ -8,6 +8,8 @@ import hashlib
 import json
 from pprint import pprint
 from shamir import split_secret, reconstruct_secret
+import pickle
+import base64
 
 PRIME = 711577331239842805114550041213069154795634469703966193517588669628016485152750041731176583762267136103285795860447322461808709838439645383515985384043692155718147949524715956189033281228535852472381177902070093705760092109751916910892196462236676848628418360675233448440819174569075425896999465165453
 
@@ -163,7 +165,8 @@ class TestUser(FastHttpUser):
             host = self.allHosts[i]
             share = shares[i]
 
-            val = f"{share[0]}#{share[1]}"
+            val = pickle.dumps(share)
+            val = base64.b64encode(val).decode('utf-8')
             payload = {
                 "val": val,
                 "token": token
@@ -188,8 +191,11 @@ class TestUser(FastHttpUser):
             resp = self.client.get(f"{host}/recoversecret", json=token)
             resp = resp.json()
             if "user secret" in resp:
-                share = resp["user secret"].split("#")
-                share = (int(share[0]), int(share[1]))
+                share = resp["user secret"]
+                # Decode the base64 encoded share
+                share = base64.b64decode(share)
+                # Deserialize the share
+                share = pickle.loads(share)
                 shares.append(share)
             else:
                 logger.warning(f"Error retrieving secret {self.username}: {resp}")
