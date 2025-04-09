@@ -13,19 +13,20 @@ enum ProtoTransactionOpType {
 
     // For counter style operations
     INCREMENT = 3;
+    CAS = 4;
     // DECREMENT = 4; <-- For decrement send, INCREMENT with negative value
 
     // For reconfiguration
-    ADD_LEARNER = 4;
-    UPGRADE_FULL_NODE = 5;
-    DEL_LEARNER = 6;
-    DOWNGRADE_FULL_NODE = 7;
+    ADD_LEARNER = 5;
+    UPGRADE_FULL_NODE = 6;
+    DEL_LEARNER = 7;
+    DOWNGRADE_FULL_NODE = 8;
 
     // For SQL and other operations
-    CUSTOM = 8;
+    CUSTOM = 9;
 
     // To check for byz commit
-    PROBE = 9;
+    PROBE = 10;
 }
 
 message ProtoTransactionOp {

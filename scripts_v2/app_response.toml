@@ -44,12 +44,12 @@ byzantine_start_block = 0
 [client_config]
 getDistribution = 50
 workers_per_client = 8
-workload = "kms"
+workload = "svr3"
 
 
 
 [[experiments]]
-name = "kms"
+name = "svr3"
 type = "app"
 repeats = 1
 num_nodes = 7

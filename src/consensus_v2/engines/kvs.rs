@@ -118,8 +118,8 @@ impl AppEngine for KVSAppEngine {
                                     values: vec![value],
                                 });
                             }
-                        } else if op_type == ProtoTransactionOpType::Increment {
-                            if op.operands.len() != 1 && op.operands.len() != 2 {
+                        } else if op_type == ProtoTransactionOpType::Increment { // [key, incr_val, Optional check_val]
+                            if op.operands.len() != 1 && op.operands.len() != 2 && op.operands.len() != 3 {
                                 continue;
                             }
 
@@ -145,8 +145,23 @@ impl AppEngine for KVSAppEngine {
                                 i64::from_be_bytes(result.as_slice().try_into().unwrap())
                             };
 
+                            let must_increment = if op.operands.len() == 3 {
+                                let check_val_buf = &op.operands[2];
+                                if let Ok(arr) = check_val_buf.as_slice().try_into() {
+                                    let check_val = i64::from_be_bytes(arr);
+                                    result == check_val
+                                } else {
+                                    true // garbage input
+                                }
+                            } else {
+                                true
+                            };
+
                             // Perform op
-                            result += incr_val;
+
+                            if must_increment {
+                                result += incr_val;
+                            }
 
                             // Write back
                             let val = result.to_be_bytes().to_vec();
@@ -162,6 +177,39 @@ impl AppEngine for KVSAppEngine {
                                 success: true,
                                 values: vec![val],
                             });
+
+                        } else if op_type == ProtoTransactionOpType::Cas { // [key, swap_val, compare_val]
+                            if op.operands.len() != 3 {
+                                continue;
+                            }
+
+                            let key: &Vec<u8> = &op.operands[0];
+                            let swap_val_buf = &op.operands[1];
+                            let compare_val_buf = &op.operands[2];
+                            let mut result = self.read(key);
+                            if result.is_none() {
+                                result = Some(vec![]);
+                            }
+                            let result = result.unwrap();
+
+                            if result.eq(compare_val_buf) {
+                                // Write back
+                                let val = swap_val_buf.clone();
+                                if self.state.ci_state.contains_key(key) {
+                                    self.state.ci_state.get_mut(key).unwrap().push((proto_block.n, val.clone()));
+                                } else {
+                                    self.state.ci_state.insert(key.clone(), vec![(proto_block.n, val.clone())]);
+                                }
+                                txn_result.result.push(ProtoTransactionOpResult {
+                                    success: true,
+                                    values: vec![result],
+                                });
+                            } else {
+                                txn_result.result.push(ProtoTransactionOpResult {
+                                    success: false,
+                                    values: vec![result],
+                                });
+                            }
 
                         }
                     } else {
