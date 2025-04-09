@@ -14,7 +14,7 @@ PRIME = 711577331239842805114550041213069154795634469703966193517588669628016485
 getWeight = 100
 getRequestHosts = []
 secretKeyHosts = []
-threshold = len(getRequestHosts) - 1
+threshold = len(getRequestHosts)
 
 
 
@@ -100,7 +100,7 @@ class TestUser(FastHttpUser):
         if workload == "svr3":
             self.secretKeyHosts = [getRequestHosts[i] for i in random.sample(range(len(getRequestHosts)), k=threshold)]
             self.allHosts = getRequestHosts[:]
-            logger.info(f"{threshold}, {secretKeyHosts}")
+            logger.info(f"{threshold}, {self.secretKeyHosts}")
 
             self.rng = random.Random()
 
@@ -136,7 +136,12 @@ class TestUser(FastHttpUser):
             self.create_new_secret_flow()
 
     def create_new_secret_flow(self):
-        self.current_secret = self.rng.randint(0, (1 << 256) - 1)
+        # self.current_secret = self.rng.randint(0, (1 << 256) - 1)
+        hsh = hashlib.sha256(self.username.encode()).digest()
+        val = int.from_bytes(hsh, 'big')
+        self.current_secret = val
+        # Making this deterministic for testing
+
         t = len(self.secretKeyHosts)
         n = len(self.allHosts)
 
