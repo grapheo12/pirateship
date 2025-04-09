@@ -100,6 +100,11 @@ if __name__ == "__main__":
     else:
         application = "kms"
 
+    if application == "kms":
+        password = "pirateship"
+    else:
+        password = "1234"
+
 
     # Threshold is not used
     if len(sys.argv) >= 7:
@@ -109,4 +114,4 @@ if __name__ == "__main__":
 
     
     print("Performing Load Phase...")
-    asyncio.run(register_users(host, num_users, application, password="pirateship", workers_per_client=workers_per_client, num_client_nodes=num_client_nodes, threshold=threshold))
+    asyncio.run(register_users(host, num_users, application, password=password, workers_per_client=workers_per_client, num_client_nodes=num_client_nodes, threshold=threshold))
