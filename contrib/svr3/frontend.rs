@@ -333,6 +333,7 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, isRead: bool, state: &Ap
     };
 
     let mut result: Vec<Vec<u8>> = Vec::new();
+    let block_n = 
     match decoded_payload.reply.unwrap() {
         pft::proto::client::proto_client_reply::Reply::Receipt(receipt) => {
             if let Some(tx_result) = receipt.results {
@@ -345,6 +346,8 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, isRead: bool, state: &Ap
                     }
                 }
             }
+
+            receipt.block_n
         },
         _ => {
             return Err(HttpResponse::NotFound().json(serde_json::json!({
@@ -353,6 +356,31 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, isRead: bool, state: &Ap
             })))
         },
     };
+
+    if !isRead && block_n != 0 && state.probe_for_byz_commit.load(Ordering::Relaxed) {
+        let current_tag = state.curr_client_tag.fetch_add(1, Ordering::AcqRel);
+    
+        let probe_transaction = ProtoTransaction {
+            on_receive: Some(ProtoTransactionPhase {
+                ops: vec![ProtoTransactionOp {
+                    op_type: pft::proto::execution::ProtoTransactionOpType::Probe.into(),
+                    operands: vec![block_n.to_be_bytes().to_vec()],
+                }]
+            }),
+            on_crash_commit: None,
+            on_byzantine_commit: None,
+            is_reconfiguration: false,
+            is_2pc: false,
+        };
+
+        let (tx, mut rx) = mpsc::channel(1);
+        let tx_with_ack_chan_tag: TxWithAckChanTag = (Some(probe_transaction), (tx, current_tag, SenderType::Anon));
+        state.batch_proposer_tx.send(tx_with_ack_chan_tag).await.unwrap();
+
+        let _ = rx.recv().await;
+
+        // Probe replies only after Byz commit
+    }
     Ok(result)
 }
 

@@ -20,7 +20,7 @@ class AppExperiment(Experiment):
             copy_file_from_remote_public_ip(f"{remote_repo}/target/release/{bin}", os.path.join(self.local_workdir, "build", bin), self.dev_ssh_user, self.dev_ssh_key, self.dev_vm)
 
         remote_script_dir = f"{remote_repo}/scripts_v2/loadtest"
-        TARGET_SCRIPTS = ["load.py", "locustfile.py", "docker-compose.yml", "toggle.py"]
+        TARGET_SCRIPTS = ["load.py", "locustfile.py", "docker-compose.yml", "toggle.py", "shamir.py"]
 
         # Copy the scripts to build directory
         for script in TARGET_SCRIPTS:
@@ -32,7 +32,7 @@ class AppExperiment(Experiment):
         remote_repo = f"/home/{self.dev_ssh_user}/repo"
 
         remote_script_dir = f"{remote_repo}/scripts_v2/loadtest"
-        TARGET_SCRIPTS = ["load.py", "locustfile.py", "docker-compose.yml", "toggle.py"]
+        TARGET_SCRIPTS = ["load.py", "locustfile.py", "docker-compose.yml", "toggle.py", "shamir.py"]
 
 
         res1 = run_remote_public_ip([
@@ -219,7 +219,7 @@ sleep 1
             load_phase_seconds = 5 + self.num_clients // 3000 # 5s min
             _script += f"""
 # Run the load phase.
-$SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} 'python3 {self.remote_workdir}/build/load.py {host} {self.num_clients} {self.total_client_vms} {self.workers_per_client} > {self.remote_workdir}/logs/{repeat_num}/loader.log 2> {self.remote_workdir}/logs/{repeat_num}/loader.err' &
+$SSH_CMD {self.dev_ssh_user}@{self.locust_master.public_ip} 'python3 {self.remote_workdir}/build/load.py {host} {self.num_clients} {self.total_client_vms} {self.workers_per_client} {self.workload} > {self.remote_workdir}/logs/{repeat_num}/loader.log 2> {self.remote_workdir}/logs/{repeat_num}/loader.err' &
 PID="$PID $!"
 sleep {load_phase_seconds}
 """
