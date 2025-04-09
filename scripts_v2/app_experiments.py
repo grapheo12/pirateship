@@ -13,7 +13,7 @@ from ssh_utils import run_remote_public_ip, copy_remote_public_ip
 class AppExperiment(Experiment):
     def copy_back_build_files(self):
         remote_repo = f"/home/{self.dev_ssh_user}/repo"
-        TARGET_BINARIES = ["kms"]
+        TARGET_BINARIES = [self.workload]
 
         # Copy the target/release to build directory
         for bin in TARGET_BINARIES:
@@ -28,7 +28,7 @@ class AppExperiment(Experiment):
 
 
     def bins_already_exist(self):
-        TARGET_BINARIES = ["kms"]
+        TARGET_BINARIES = [self.workload]
         remote_repo = f"/home/{self.dev_ssh_user}/repo"
 
         remote_script_dir = f"{remote_repo}/scripts_v2/loadtest"
@@ -227,9 +227,10 @@ sleep {load_phase_seconds}
 
             
             config_users = {
-                "user_class_name": "testClass",
+                "user_class_name": "TestUser",
                 "getDistribution": self.getDistribution,
                 "getRequestHosts": self.getRequestHosts,
+                "workload": self.workload,
             }
             config_users_str = "'\"'\"'" + json.dumps(config_users) + "'\"'\"'" # Bash magic! https://stackoverflow.com/questions/1250079/how-to-escape-single-quotes-within-single-quoted-strings
             _script += f"""
