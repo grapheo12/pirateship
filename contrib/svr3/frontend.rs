@@ -281,7 +281,7 @@ pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::cha
             .service(toggle_byz_wait)
             .service(getToken)
     })
-    .bind("127.0.0.1:8080")?
+    .bind(addr)?
     .run()
     .await?;
     Ok(())

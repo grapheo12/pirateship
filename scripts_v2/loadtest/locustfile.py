@@ -7,6 +7,9 @@ import random
 import hashlib
 import json
 from pprint import pprint
+from shamir import split_secret, reconstruct_secret
+
+PRIME = 711577331239842805114550041213069154795634469703966193517588669628016485152750041731176583762267136103285795860447322461808709838439645383515985384043692155718147949524715956189033281228535852472381177902070093705760092109751916910892196462236676848628418360675233448440819174569075425896999465165453
 
 getWeight = 100
 getRequestHosts = []
@@ -55,7 +58,7 @@ def on_test_setup(environment, **kwargs):
         workload = user_config.get("workload", "kms")
 
         if workload == "svr3":
-            threshold = user_config.get("threshold", len(getRequestHosts) - 1)
+            threshold = user_config.get("threshold", len(getRequestHosts))
 
 
     except Exception as e:
@@ -96,7 +99,12 @@ class TestUser(FastHttpUser):
 
         if workload == "svr3":
             self.secretKeyHosts = [getRequestHosts[i] for i in random.sample(range(len(getRequestHosts)), k=threshold)]
+            self.allHosts = getRequestHosts[:]
             logger.info(f"{threshold}, {secretKeyHosts}")
+
+            self.rng = random.Random()
+
+            self.current_secret = None
 
 
     #run phase 
@@ -122,18 +130,75 @@ class TestUser(FastHttpUser):
 
     def svr3_task(self):
         choice = random.uniform(0, 100)
-        if choice < getWeight:
-            self.client.get(f"{self.my_get_host}/recoversecret", json={"username": self.username, "password":self.password, "pin":"1234"})
-
-            for host in secretKeyHosts:
-                self.client.get(f"{host}/recoversecret", json={"username": self.username, "password":self.password, "pin":"1234"})
+        if choice < getWeight and self.current_secret is not None:
+            self.retrieve_secret_flow()
         else:
-            self.client.post("/storesecret", json={"username": self.username, "password": self.password, "val":"secret", "pin":"1234"})
+            self.create_new_secret_flow()
 
+    def create_new_secret_flow(self):
+        self.current_secret = self.rng.randint(0, (1 << 256) - 1)
+        t = len(self.secretKeyHosts)
+        n = len(self.allHosts)
 
-        #get list of all ndoes
-        #random t/n nodes
-        #assign it to something
+        # Shamir secret sharing
+        shares = split_secret(self.current_secret, n, t, PRIME)
+
+        resp = self.client.get("/gettoken", json={"username": self.username, "pin": self.password})
+        token = resp.json()
+
+        if not "valid_until" in token:
+            logger.warning(f"Token not valid for {self.username} {self.password}: {token}")
+            return
+        else:
+            # print(f"Token: {token} Password: {self.password}")
+            pass
+        
+
+        for i in range(n):
+            host = self.allHosts[i]
+            share = shares[i]
+
+            val = f"{share[0]}#{share[1]}"
+            payload = {
+                "val": val,
+                "token": token
+            }
+            resp = self.client.post(f"{host}/storesecret", json=payload)
+            if resp.status_code != 200:
+                logger.warning(f"Error storing secret {self.username}: {resp.text}")
+
+    def retrieve_secret_flow(self):
+        # Retrieve the shares from the secretKeyHosts
+        resp = self.client.get("/gettoken", json={"username": self.username, "pin": self.password})
+        token = resp.json()
+        if not "valid_until" in token:
+            logger.warning(f"Token not valid for {self.username} {self.password}: {token}")
+            return
+        else:
+            # print(f"Token: {token} Password: {self.password}")
+            pass
+        
+        shares = []
+        for host in self.secretKeyHosts:
+            resp = self.client.get(f"{host}/recoversecret", json=token)
+            resp = resp.json()
+            if "user secret" in resp:
+                share = resp["user secret"].split("#")
+                share = (int(share[0]), int(share[1]))
+                shares.append(share)
+            else:
+                logger.warning(f"Error retrieving secret {self.username}: {resp}")
+
+        # Reconstruct the secret using the shares
+        t = len(self.secretKeyHosts)
+        if len(shares) < t:
+            logger.warning("Not enough secrets")
+            return
+        
+        secret = reconstruct_secret(shares, PRIME)
+
+        assert secret == self.current_secret, f"Secret mismatch: {secret} != {self.current_secret}"
+
         
 
 

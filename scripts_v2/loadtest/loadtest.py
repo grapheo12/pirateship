@@ -30,16 +30,16 @@ async def register_user(host, usernames, password, connector):
 
 async def create_secret(host, usernames, password, session, nodes, threshold):
     try:
-        secret = 123456789
-        splits = shamir.split_secret(secret, nodes, threshold, 10)
+        # secret = 123456789
+        # splits = shamir.split_secret(secret, nodes, threshold, 10)
         for username in usernames:
-            async with session.post(f"{host}/auth", json={"username": username, "password": password}) as response:
+            async with session.post(f"{host}/auth", json={"username": username, "pin": password}) as response:
                 if response.status != 200:
                     print(f"Error registering {username}: {await response.text()}")
 
-            async with session.post(f"{host}/storesecret", json={"username": username, "password": password, "val": str(secret), "pin": "1234"}) as response:
-                if response.status != 200:
-                    print(f"Error storing secret {username}: {await response.text()}")
+            # async with session.post(f"{host}/storesecret", json={"username": username, "password": password, "val": str(secret), "pin": "1234"}) as response:
+            #     if response.status != 200:
+            #         print(f"Error storing secret {username}: {await response.text()}")
     except Exception as e:
         await session.close()
         print(f"An error occurred: {e}")
@@ -86,6 +86,7 @@ async def register_users(host, num_users, application, password="pirateship", wo
 
 
 
+
 def run_locust(locust_file, host, num_users, getDistribution, getRequestHosts=[], master_host="localhost", workers_per_client=2, num_client_nodes=1):
     custom_user_config = {
         "user_class_name": "TestUser",   
@@ -98,6 +99,9 @@ def run_locust(locust_file, host, num_users, getDistribution, getRequestHosts=[]
 
     procs = []
 
+    total_machines = workers_per_client * num_client_nodes
+    users_per_clients = [num_users // total_machines] * total_machines
+    users_per_clients[-1] += num_users - sum(users_per_clients)
 
     # Spawn the master node
     command = [
@@ -121,11 +125,12 @@ def run_locust(locust_file, host, num_users, getDistribution, getRequestHosts=[]
     for client_num in range(num_client_nodes):
         for worker_num in range(workers_per_client):
             with open(f"worker_{client_num}_{worker_num}.log", "w") as worker_log:
-                cmd = command[:-1]
+                cmd = command[:-2]
                 custom_user_config["machineId"] = client_num * workers_per_client + worker_num
+                custom_user_config["max_users"] = users_per_clients[client_num * workers_per_client + worker_num]
                 json_config = json.dumps(custom_user_config)
                 json_config = "'" + json_config + "'"
-                cmd.extend(["--worker", "--master-host", master_host, "--processes", str(1)])
+                cmd.extend([json_config, "--worker", "--master-host", master_host, "--processes", str(1)])
 
                 cmd = " ".join(cmd)
                 print("Starting Locust worker", custom_user_config["machineId"], "with command:", cmd)
