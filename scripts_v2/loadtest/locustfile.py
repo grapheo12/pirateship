@@ -137,9 +137,9 @@ class TestUser(FastHttpUser):
 
     def create_new_secret_flow(self):
         # self.current_secret = self.rng.randint(0, (1 << 256) - 1)
-        hsh = hashlib.sha256(self.username.encode()).digest()
-        val = int.from_bytes(hsh, 'big')
-        self.current_secret = val
+        # hsh = hashlib.sha256(self.username.encode()).digest()
+        # val = int.from_bytes(hsh, 'big')
+        self.current_secret = 123456789
         # Making this deterministic for testing
 
         t = len(self.secretKeyHosts)
