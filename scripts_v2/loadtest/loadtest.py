@@ -64,7 +64,7 @@ async def register_users(host, num_users, application, password="pirateship", wo
         _usernames = ["user" + str(uuid.UUID(int=rnd.getrandbits(128))) for j in range(users_per_clients[i])]
         usernames.extend(_usernames)
 
-    with open("Usernames.txt", "w") as f:
+    with open("Usernames.log", "w") as f:
         for username in usernames:
             f.write(username + "\n")
         
