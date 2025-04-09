@@ -160,12 +160,17 @@ class TestUser(FastHttpUser):
 
 
     def svr3_task(self):
-        # choice = random.uniform(0, 100)
+        choice = random.uniform(0, 100)
+        if choice < getWeight:
+            self.pin_guess(self.password)
+        else:
+            wrong_pin = self.password + "1"
+            self.pin_guess(wrong_pin)
+
         # if choice < getWeight and self.current_secret is not None:
         #     self.retrieve_secret_flow()
         # else:
         #     self.create_new_secret_flow()
-        self.pin_guess(self.password)
 
 
     def pin_guess(self, pin):

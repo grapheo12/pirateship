@@ -135,7 +135,7 @@ async fn storeSecret(payload: web::Json<StoreSecretPayload>, data: web::Data<App
     }))
 }
 
-const MAX_GUESSES: i64 = 3;
+const MAX_GUESSES: i64 = 1_000_000;
 
 #[get("/gettoken")]
 async fn getToken(payload: web::Json<GetTokenPayload>, data: web::Data<AppState>) -> impl Responder {
