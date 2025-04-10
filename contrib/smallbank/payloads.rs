@@ -7,8 +7,8 @@ pub struct RegisterPayload {
 }
 
 #[derive(Deserialize)]
-pub struct UpdatePayload {
-    pub username: String,
-    pub password: String,
-    pub val: i64,
+pub struct SendPayload {
+    pub sender_account: String,
+    pub receiver_account: String,
+    pub send_amount: i64,
 }
