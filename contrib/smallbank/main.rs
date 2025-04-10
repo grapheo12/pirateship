@@ -19,7 +19,13 @@ mod payloads;
 
 /// Fetch json config file from command line path.
 /// Panic if not found or parsed properly.
-fn process_args() -> Config {
+
+struct Arguments {
+    config: Config,
+    send_threshold: i64,
+}
+
+fn process_args() -> Arguments {
     macro_rules! usage_str {
         () => {
             "\x1b[31;1mUsage: {} path/to/config.json\x1b[0m"
@@ -28,7 +34,7 @@ fn process_args() -> Config {
 
     let args: Vec<_> = env::args().collect();
 
-    if args.len() != 2 {
+    if args.len() != 3 {
         panic!(usage_str!(), args[0]);
     }
 
@@ -39,7 +45,12 @@ fn process_args() -> Config {
 
     let cfg_contents = fs::read_to_string(cfg_path).expect("Invalid file path");
 
-    Config::deserialize(&cfg_contents)
+    let send_threshold: i64 = args[2].parse().unwrap();
+
+    Arguments{
+        config: Config::deserialize(&cfg_contents),
+        send_threshold: send_threshold,
+    }
 }
 
 #[allow(unused_assignments)]
@@ -83,7 +94,9 @@ const NUM_THREADS: usize = 32;
 fn main() {
     log4rs::init_config(config::default_log4rs_config()).unwrap();
 
-    let cfg = process_args();
+    let args = process_args();
+    let cfg = args.config;
+    let send_threshold = args.send_threshold;
 
     let (protocol, app) = get_feature_set();
     info!("Protocol: {}, App: {}", protocol, app);
@@ -142,7 +155,7 @@ fn main() {
         .worker_threads(actix_threads) 
         .build()
         .unwrap();
-    match frontend_runtime.block_on(frontend::run_actix_server(cfg, batch_proposer_tx, actix_threads)) {
+    match frontend_runtime.block_on(frontend::run_actix_server(cfg, batch_proposer_tx, actix_threads, send_threshold)) {
         Ok(_) => println!("Frontend server ran successfully."),
         Err(e) => eprintln!("Frontend server error: {:?}", e),
     };

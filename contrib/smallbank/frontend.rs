@@ -36,6 +36,7 @@ struct AppState {
     curr_client_tag: AtomicU64,
     keys: KeyStore,
     leader_name: String,
+    send_threshold: i64,
 }
 
 #[get("/balance")]
@@ -54,12 +55,12 @@ async fn balance(payload: web::Json<RegisterPayload>, data: web::Data<AppState>)
         operands: vec![checking_account_name.clone().into_bytes()],
     };
 
-    let result = match send(vec![get_savings_op, get_checking_op], false, &data).await {
+    let result = match send(vec![get_savings_op, get_checking_op], true, &data, false).await {
         Ok(response) => response,
         Err(e) => return e,
     };
 
-    if result.len() != 2 { //move this into the match statement (I'm not sure how!)
+    if result.len() != 2 {
         return HttpResponse::InternalServerError().body("user account does not exist");
     }
 
@@ -83,9 +84,7 @@ async fn balance(payload: web::Json<RegisterPayload>, data: web::Data<AppState>)
         "${}",
         i64::from_be_bytes(checking_account_balance)
     );
-
     
-
     HttpResponse::Ok().json(serde_json::json!({
         "account name": username,
         "savings balance": savings_balance_message,
@@ -104,7 +103,7 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
         operands: vec![username.clone().into_bytes()],
     };
 
-    let result = match send(vec![transaction_op], true, &data).await {
+    let result = match send(vec![transaction_op], true, &data, false).await {
         Ok(response) => response,
         Err(e) => return e,
     };
@@ -128,14 +127,13 @@ async fn register(payload: web::Json<RegisterPayload>, data: web::Data<AppState>
         operands: vec![checking_account_name.clone().into_bytes(), (1000000 as i64).to_be_bytes().to_vec()],
     };
 
-    let _ = match send(vec![create_savings_op, create_checking_op], false, &data).await {
+    let _ = match send(vec![create_savings_op, create_checking_op], false, &data, false).await {
         Ok(response) => response,
         Err(e) => return e,
     };
 
     HttpResponse::Ok().json(serde_json::json!({
-        "message": "created account with 1 million dollars in both accounts",
-        // "accounts": username,
+        "message": "created user with 1 million dollars in both accounts",
     }))
 }
 
@@ -155,7 +153,8 @@ async fn sendpayment(payload: web::Json<SendPayload>, data: web::Data<AppState>)
 
     let mut send_attempts = 0;
 
-    while true {
+
+    loop {
         send_attempts += 1;
         //get sender account, reciever account
         let get_sender_balance_op = ProtoTransactionOp {
@@ -168,7 +167,7 @@ async fn sendpayment(payload: web::Json<SendPayload>, data: web::Data<AppState>)
             operands: vec![receiver_checking_account.clone().into_bytes()],
         };
         
-        let result = match send(vec![get_sender_balance_op, get_receiver_balance_op], false, &data).await {
+        let result = match send(vec![get_sender_balance_op, get_receiver_balance_op], true, &data, false).await {
             Ok(response) => response,
             Err(e) => return e,
         };
@@ -193,7 +192,6 @@ async fn sendpayment(payload: web::Json<SendPayload>, data: web::Data<AppState>)
             return HttpResponse::BadRequest().body("Sender's Account does not have enough money");
         };
     
-
          //increment value with cas
         let credit_op = ProtoTransactionOp {
             op_type: pft::proto::execution::ProtoTransactionOpType::Cas.into(),
@@ -205,7 +203,7 @@ async fn sendpayment(payload: web::Json<SendPayload>, data: web::Data<AppState>)
             operands: vec![sender_checking_account.clone().into_bytes(), (sender_balance - send_amount).to_be_bytes().to_vec(), sender_balance.to_be_bytes().to_vec()],
         };
 
-        let result = match send(vec![credit_op, debt_op], false, &data).await {
+        let result = match send(vec![credit_op, debt_op], false, &data, send_amount >= data.send_threshold).await {
             Ok(response) => response,
             Err(e) => return e,
         };
@@ -222,169 +220,10 @@ async fn sendpayment(payload: web::Json<SendPayload>, data: web::Data<AppState>)
 
     HttpResponse::Ok().json(serde_json::json!({
         "message": message,
-        // "accounts": username,
+        "send attempts": send_attempts,
+        "send threshold": &data.send_threshold
     }))
 }
-
-// #[get("/getaccount")]
-// async fn getaccount(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
-//     let account_string = "account:".to_owned() + &payload.username;
-
-//     let get_account_op = ProtoTransactionOp {
-//         op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
-//         operands: vec![account_string.clone().into_bytes()],
-//     };
-
-//     let result = match send(vec![get_account_op], false, &data).await {
-//         Ok(response) => response,
-//         Err(e) => return e,
-//     };
-
-
-//     let name = match String::from_utf8(result[0].clone()) {
-//         Ok(user_secret) => user_secret,
-//         Err(e) => return HttpResponse::InternalServerError().body("Invalid UTF-8 data"),
-//     };
-    
-//     HttpResponse::Ok().json(serde_json::json!({
-//         "account name": name,
-//     }))
-// }
-
-// #[get("/getsavingsbalance")]
-// async fn getsavingsbalance(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
-//     let savings_string = "savings:".to_owned() + &payload.username;
-
-//     let get_savings_op = ProtoTransactionOp {
-//         op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
-//         operands: vec![savings_string.clone().into_bytes()],
-//     };
-
-//     let result = match send(vec![get_savings_op], false, &data).await {
-//         Ok(response) => response,
-//         Err(e) => return e,
-//     };
-    
-//     let arr = match result[0].as_slice().try_into() {
-//         Ok(arr) => arr,
-//         Err(_) => return HttpResponse::BadRequest().body("Expected 8 bytes for an i64"),
-//     };
-
-//     HttpResponse::Ok().json(serde_json::json!({
-//         "username": &payload.username,
-//         "savings balance": i64::from_be_bytes(arr),
-//     }))
-// }
-
-// #[get("/getcheckingbalance")]
-// async fn getcheckingbalance(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
-//     let checking_string = "checking:".to_owned() + &payload.username;
-
-//     let get_checking_op = ProtoTransactionOp {
-//         op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
-//         operands: vec![checking_string.clone().into_bytes()],
-//     };
-
-//     let result = match send(vec![get_checking_op], false, &data).await {
-//         Ok(response) => response,
-//         Err(e) => return e,
-//     };
-    
-//     let arr = match result[0].as_slice().try_into() {
-//         Ok(arr) => arr,
-//         Err(_) => return HttpResponse::BadRequest().body("Expected 4 bytes for an i64"),
-//     };
-
-//     HttpResponse::Ok().json(serde_json::json!({
-//         "username": &payload.username,
-//         "checking balance": i64::from_be_bytes(arr),
-//     }))
-// }
-
-// #[post("/updatesavingsbalance")]
-// async fn updatesavingsbalance(payload: web::Json<UpdatePayload>, data: web::Data<AppState>) -> impl Responder {
-//     let savings_string = "savings:".to_owned() + &payload.username;
-
-//     let get_savings_op = ProtoTransactionOp {
-//         op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
-//         operands: vec![savings_string.clone().into_bytes()],
-//     };
-
-//     let result = match send(vec![get_savings_op], false, &data).await {
-//         Ok(response) => response,
-//         Err(e) => return e,
-//     };
-    
-//     let arr = match result[0].as_slice().try_into() {
-//         Ok(arr) => arr,
-//         Err(_) => return HttpResponse::BadRequest().body("Expected 4 bytes for an i64"),
-//     };
-
-//     let saving_balance = i64::from_be_bytes(arr) + &payload.val;
-
-//     let update_savings_op = ProtoTransactionOp {
-//         op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-//         operands: vec![savings_string.clone().into_bytes(), saving_balance.to_be_bytes().to_vec()],
-//     };
-
-//     let result = match send(vec![update_savings_op], false, &data).await {
-//         Ok(response) => response,
-//         Err(e) => return e,
-//     };
-
-//     HttpResponse::Ok().json(serde_json::json!({
-//         "username": &payload.username,
-//         "updated savings balance": saving_balance,
-//     }))
-// }
-
-// #[post("/updatecheckingbalance")]
-// async fn updatecheckingbalance(payload: web::Json<UpdatePayload>, data: web::Data<AppState>) -> impl Responder {
-//     let checking_string = "checking:".to_owned() + &payload.username;
-
-//     let get_checking_op = ProtoTransactionOp {
-//         op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
-//         operands: vec![checking_string.clone().into_bytes()],
-//     };
-
-//     let result = match send(vec![get_checking_op], false, &data).await {
-//         Ok(response) => response,
-//         Err(e) => return e,
-//     };
-    
-//     let arr = match result[0].as_slice().try_into() {
-//         Ok(arr) => arr,
-//         Err(_) => return HttpResponse::BadRequest().body("Expected 4 bytes for an i64"),
-//     };
-
-//     let checking_balance = i64::from_be_bytes(arr) + &payload.val;
-
-//     let update_checking_op = ProtoTransactionOp {
-//         op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-//         operands: vec![checking_string.clone().into_bytes(), checking_balance.to_be_bytes().to_vec()],
-//     };
-
-//     let result = match send(vec![update_checking_op], false, &data).await {
-//         Ok(response) => response,
-//         Err(e) => return e,
-//     };
-
-//     HttpResponse::Ok().json(serde_json::json!({
-//         "username": &payload.username,
-//         "updated checking balance": checking_balance,
-//     }))
-// }
-
-// #[post("/toggle_byz_wait")]
-// async fn toggle_byz_wait(data: web::Data<AppState>) -> impl Responder {
-//     let mut state = data.probe_for_byz_commit.load(Ordering::SeqCst);
-//     state = !state;
-//     data.probe_for_byz_commit.store(state, Ordering::SeqCst);
-//     HttpResponse::Ok().json(serde_json::json!({
-//         "message": "byzantine wait toggled",
-//         "probe_for_byz_commit": state,
-//     }))
-// }
 
 #[get("/")]
 async fn home(_data: web::Data<AppState>) -> impl Responder {
@@ -393,7 +232,7 @@ async fn home(_data: web::Data<AppState>) -> impl Responder {
     }))
 }
 
-pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::channel::AsyncSenderWrapper<TxWithAckChanTag>, actix_threads: usize) -> std::io::Result<()> {
+pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::channel::AsyncSenderWrapper<TxWithAckChanTag>, actix_threads: usize, send_threshold: i64) -> std::io::Result<()> {
     let mut keys = KeyStore::empty();
     keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
     let keys = keys.clone();
@@ -419,6 +258,7 @@ pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::cha
             curr_client_tag: AtomicU64::new(0),
             keys: keys.clone(),
             leader_name: name.clone(),
+            send_threshold: send_threshold,
         };
 
         App::new()
@@ -434,7 +274,7 @@ pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::cha
     Ok(())
 }
 
-async fn send(transaction_ops: Vec<ProtoTransactionOp>, isRead: bool, state: &AppState) -> Result<Vec<Vec<u8>>, HttpResponse> {
+async fn send(transaction_ops: Vec<ProtoTransactionOp>, isRead: bool, state: &AppState, byz_commit: bool) -> Result<Vec<Vec<u8>>, HttpResponse> {
     let transaction_phase = ProtoTransactionPhase {
         ops: transaction_ops,
     };
@@ -480,6 +320,7 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, isRead: bool, state: &Ap
     };
 
     let mut result: Vec<Vec<u8>> = Vec::new();
+    let block_n =
     match decoded_payload.reply.unwrap() {
         pft::proto::client::proto_client_reply::Reply::Receipt(receipt) => {
             if let Some(tx_result) = receipt.results {
@@ -495,6 +336,7 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, isRead: bool, state: &Ap
                     }
                 }
             }
+            receipt.block_n
         },
         _ => {
             return Err(HttpResponse::NotFound().json(serde_json::json!({
@@ -503,52 +345,47 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, isRead: bool, state: &Ap
             })))
         },
     };
+
+    if !isRead && block_n != 0 && byz_commit {
+        let current_tag = state.curr_client_tag.fetch_add(1, Ordering::AcqRel);
+    
+        let probe_transaction = ProtoTransaction {
+            on_receive: Some(ProtoTransactionPhase {
+                ops: vec![ProtoTransactionOp {
+                    op_type: pft::proto::execution::ProtoTransactionOpType::Probe.into(),
+                    operands: vec![block_n.to_be_bytes().to_vec()],
+                }]
+            }),
+            on_crash_commit: None,
+            on_byzantine_commit: None,
+            is_reconfiguration: false,
+            is_2pc: false,
+        };
+
+        let (tx, mut rx) = mpsc::channel(1);
+        let tx_with_ack_chan_tag: TxWithAckChanTag = (Some(probe_transaction), (tx, current_tag, SenderType::Anon));
+        state.batch_proposer_tx.send(tx_with_ack_chan_tag).await.unwrap();
+
+        let _ = rx.recv().await;
+
+        // Probe replies only after Byz commit
+    }
     Ok(result)
 }
 
-async fn authenticate_user(
-    username: String,
-    password: String,
-    data: &AppState,
-) -> Result<bool, HttpResponse> {
-    let transaction_op = ProtoTransactionOp {
-        op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
-        operands: vec![username.clone().into_bytes()],
-    };
-
-    let result = match send(vec![transaction_op], true, data).await {
-        Ok(response) => response,
-        Err(e) => return Err(e),
-    };
-
-    if result.is_empty() {
-        return Err(HttpResponse::NotFound().json(serde_json::json!({
-            "message": "username does not exist",
-            "user": username,
-        })));
-    }
-
-    if hash(&password.into_bytes()) != result[0] {
-        return Err(HttpResponse::Unauthorized().json(serde_json::json!({
-            "message": "incorrect password",
-            "user": username,
-        })));
-    }
-    Ok(true)
-}
 
 /*
 Example usage:
 
 updated api calls:
 
-curl -X POST "http://localhost:8080/register" -H "Content-Type: application/json" -d '{"username":"teddy1", "password":"hi"}'
-curl -X POST "http://localhost:8080/register" -H "Content-Type: application/json" -d '{"username":"teddy2", "password":"hi"}'
+curl -X POST "http://localhost:8080/register" -H "Content-Type: application/json" -d '{"username":"teddy1"}'
+curl -X POST "http://localhost:8080/register" -H "Content-Type: application/json" -d '{"username":"teddy2"}'
 
 
 
-curl -X GET "http://localhost:8080/balance" -H "Content-Type: application/json" -d '{"username":"teddy1", "password":"hi"}'
-curl -X GET "http://localhost:8080/balance" -H "Content-Type: application/json" -d '{"username":"teddy2", "password":"hi"}'
+curl -X GET "http://localhost:8080/balance" -H "Content-Type: application/json" -d '{"username":"teddy1"}'
+curl -X GET "http://localhost:8080/balance" -H "Content-Type: application/json" -d '{"username":"teddy2"}'
 
 curl -X POST "http://localhost:8080/sendpayment" -H "Content-Type: application/json" -d '{"sender_account":"teddy1", "receiver_account":"teddy2", "send_amount":1000}'
 
