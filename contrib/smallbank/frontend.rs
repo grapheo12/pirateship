@@ -38,11 +38,64 @@ struct AppState {
     leader_name: String,
 }
 
+#[get("/balance")]
+async fn balance(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
+    let username = payload.username.clone();
+    let account_name = "account:".to_owned() + &username;
+    let savings_account_name = "savings:".to_owned() + &username;
+    let checking_account_name = "checking:".to_owned() + &username;
+
+    let get_account_op = ProtoTransactionOp {
+        op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+        operands: vec![account_name.clone().into_bytes()],
+    };
+
+    let get_savings_op = ProtoTransactionOp {
+        op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+        operands: vec![savings_account_name.clone().into_bytes()],
+    };
+
+    let get_checking_op = ProtoTransactionOp {
+        op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+        operands: vec![checking_account_name.clone().into_bytes()],
+    };
+
+    let result = match send(vec![get_account_op, get_savings_op, get_checking_op], false, &data).await {
+        Ok(response) => response,
+        Err(e) => return e,
+    };
+
+    if result.len() != 3 { //move this into the match statement (I'm not sure how!)
+        return HttpResponse::InternalServerError().body("user account does not exist");
+    }
+
+    let account_name = match String::from_utf8(result[0].clone()) {
+        Ok(user_secret) => user_secret,
+        Err(e) => return HttpResponse::InternalServerError().body("Invalid UTF-8 data"),
+    };
+
+    let savings_account_balance: [u8; 8] = match result[1].as_slice().try_into() {
+        Ok(arr) => arr,
+        Err(_) => return HttpResponse::BadRequest().body("Expected 8 bytes for an i64"),
+    };
+
+
+    let checking_account_balance: [u8; 8] = match result[2].as_slice().try_into() {
+        Ok(arr) => arr,
+        Err(_) => return HttpResponse::BadRequest().body("Expected8 bytes for an i64"),
+    };
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "account name": account_name,
+        "savings balance": i64::from_be_bytes(savings_account_balance),
+        "checking balance": i64::from_be_bytes(checking_account_balance),
+    }))
+    
+}   
+
 #[post("/auth")]
 async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) -> impl Responder {
     let username = payload.username.clone();
-    let password = payload.password.clone();
-    let client_tag = &data.curr_client_tag;
 
     // Query KMS for username.
     let transaction_op = ProtoTransactionOp {
@@ -65,12 +118,6 @@ async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) ->
     let savings_account_name = "savings:".to_owned() + &username;
     let checking_account_name = "checking:".to_owned() + &username;
 
-    // Username does not exist; create new username and password.
-    let create_user_op = ProtoTransactionOp {
-        op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-        operands: vec![username.clone().into_bytes(), hash(&password.into_bytes())],
-    };
-
     let create_account_op = ProtoTransactionOp {
         op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
         operands: vec![account_name.clone().into_bytes(), username.into_bytes()],
@@ -78,26 +125,22 @@ async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) ->
 
     let create_savings_op = ProtoTransactionOp {
         op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-        operands: vec![savings_account_name.clone().into_bytes(), (0 as i32).to_be_bytes().to_vec()],
+        operands: vec![savings_account_name.clone().into_bytes(), (1000000 as i64).to_be_bytes().to_vec()],
     };
 
     let create_checking_op = ProtoTransactionOp {
         op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-        operands: vec![checking_account_name.clone().into_bytes(), (0 as i32).to_be_bytes().to_vec()],
+        operands: vec![checking_account_name.clone().into_bytes(), (1000000 as i64).to_be_bytes().to_vec()],
     };
 
-    let _ = match send(vec![create_user_op, create_account_op, create_savings_op, create_checking_op], false, &data).await {
+    let _ = match send(vec![create_account_op, create_savings_op, create_checking_op], false, &data).await {
         Ok(response) => response,
         Err(e) => return e,
     };
 
-    //create new account, 
-
     HttpResponse::Ok().json(serde_json::json!({
-        "message": "user created",
-        "accounts": account_name,
-        "savings": savings_account_name,
-        "checking": checking_account_name,
+        "message": "created account with 1 million dollars in both accounts",
+        // "accounts": username,
     }))
 }
 
@@ -142,12 +185,12 @@ async fn getsavingsbalance(payload: web::Json<RegisterPayload>, data: web::Data<
     
     let arr = match result[0].as_slice().try_into() {
         Ok(arr) => arr,
-        Err(_) => return HttpResponse::BadRequest().body("Expected 4 bytes for an i32"),
+        Err(_) => return HttpResponse::BadRequest().body("Expected 8 bytes for an i64"),
     };
 
     HttpResponse::Ok().json(serde_json::json!({
         "username": &payload.username,
-        "savings balance": i32::from_be_bytes(arr),
+        "savings balance": i64::from_be_bytes(arr),
     }))
 }
 
@@ -167,12 +210,12 @@ async fn getcheckingbalance(payload: web::Json<RegisterPayload>, data: web::Data
     
     let arr = match result[0].as_slice().try_into() {
         Ok(arr) => arr,
-        Err(_) => return HttpResponse::BadRequest().body("Expected 4 bytes for an i32"),
+        Err(_) => return HttpResponse::BadRequest().body("Expected 4 bytes for an i64"),
     };
 
     HttpResponse::Ok().json(serde_json::json!({
         "username": &payload.username,
-        "checking balance": i32::from_be_bytes(arr),
+        "checking balance": i64::from_be_bytes(arr),
     }))
 }
 
@@ -192,14 +235,14 @@ async fn updatesavingsbalance(payload: web::Json<UpdatePayload>, data: web::Data
     
     let arr = match result[0].as_slice().try_into() {
         Ok(arr) => arr,
-        Err(_) => return HttpResponse::BadRequest().body("Expected 4 bytes for an i32"),
+        Err(_) => return HttpResponse::BadRequest().body("Expected 4 bytes for an i64"),
     };
 
-    let balance = i32::from_be_bytes(arr) + &payload.val;
+    let saving_balance = i64::from_be_bytes(arr) + &payload.val;
 
     let update_savings_op = ProtoTransactionOp {
         op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-        operands: vec![savings_string.clone().into_bytes(), balance.to_be_bytes().to_vec()],
+        operands: vec![savings_string.clone().into_bytes(), saving_balance.to_be_bytes().to_vec()],
     };
 
     let result = match send(vec![update_savings_op], false, &data).await {
@@ -209,7 +252,7 @@ async fn updatesavingsbalance(payload: web::Json<UpdatePayload>, data: web::Data
 
     HttpResponse::Ok().json(serde_json::json!({
         "username": &payload.username,
-        "updated savings balance": balance,
+        "updated savings balance": saving_balance,
     }))
 }
 
@@ -229,14 +272,14 @@ async fn updatecheckingbalance(payload: web::Json<UpdatePayload>, data: web::Dat
     
     let arr = match result[0].as_slice().try_into() {
         Ok(arr) => arr,
-        Err(_) => return HttpResponse::BadRequest().body("Expected 4 bytes for an i32"),
+        Err(_) => return HttpResponse::BadRequest().body("Expected 4 bytes for an i64"),
     };
 
-    let balance = i32::from_be_bytes(arr) + &payload.val;
+    let checking_balance = i64::from_be_bytes(arr) + &payload.val;
 
     let update_checking_op = ProtoTransactionOp {
         op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
-        operands: vec![checking_string.clone().into_bytes(), balance.to_be_bytes().to_vec()],
+        operands: vec![checking_string.clone().into_bytes(), checking_balance.to_be_bytes().to_vec()],
     };
 
     let result = match send(vec![update_checking_op], false, &data).await {
@@ -246,7 +289,7 @@ async fn updatecheckingbalance(payload: web::Json<UpdatePayload>, data: web::Dat
 
     HttpResponse::Ok().json(serde_json::json!({
         "username": &payload.username,
-        "updated checking balance": balance,
+        "updated checking balance": checking_balance,
     }))
 }
 
@@ -306,6 +349,7 @@ pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::cha
             .service(updatecheckingbalance)
             .service(updatesavingsbalance)
             .service(toggle_byz_wait)
+            .service(balance)
     })
     .bind("127.0.0.1:8080")?
     .run()
@@ -415,6 +459,15 @@ async fn authenticate_user(
 
 /*
 Example usage:
+
+updated api calls:
+
+curl -X POST "http://localhost:8080/auth" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"hi"}'
+
+curl -X GET "http://localhost:8080/balance" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"hi"}'
+
+
+
 curl -X POST "http://localhost:8080/auth" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"hi"}'
 
 curl -X GET "http://localhost:8080/getsavingsbalance" -H "Content-Type: application/json" -d '{"username":"teddy", "password":"hi"}'

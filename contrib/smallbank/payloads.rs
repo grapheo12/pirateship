@@ -10,5 +10,5 @@ pub struct RegisterPayload {
 pub struct UpdatePayload {
     pub username: String,
     pub password: String,
-    pub val: i32,
+    pub val: i64,
 }
