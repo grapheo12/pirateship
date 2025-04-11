@@ -20,7 +20,7 @@ class AppExperiment(Experiment):
             copy_file_from_remote_public_ip(f"{remote_repo}/target/release/{bin}", os.path.join(self.local_workdir, "build", bin), self.dev_ssh_user, self.dev_ssh_key, self.dev_vm)
 
         remote_script_dir = f"{remote_repo}/scripts_v2/loadtest"
-        TARGET_SCRIPTS = ["load.py", "locustfile.py", "docker-compose.yml", "toggle.py", "shamir.py"]
+        TARGET_SCRIPTS = ["load.py", "locustfile.py", "docker-compose.yml", "toggle.py", "shamir.py", "zipfian.py"]
 
         # Copy the scripts to build directory
         for script in TARGET_SCRIPTS:
@@ -32,7 +32,7 @@ class AppExperiment(Experiment):
         remote_repo = f"/home/{self.dev_ssh_user}/repo"
 
         remote_script_dir = f"{remote_repo}/scripts_v2/loadtest"
-        TARGET_SCRIPTS = ["load.py", "locustfile.py", "docker-compose.yml", "toggle.py", "shamir.py"]
+        TARGET_SCRIPTS = ["load.py", "locustfile.py", "docker-compose.yml", "toggle.py", "shamir.py", "zipfian.py"]
 
 
         res1 = run_remote_public_ip([
@@ -145,6 +145,11 @@ class AppExperiment(Experiment):
         self.total_worker_processes = self.total_client_vms * self.workers_per_client
         self.locust_master = self.client_vms[0]
         self.workload = self.base_client_config.get("workload", "kms")
+        if self.workload == "smallbank":
+            self.payment_threshold = str(self.base_client_config.get("payment_threshold", 1000))
+        else:
+            self.payment_threshold = ""
+
         self.total_machines = self.workers_per_client * self.total_client_vms
 
         users_per_clients = [self.num_clients // self.total_machines] * self.total_machines
@@ -204,8 +209,9 @@ $SSH_CMD {self.dev_ssh_user}@{self.dev_vm.public_ip} 'docker compose -f {self.re
                         binary_name = self.workload
                     else:
                         continue
+
                     _script += f"""
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'RUST_BACKTRACE=full {self.remote_workdir}/build/{binary_name} {self.remote_workdir}/configs/{bin}_config.json > {self.remote_workdir}/logs/{repeat_num}/{bin}.log 2> {self.remote_workdir}/logs/{repeat_num}/{bin}.err' &
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'RUST_BACKTRACE=full {self.remote_workdir}/build/{binary_name} {self.remote_workdir}/configs/{bin}_config.json {self.payment_threshold} > {self.remote_workdir}/logs/{repeat_num}/{bin}.log 2> {self.remote_workdir}/logs/{repeat_num}/{bin}.err' &
 PID="$PID $!"
 """
             _script += f"""

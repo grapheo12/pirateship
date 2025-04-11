@@ -28,10 +28,6 @@ use crate::payloads::{RegisterPayload, SendPayload};
 struct AppState {
     /// Global channel to feed into the consensusNode.
     batch_proposer_tx: Sender<TxWithAckChanTag>,
-    /// Separate client instance for byz commit probe, so it doesn't interfere with other requests
-    /// on the same worker thread.
-    /// Arced since it is shared across threads.
-    probe_for_byz_commit: Arc<AtomicBool>,
     /// Only a per-thread client tag counter remains.
     curr_client_tag: AtomicU64,
     keys: KeyStore,
@@ -252,20 +248,15 @@ pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::cha
     let port = port + 1000;
     let addr = format!("{}:{}", host, port);
 
-    let batch_size = config.consensus_config.max_backlog_batch_size.max(256);
-
-
-    let probe_for_byz_commit = Arc::new(AtomicBool::new(false)); // This is a global state!
 
     HttpServer::new(move || {
         // Each worker thread creates its own client instance.
         let state = AppState {
             batch_proposer_tx: batch_proposer_tx.clone(),
-            probe_for_byz_commit: probe_for_byz_commit.clone(),
             curr_client_tag: AtomicU64::new(0),
             keys: keys.clone(),
             leader_name: name.clone(),
-            send_threshold: send_threshold,
+            send_threshold,
         };
 
         App::new()
@@ -275,7 +266,7 @@ pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::cha
             .service(balance)
             .service(sendpayment)
     })
-    .bind("127.0.0.1:8080")?
+    .bind(addr)?
     .run()
     .await?;
     Ok(())

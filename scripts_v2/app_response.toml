@@ -48,14 +48,14 @@ workload = "svr3"
 
 
 
-[[experiments]]
-name = "svr3"
-type = "app"
-repeats = 1
-num_nodes = 7
-num_clients = 3_000
-build_command = "make contrib"
-duration = 300
+# [[experiments]]
+# name = "svr3"
+# type = "app"
+# repeats = 1
+# num_nodes = 7
+# num_clients = 3_000
+# build_command = "make contrib"
+# duration = 300
 
 
 # [[experiments]]
@@ -69,6 +69,19 @@ duration = 300
 
 # [experiments.client_config]
 # workload = "kms"
+
+[[experiments]]
+name = "banking"
+type = "app"
+repeats = 1
+num_nodes = 7
+num_clients = 3_000
+build_command = "make contrib"
+duration = 300
+
+[experiments.client_config]
+workload = "smallbank"
+payment_threshold = 10
 
 
 [[results]]
