@@ -189,10 +189,13 @@ class TestUser(FastHttpUser):
             receiver = valid_usernames[random.sample(range(1, max_users), 1)[0]]
             if receiver != self.username:
                 break
-        send_amount = zipfian_sample(1, 10000, s=1.5)[0]
-        logger.info(f"RECIEVER {receiver}, VALID USERNAMES: {valid_usernames}")
-        logger.info(f"SEND AMOUNT {send_amount}")
-        self.client.post("/sendpayment", json={"sender_account":self.username, "receiver_account":receiver, "send_amount":send_amount})
+        send_amount = zipfian_sample(1, 10000, s=0.99, size=1)[0]
+        # logger.info(f"RECIEVER {receiver}, VALID USERNAMES: {valid_usernames}")
+        # logger.info(f"SEND AMOUNT {send_amount}")
+        resp = self.client.post("/sendpayment", json={"sender_account":self.username, "receiver_account":receiver, "send_amount":send_amount})
+        if resp.status_code == 200 and "send attempts" in resp.json():
+            if resp.json()["send attempts"] > 1:
+                logger.info(f"Multiple aborts: {resp.json()}")
 
     def create_new_secret_flow(self):
         # self.current_secret = self.rng.randint(0, (1 << 256) - 1)

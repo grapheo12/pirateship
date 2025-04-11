@@ -77,11 +77,13 @@ repeats = 1
 num_nodes = 7
 num_clients = 3_000
 build_command = "make contrib"
-duration = 60
+duration = 120
 
 [experiments.client_config]
 workload = "smallbank"
-payment_threshold = 10
+
+[experiments.sweeping_parameters]
+payment_threshold = [1, 10, 100, 1000, 10000]
 
 
 [[results]]
