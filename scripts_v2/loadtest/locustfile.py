@@ -8,6 +8,7 @@ import hashlib
 import json
 from pprint import pprint
 from shamir import split_secret, reconstruct_secret
+from zipfian import zipfian_sample
 import pickle
 import base64
 
@@ -103,7 +104,6 @@ class TestUser(FastHttpUser):
         else:
             self.password = "1234"
 
-
         # For optimal load balancing, need to hash the username to a get_host
         hsh = hashlib.sha256(self.username.encode()).digest()
         val = int.from_bytes(hsh, 'big')
@@ -148,12 +148,13 @@ class TestUser(FastHttpUser):
 
         if not self.active:
             return
-
+        
         if workload == "kms":
             self.kms_task()
-        elif workload == "svr3":
+        if workload == "svr3":
             self.svr3_task()
-
+        if workload == "smallbank":
+            self.smallbank_task()
 
     def kms_task(self):
         choice = random.uniform(0, 100)
@@ -179,6 +180,16 @@ class TestUser(FastHttpUser):
 
     def pin_guess(self, pin):
         self.client.get("/gettoken", json={"username": self.username, "pin": pin, "increment_version": False})
+
+    def smallbank_task(self):
+        self.send_payment()
+    
+    def send_payment(self):
+        receiver = valid_usernames[random.sample(range(max_users), 1)[0]]
+        send_amount = zipfian_sample(1, 10000, s=1.5)[0]
+        logger.info(f"RECIEVER {receiver}, VALID USERNAMES: {valid_usernames}")
+        logger.info(f"SEND AMOUNT {send_amount}")
+        self.client.post("/sendpayment", json={"sender_account":self.username, "receiver_account":receiver, "send_amount":send_amount})
 
     def create_new_secret_flow(self):
         # self.current_secret = self.rng.randint(0, (1 << 256) - 1)

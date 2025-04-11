@@ -3,7 +3,7 @@ use hashbrown::HashMap;
 use rustls::crypto::hash::Hash;
 use std::fmt::Display;
 
-use log::{info, trace, warn};
+use log::{error, info, trace, warn};
 use serde::{Serialize, Deserialize};
 
 use crate::{config::AtomicConfig, consensus_v2::app::AppEngine};
@@ -178,8 +178,8 @@ impl AppEngine for KVSAppEngine {
                                 values: vec![val],
                             });
 
-                        } else if op_type == ProtoTransactionOpType::Cas { // [key1, swap_val1, compare_val1, key2, swap_val2, compare_val2, ...]
-                            if op.operands.len() % 3 == 0 {
+                        } else if op_type == ProtoTransactionOpType::Cas { // [key1, swap_val1, compare_val1, key2, swap_val2, compare_val2, ...]                            
+                            if op.operands.len() % 3 != 0 {
                                 continue;
                             }
 

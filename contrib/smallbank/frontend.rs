@@ -153,6 +153,7 @@ async fn sendpayment(payload: web::Json<SendPayload>, data: web::Data<AppState>)
 
     let mut send_attempts = 0;
 
+    let mut resclone = Vec::new();
 
     loop {
         send_attempts += 1;
@@ -183,7 +184,7 @@ async fn sendpayment(payload: web::Json<SendPayload>, data: web::Data<AppState>)
             Err(_) => return HttpResponse::BadRequest().body("Expected 8 bytes for an i64"),
         };    
 
-        let receiver_balance = match result[0].as_slice().try_into() {
+        let receiver_balance = match result[1].as_slice().try_into() {
             Ok(arr) => i64::from_be_bytes(arr),
             Err(_) => return HttpResponse::BadRequest().body("Expected 8 bytes for an i64"),
         };
@@ -195,21 +196,26 @@ async fn sendpayment(payload: web::Json<SendPayload>, data: web::Data<AppState>)
          //increment value with cas
         let credit_op = ProtoTransactionOp {
             op_type: pft::proto::execution::ProtoTransactionOpType::Cas.into(),
-            operands: vec![receiver_checking_account.clone().into_bytes(), (receiver_balance + send_amount).to_be_bytes().to_vec(), receiver_balance.to_be_bytes().to_vec()],
+            operands: vec![receiver_checking_account.clone().into_bytes(), (receiver_balance + send_amount).to_be_bytes().to_vec(), receiver_balance.to_be_bytes().to_vec(), sender_checking_account.clone().into_bytes(), (sender_balance - send_amount).to_be_bytes().to_vec(), sender_balance.to_be_bytes().to_vec()],
         };
 
-        let debt_op = ProtoTransactionOp {
-            op_type: pft::proto::execution::ProtoTransactionOpType::Cas.into(),
-            operands: vec![sender_checking_account.clone().into_bytes(), (sender_balance - send_amount).to_be_bytes().to_vec(), sender_balance.to_be_bytes().to_vec()],
-        };
+        // let debt_op = ProtoTransactionOp {
+        //     op_type: pft::proto::execution::ProtoTransactionOpType::Cas.into(),
+        //     operands: vec![],
+        // };
 
-        let result = match send(vec![credit_op, debt_op], false, &data, send_amount >= data.send_threshold).await {
+        let result = match send(vec![credit_op], false, &data, send_amount >= data.send_threshold).await {
             Ok(response) => response,
             Err(e) => return e,
         };
-
         if result.len() == 2 {
             break;
+        }
+
+        resclone = result;
+
+        if send_attempts == 20 {
+            return HttpResponse::RequestTimeout().body(format!("retried CAS too many times: {:?}", resclone));
         }
     }
 
@@ -220,6 +226,7 @@ async fn sendpayment(payload: web::Json<SendPayload>, data: web::Data<AppState>)
 
     HttpResponse::Ok().json(serde_json::json!({
         "message": message,
+        "resclone": resclone,
         "send attempts": send_attempts,
         "send threshold": &data.send_threshold
     }))
@@ -329,7 +336,7 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, isRead: bool, state: &Ap
                 }
                 for op_result in tx_result.result {
                     if op_result.success == false {
-                        continue;
+                        return Ok(Vec::new());
                     }
                     for value in op_result.values {
                         result.push(value);
@@ -381,8 +388,6 @@ updated api calls:
 
 curl -X POST "http://localhost:8080/register" -H "Content-Type: application/json" -d '{"username":"teddy1"}'
 curl -X POST "http://localhost:8080/register" -H "Content-Type: application/json" -d '{"username":"teddy2"}'
-
-
 
 curl -X GET "http://localhost:8080/balance" -H "Content-Type: application/json" -d '{"username":"teddy1"}'
 curl -X GET "http://localhost:8080/balance" -H "Content-Type: application/json" -d '{"username":"teddy2"}'
