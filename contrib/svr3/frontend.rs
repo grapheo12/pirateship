@@ -135,7 +135,7 @@ async fn storeSecret(payload: web::Json<StoreSecretPayload>, data: web::Data<App
     }))
 }
 
-const MAX_GUESSES: i64 = 3;
+const MAX_GUESSES: i64 = 1_000_000;
 
 #[get("/gettoken")]
 async fn getToken(payload: web::Json<GetTokenPayload>, data: web::Data<AppState>) -> impl Responder {
@@ -248,8 +248,11 @@ async fn getToken(payload: web::Json<GetTokenPayload>, data: web::Data<AppState>
         };
 
         let read_user_version_result = match send(vec![transaction_op], true, &data).await {
-            Ok(response) => response[0].clone(),
+            Ok(response) if response.len() > 0 => response[0].clone(),
             Err(e) => return e,
+            _ => {
+                0i64.to_be_bytes().to_vec()
+            }
         };
         let curr_version = match read_user_version_result.as_slice().try_into() {
             Ok(arr) => {

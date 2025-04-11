@@ -13,20 +13,19 @@ MAX_CONCURRENT_REQUESTS = 200
 
 RAND_SEED_LIST = [42, 120, 430, 82, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110]
 
-async def register_user(host, usernames, password, connector):
-    async with aiohttp.ClientSession(connector=connector) as session:
-        try: 
-            for username in usernames:
-                async with session.post(f"{host}/register", json={"username": username, "password": password}) as response:
-                    if response.status != 200:
-                        print(f"Error registering {username}: {await response.text()}")
+async def register_user(host, usernames, password, session):
+    try: 
+        for username in usernames:
+            async with session.post(f"{host}/register", json={"username": username, "password": password}) as response:
+                if response.status != 200:
+                    print(f"Error registering {username}: {await response.text()}")
 
-                async with session.post(f"{host}/refresh", json={"username": username, "password": password}) as response:
-                    if response.status != 200:
-                        print(f"Error refreshing {username}: {await response.text()}")
-        except Exception as e:
-            await session.close()
-            print(f"An error occurred: {e}")
+            async with session.post(f"{host}/refresh", json={"username": username, "password": password}) as response:
+                if response.status != 200:
+                    print(f"Error refreshing {username}: {await response.text()}")
+    except Exception as e:
+        await session.close()
+        print(f"An error occurred: {e}")
 
 async def create_secret(host, usernames, password, session, nodes, threshold):
     try:
@@ -65,7 +64,7 @@ async def register_users(host, num_users, application, password="pirateship", wo
         _usernames = ["user" + str(uuid.UUID(int=rnd.getrandbits(128))) for j in range(users_per_clients[i])]
         usernames.extend(_usernames)
 
-    with open("Usernames.txt", "w") as f:
+    with open("Usernames.log", "w") as f:
         for username in usernames:
             f.write(username + "\n")
         
@@ -96,8 +95,8 @@ def run_locust(locust_file, host, num_users, getDistribution, getRequestHosts=[]
         "user_class_name": "TestUser",   
         "getDistribution": getDistribution,
         "getRequestHosts": getRequestHosts,
-        "workload": "svr3",
-    } 
+        "workload": "kms",
+    }
     json_config = json.dumps(custom_user_config)
     json_config = "'" + json_config + "'"
 

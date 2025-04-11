@@ -97,7 +97,11 @@ class TestUser(FastHttpUser):
         # We need to magically generate unique usernames without any kind of central coordination.
         # Since with distributed load testing, we can't guarantee that the same username won't be used by another user.
         self.username = valid_usernames[curr_num_users] # "user" + str(uuid.UUID(int=rnd.getrandbits(128)))
-        self.password = "pirateship"
+        
+        if workload == "kms":
+            self.password = "pirateship"
+        else:
+            self.password = "1234"
 
 
         # For optimal load balancing, need to hash the username to a get_host
@@ -161,10 +165,20 @@ class TestUser(FastHttpUser):
 
     def svr3_task(self):
         choice = random.uniform(0, 100)
-        if choice < getWeight and self.current_secret is not None:
-            self.retrieve_secret_flow()
+        if choice < getWeight:
+            self.pin_guess(self.password)
         else:
-            self.create_new_secret_flow()
+            wrong_pin = "2341"
+            self.pin_guess(wrong_pin)
+
+        # if choice < getWeight and self.current_secret is not None:
+        #     self.retrieve_secret_flow()
+        # else:
+        #     self.create_new_secret_flow()
+
+
+    def pin_guess(self, pin):
+        self.client.get("/gettoken", json={"username": self.username, "pin": pin, "increment_version": False})
 
     def create_new_secret_flow(self):
         # self.current_secret = self.rng.randint(0, (1 << 256) - 1)

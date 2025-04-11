@@ -178,38 +178,63 @@ impl AppEngine for KVSAppEngine {
                                 values: vec![val],
                             });
 
-                        } else if op_type == ProtoTransactionOpType::Cas { // [key, swap_val, compare_val]
-                            if op.operands.len() != 3 {
+                        } else if op_type == ProtoTransactionOpType::Cas { // [key1, swap_val1, compare_val1, key2, swap_val2, compare_val2, ...]
+                            if op.operands.len() % 3 == 0 {
                                 continue;
                             }
 
-                            let key: &Vec<u8> = &op.operands[0];
-                            let swap_val_buf = &op.operands[1];
-                            let compare_val_buf = &op.operands[2];
-                            let mut result = self.read(key);
-                            if result.is_none() {
-                                result = Some(vec![]);
+                            struct CasOp {
+                                key: Vec<u8>,
+                                swap_val: Vec<u8>,
+                                compare_val: Vec<u8>,
                             }
-                            let result = result.unwrap();
 
-                            if result.eq(compare_val_buf) {
-                                // Write back
-                                let val = swap_val_buf.clone();
-                                if self.state.ci_state.contains_key(key) {
-                                    self.state.ci_state.get_mut(key).unwrap().push((proto_block.n, val.clone()));
-                                } else {
-                                    self.state.ci_state.insert(key.clone(), vec![(proto_block.n, val.clone())]);
-                                }
-                                txn_result.result.push(ProtoTransactionOpResult {
-                                    success: true,
-                                    values: vec![result],
-                                });
-                            } else {
-                                txn_result.result.push(ProtoTransactionOpResult {
-                                    success: false,
-                                    values: vec![result],
+                            let mut cas_ops = Vec::new();
+                            let mut read_vals = Vec::new();
+                            for i in (0..op.operands.len()).step_by(3) {
+                                cas_ops.push(CasOp {
+                                    key: op.operands[i].clone(),
+                                    swap_val: op.operands[i + 1].clone(),
+                                    compare_val: op.operands[i + 2].clone(),
                                 });
                             }
+
+                            for op in cas_ops.iter() {
+                                // Read compare value
+                                let key: &Vec<u8> = &op.key;
+                                let result = self.read(key);
+                                if result.is_none() {
+                                    read_vals.push(vec![]);
+                                } else {
+                                    read_vals.push(result.unwrap());
+                                }
+                            }
+
+                            let mut must_operate = true;
+                            for i in 0..cas_ops.len() {
+                                if !read_vals[i].eq(&cas_ops[i].compare_val) {
+                                    must_operate = false;
+                                    break;
+                                }
+                            }
+
+
+                            if must_operate {
+                                // Write back
+                                for op in cas_ops.iter() {
+                                    let key = &op.key;
+                                    let val = &op.swap_val;
+                                    if self.state.ci_state.contains_key(key) {
+                                        self.state.ci_state.get_mut(key).unwrap().push((proto_block.n, val.clone()));
+                                    } else {
+                                        self.state.ci_state.insert(key.clone(), vec![(proto_block.n, val.clone())]);
+                                    }
+                                }
+                            }
+                            txn_result.result.push(ProtoTransactionOpResult {
+                                success: must_operate,
+                                values: read_vals,
+                            });
 
                         }
                     } else {
