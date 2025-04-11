@@ -727,8 +727,8 @@ class Result:
 
             y_range_total = max([v[3] for v in bounding_boxes.values()]) - min([v[2] for v in bounding_boxes.values()])
             # if y_range_total > 200:
-            #     plt.yscale("symlog")
-            # plt.ylim((0, 120))
+            #     plt.yscale("log")
+            plt.ylim((0, 600))
             # plt.xlim((50, 550))
             plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.45), ncol=legends_ncols, fontsize=55, columnspacing=1)
 
