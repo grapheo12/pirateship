@@ -43,6 +43,16 @@ async def create_secret(host, usernames, password, session, nodes, threshold):
         await session.close()
         print(f"An error occurred: {e}")
 
+async def create_bank_account(host, usernames, session):
+    try: 
+        for username in usernames:
+            async with session.post(f"{host}/register", json={"username": username}) as response:
+                if response.status != 200:
+                    print(f"Error registering {username}: {await response.text()}")
+    except Exception as e:
+        await session.close()
+        print(f"An error occurred: {e}")
+
 async def register_users(host, num_users, application, password="pirateship", workers_per_client=2, num_client_nodes=1, threshold=1):
     max_user_id_length = len(str(num_users))
 
@@ -78,6 +88,8 @@ async def register_users(host, num_users, application, password="pirateship", wo
                 tasks.append(register_user(host, chunk, password, session))
             if application == "svr3":
                 tasks.append(create_secret(host, chunk, password, session, total_machines, threshold))
+            if application == "smallbank":
+                tasks.append(create_bank_account(host, chunk, session))
 
         await asyncio.gather(*tasks, return_exceptions=True)
 

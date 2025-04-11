@@ -39,3 +39,6 @@ path = "kms/main.rs"
 name = "svr3"
 path = "svr3/main.rs"
 
+[[bin]]
+name = "smallbank"
+path = "smallbank/main.rs"

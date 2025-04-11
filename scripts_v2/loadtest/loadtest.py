@@ -43,6 +43,16 @@ async def create_secret(host, usernames, password, session, nodes, threshold):
         await session.close()
         print(f"An error occurred: {e}")
 
+async def create_bank_account(host, usernames, connector):
+    try: 
+        for username in usernames:
+            async with connector.post(f"{host}/register", json={"username": username}) as response:
+                if response.status != 200:
+                    print(f"Error registering {username}: {await response.text()}")
+    except Exception as e:
+        await connector.close()
+        print(f"An error occurred: {e}")
+
 async def register_users(host, num_users, application, password="pirateship", workers_per_client=2, num_client_nodes=2, threshold=1):
     max_user_id_length = len(str(num_users))
 
@@ -82,6 +92,8 @@ async def register_users(host, num_users, application, password="pirateship", wo
                 tasks.append(register_user(host, chunk, password, session))
             if application == "svr3":
                 tasks.append(create_secret(host, chunk, password, session, total_machines, threshold))
+            if application == "smallbank":
+                tasks.append(create_bank_account(host, chunk, session))
 
         await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -95,8 +107,8 @@ def run_locust(locust_file, host, num_users, getDistribution, getRequestHosts=[]
         "user_class_name": "TestUser",   
         "getDistribution": getDistribution,
         "getRequestHosts": getRequestHosts,
-        "workload": "kms",
-    }
+        "workload": application,
+    } 
     json_config = json.dumps(custom_user_config)
     json_config = "'" + json_config + "'"
 
@@ -160,7 +172,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_users", type=int, required=True)
     parser.add_argument("--locust_file", required=True, help="Path to the locust file")
     parser.add_argument("--get_ratio", type=int, default=100, help="Ratio of GET requests")
-    parser.add_argument("--application", required=True, choices=["kms", "svr3"])
+    parser.add_argument("--application", required=True, choices=["kms", "svr3", "smallbank"])
     parser.add_argument("--nodes", type=int, default=1)
     parser.add_argument("--get_request_hosts", nargs="+", default=[])
     #svr3 specific arguments
@@ -185,6 +197,10 @@ if __name__ == "__main__":
     elif application == "svr3":
         print("Performing Load Phase with SVR3...")
         asyncio.run(register_users(host, num_users, application, threshold=threshold))
+    elif application == "smallbank":
+        print("performing load phase with smallbank")
+        asyncio.run(register_users(host, num_users, application))
+
 
     print("Performing Run Phase...")
         
