@@ -185,7 +185,10 @@ class TestUser(FastHttpUser):
         self.send_payment()
     
     def send_payment(self):
-        receiver = valid_usernames[random.sample(range(max_users), 1)[0]]
+        while True:
+            receiver = valid_usernames[random.sample(range(1, max_users), 1)[0]]
+            if receiver != self.username:
+                break
         send_amount = zipfian_sample(1, 10000, s=1.5)[0]
         logger.info(f"RECIEVER {receiver}, VALID USERNAMES: {valid_usernames}")
         logger.info(f"SEND AMOUNT {send_amount}")
