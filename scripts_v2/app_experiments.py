@@ -174,6 +174,7 @@ class AppExperiment(Experiment):
                 f"pip3 install locust-plugins[dashboards]",
                 f"pip3 install aiohttp",
                 f"pip3 install requests",
+                f"pip3 install numpy",
             ], self.dev_ssh_user, self.dev_ssh_key, vm, hide=False)
 
 
@@ -270,7 +271,7 @@ PID="$PID $!"
                 toggle_ramp_up = 120
                 toggle_duration = 60
             else:
-                toggle_duration = self.duration // 3
+                toggle_ramp_up = self.duration // 3
                 toggle_duration = self.duration // 3
 
             _script += f"""
