@@ -16,6 +16,20 @@ from pprint import pprint
 import matplotlib
 import matplotlib.pyplot as plt
 
+plt.rc('font',**{'size': 100, 'family':'serif','serif':['Linux Libertine O']})
+# plt.rc('legend', fontsize=7)
+# plt.rc('figure', figsize=sizeFig)
+# plt.rc('axes', linewidth=0.5)
+# plt.rc('lines', linewidth=0.5)
+matplotlib.rcParams['ps.useafm'] = True
+matplotlib.rcParams['pdf.use14corefonts'] = True
+matplotlib.rcParams['text.usetex'] = True
+# matplotlib.rcParams["text.latex.preview"] = True
+matplotlib.rcParams['text.latex.preamble'] = r"""
+\usepackage{libertine}
+\usepackage[libertine]{newtxmath}
+"""
+
 from autobahn_logs import LogParser as AutobahnLogParser
 from autobahn_experiments import AutobahnExperiment
 
@@ -716,21 +730,38 @@ class Result:
         except Exception as e:
             print("Defaulting to normal plot")
             assert not(isinstance(axes, np.ndarray))
-            axes.grid()
-            for i, (legend, stat_list) in enumerate(plot_dict.items()):
-                tputs = [stat.mean_tput for stat in stat_list]
-                latencies = [stat.median_latency for stat in stat_list]
-                axes.plot(tputs, latencies, label=legend, color=colors[i], marker=markers[i], mew=6, ms=12, linewidth=6)
+            
+            if "partitions" in self.kwargs:
+                cft_partitions = self.kwargs["partitions"]["cft"]
+                bft_partitions = self.kwargs["partitions"]["bft"]
+                print(cft_partitions, bft_partitions)
+                self.plot_partitions(cft_partitions, bft_partitions, plot_dict, colors, markers, legends_ncols)
+            else:
+                axes.grid()
+                plot_dict_items = list(sorted(plot_dict.items()))
 
-            plt.xlabel("Throughput (k req/s)")
-            plt.ylabel("Latency (ms)")
+                for i, (legend, stat_list) in enumerate(plot_dict_items):
+                    if "Slow" in legend:
+                        legend = "Slow Audit"
+                    elif "Fast" in legend:
+                        legend = "Fast Audit"
+                    elif "Crash Commit" in legend:
+                        legend = "Commit"
+                    tputs = [stat.mean_tput for stat in stat_list]
+                    latencies = [stat.median_latency for stat in stat_list]
+                    axes.plot(tputs, latencies, label=legend, color=colors[i], marker=markers[i], mew=6, ms=12, linewidth=6)
 
-            y_range_total = max([v[3] for v in bounding_boxes.values()]) - min([v[2] for v in bounding_boxes.values()])
-            # if y_range_total > 200:
-            #     plt.yscale("log")
-            plt.ylim((0, 600))
-            # plt.xlim((50, 550))
-            plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.45), ncol=legends_ncols, fontsize=55, columnspacing=1)
+                plt.xlabel("Throughput (k req/s)", fontsize=70)
+                plt.ylabel("Latency (ms)", fontsize=70)
+
+                y_range_total = max([v[3] for v in bounding_boxes.values()]) - min([v[2] for v in bounding_boxes.values()])
+                # if y_range_total > 200:
+                # plt.yscale("log")
+                # plt.ylim((0, 300))
+                # plt.xlim((50, 550))
+                plt.legend(loc='upper center', bbox_to_anchor=(0.5, 3.0), ncol=legends_ncols, fontsize=70)
+                plt.xticks(fontsize=70)
+                plt.yticks(fontsize=70)
 
 
         plt.gcf().set_size_inches(
@@ -743,6 +774,34 @@ class Result:
             plt.savefig(output, bbox_inches="tight")
         else:
             plt.show()
+
+    def plot_partitions(self, cft_partitions, bft_partitions, plot_dict, colors, markers, legends_ncols):
+        # Two figures side by side
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(30, 12))
+        fig.subplots_adjust(hspace=0.1, wspace=0.3)
+
+        for i, (legend, stat_list) in enumerate(plot_dict.items()):
+            tputs = [stat.mean_tput for stat in stat_list]
+            latencies = [stat.median_latency for stat in stat_list]
+            if legend in cft_partitions:
+                ax1.plot(tputs, latencies, label=legend, color=colors[i], marker=markers[i], mew=6, ms=12, linewidth=6)
+            elif legend in bft_partitions:
+                ax2.plot(tputs, latencies, label=legend, color=colors[i], marker=markers[i], mew=6, ms=12, linewidth=6)
+
+        ax1.grid()
+        ax2.grid()
+        ax1.set_xlabel("Throughput (k req/s)")
+        ax1.set_ylabel("Latency (ms)")
+        ax2.set_xlabel("Throughput (k req/s)")
+        ax2.set_ylabel("Latency (ms)")
+        fig.legend(loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=legends_ncols, fontsize=55, columnspacing=1)
+
+        ax1.set_ylim(top=130)
+        ax2.set_ylim(top=130)
+        ax1.set_xlim(right=600)
+        ax2.set_xlim(right=600)
+
+
 
 
 
@@ -859,20 +918,24 @@ class Result:
     def crash_byz_tput_timeseries_plot(self, times, crash_commits, byz_commits, events):
         assert len(times) == len(crash_commits) == len(byz_commits)
 
-        plt.plot(times, crash_commits, label="Crash Commit Throughput", linewidth=3)
-        plt.plot(times, byz_commits, label="Byz Commit Throughput", linewidth=3)
-        plt.xlabel("Time (s)", fontsize=55)
-        plt.ylabel("Throughput (batch/s)", fontsize=55)
+        plt.plot(times, crash_commits, label="Commit Throughput", linewidth=10, marker="o", markersize=20)
+        plt.plot(times, byz_commits, label="Audit Throughput", linewidth=10, marker="^", markersize=20)
+        plt.xlabel("Time (s)", fontsize=70)
+        plt.ylabel("Throughput (batch/s)", fontsize=70)
 
         plt.yscale("symlog")
+        # plt.ticklabel_format(scilimits=(-1000000, 1000000))
+        
 
         # Legend at lower right
-        plt.legend(loc="lower right", fontsize=30)
+        # plt.legend(loc="lower right", fontsize=90)
+        plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=2, fontsize=70)
+
         plt.grid()
 
-        plt.xlim(times[0], times[-1])
-        plt.xticks(fontsize=55)
-        plt.yticks(fontsize=55)
+        plt.xlim(25, 45)
+        plt.xticks(fontsize=90)
+        plt.yticks(fontsize=65)
 
 
         # How low/high can I go?
@@ -880,7 +943,7 @@ class Result:
         ylim_max = max(max(crash_commits), max(byz_commits))
 
         # Will use this range for all text boxes for events
-        text_box_locs = list(np.linspace(0, ylim_max, len(events) + 4)[2:-2])
+        text_box_locs = list([-200, -5, 10, -6])
         assert len(text_box_locs) == len(events)
 
 
@@ -888,14 +951,14 @@ class Result:
         text_props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
 
         for i, (event_time, event_description) in enumerate(events):
-            plt.axvline(x=event_time, color=line_colors.pop(0), linestyle="--", linewidth=3)
+            plt.axvline(x=event_time, color=line_colors.pop(0), linestyle="--", linewidth=8)
             # Large font
             plt.text(
-                event_time + 0.2 * i, text_box_locs[i] if i % 2 == 0 else -text_box_locs[i],
+                event_time + 0.2 * i, text_box_locs[i],
                 event_description, bbox=text_props,
                 horizontalalignment='center',
                 verticalalignment='center',
-                fontsize=40
+                fontsize=50
             )
 
         plt.gcf().set_size_inches(

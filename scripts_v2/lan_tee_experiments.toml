@@ -135,17 +135,21 @@ plotter = "tput_latency_sweep"
 ramp_up = 15
 ramp_down = 15
 output = "lan_final.pdf"
-force_parse = true
+# force_parse = true
 skip_indices = [0, 1]
 
 [results.legends]
 # Experiment group to legend mapping
-pirateship = "ps(sig=10)+byz"
-pirateship_sig_1 = "ps(sig=1)+byz"
+pirateship = "ps(sig=10)+ps(sig=10)-aud+byz"
+pirateship_sig_1 = "ps(sig=1)+ps(sig=1)-aud+byz"
 hotstuff = "hotstuff+onlybyz"
 engraft = "engraft+onlybyz"
 signed_raft = "signed_raft"
 autobahn = "autobahn"
+
+[results.partitions]
+cft = ["ps(sig=10)", "ps(sig=1)", "engraft", "signed_raft"]
+bft = ["ps(sig=10)-aud", "ps(sig=1)-aud", "hotstuff", "autobahn"]
 
 [results.font]
 size = 55

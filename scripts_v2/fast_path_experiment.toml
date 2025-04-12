@@ -88,10 +88,10 @@ plotter = "tput_latency_sweep"
 ramp_up = 15
 ramp_down = 15
 output = "fast_path_experiment.pdf"
-force_parse = true
+# force_parse = true
 skip_indices = [4]
 
 [results.legends]
 # Experiment group to legend mapping
-slow_path = "Slow Byz Commit+onlybyz"
-fast_path = "Crash Commit+Fast Byz Commit+byz"
+slow_path = "Slow Audit+onlybyz"
+fast_path = "Commit+Fast Audit+byz"

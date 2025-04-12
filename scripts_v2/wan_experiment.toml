@@ -127,9 +127,9 @@ output = "wan_experiment.pdf"
 force_parse = true
 
 [results.legends]
-c1 = "C1+byz"
-c2 = "C2+byz"
-c3 = "C3+byz"
+c1 = "C1+C1-aud+byz"
+c2 = "C2+C2-aud+byz"
+c3 = "C3+C3-aud+byz"
 
 [results.font]
 size = 55
