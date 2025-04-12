@@ -135,7 +135,7 @@ plotter = "tput_latency_sweep"
 ramp_up = 15
 ramp_down = 15
 output = "lan_final.pdf"
-# force_parse = true
+force_parse = true
 skip_indices = [0, 1]
 
 [results.legends]
@@ -144,11 +144,13 @@ pirateship = "ps(sig=10)+ps(sig=10)-aud+byz"
 pirateship_sig_1 = "ps(sig=1)+ps(sig=1)-aud+byz"
 hotstuff = "hotstuff+onlybyz"
 engraft = "engraft+onlybyz"
-signed_raft = "signed_raft"
+signed_raft = "signed_raft(n=5)"
 autobahn = "autobahn"
+signed_raft_n7 = "signed_raft(n=7)"
+
 
 [results.partitions]
-cft = ["ps(sig=10)", "ps(sig=1)", "engraft", "signed_raft"]
+cft = ["ps(sig=10)", "ps(sig=1)", "engraft", "signed_raft(n=5)", "signed_raft(n=7)"]
 bft = ["ps(sig=10)-aud", "ps(sig=1)-aud", "hotstuff", "autobahn"]
 
 [results.font]

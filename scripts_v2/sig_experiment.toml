@@ -23,7 +23,7 @@ commit_index_gap_hard = 500
 liveness_u = 2
 max_backlog_batch_size = 1000
 signature_max_delay_blocks = 50
-signature_max_delay_ms = 102 # roughly batch_max_delay_ms * signature_max_delay_blocks
+signature_max_delay_ms = 102000 # roughly batch_max_delay_ms * signature_max_delay_blocks
 num_crypto_workers = 5
 view_timeout_ms = 4000
 batch_max_delay_ms = 2
@@ -53,20 +53,62 @@ client_max_retry = 10
 request_config = "Blanks"
 max_concurrent_requests = 32
 
-# [[experiments]]
-# name = "pirateship_sig_1"
-# repeats = 1
-# num_nodes = 7
-# node_distribution = "uniform"
-# build_command = "make"
-# duration = 60
+[[experiments]]
+name = "pirateship_sig_1"
+repeats = 1
+num_nodes = 7
+node_distribution = "uniform"
+build_command = "make"
+duration = 60
 
-# [experiments.node_config.consensus_config]
-# signature_max_delay_blocks = 1
+[experiments.node_config.consensus_config]
+signature_max_delay_blocks = 1
 
-# [experiments.sweeping_parameters]
-# num_clients = [400, 700, 1000]
+[experiments.sweeping_parameters]
+num_clients = [600]
 
+
+[[experiments]]
+name = "pirateship_sig_2"
+repeats = 1
+num_nodes = 7
+node_distribution = "uniform"
+build_command = "make"
+duration = 60
+
+[experiments.node_config.consensus_config]
+signature_max_delay_blocks = 2
+
+[experiments.sweeping_parameters]
+num_clients = [600]
+
+[[experiments]]
+name = "pirateship_sig_5"
+repeats = 1
+num_nodes = 7
+node_distribution = "uniform"
+build_command = "make"
+duration = 60
+
+[experiments.node_config.consensus_config]
+signature_max_delay_blocks = 5
+
+[experiments.sweeping_parameters]
+num_clients = [600]
+
+[[experiments]]
+name = "pirateship_sig_7"
+repeats = 1
+num_nodes = 7
+node_distribution = "uniform"
+build_command = "make"
+duration = 60
+
+[experiments.node_config.consensus_config]
+signature_max_delay_blocks = 7
+
+[experiments.sweeping_parameters]
+num_clients = [600]
 
 [[experiments]]
 name = "pirateship_sig_10"
@@ -80,11 +122,10 @@ duration = 60
 signature_max_delay_blocks = 10
 
 [experiments.sweeping_parameters]
-num_clients = [400, 600]
-
+num_clients = [600]
 
 [[experiments]]
-name = "pirateship_sig_50"
+name = "pirateship_sig_15"
 repeats = 1
 num_nodes = 7
 node_distribution = "uniform"
@@ -92,10 +133,40 @@ build_command = "make"
 duration = 60
 
 [experiments.node_config.consensus_config]
-signature_max_delay_blocks = 50
+signature_max_delay_blocks = 15
 
 [experiments.sweeping_parameters]
-num_clients = [400, 600]
+num_clients = [600]
+
+
+[[experiments]]
+name = "pirateship_sig_20"
+repeats = 1
+num_nodes = 7
+node_distribution = "uniform"
+build_command = "make"
+duration = 60
+
+[experiments.node_config.consensus_config]
+signature_max_delay_blocks = 20
+
+[experiments.sweeping_parameters]
+num_clients = [600]
+
+
+# [[experiments]]
+# name = "pirateship_sig_50"
+# repeats = 1
+# num_nodes = 7
+# node_distribution = "uniform"
+# build_command = "make"
+# duration = 60
+
+# [experiments.node_config.consensus_config]
+# signature_max_delay_blocks = 50
+
+# [experiments.sweeping_parameters]
+# num_clients = [400, 600, 800]
 
 
 # [[experiments]]
@@ -128,35 +199,35 @@ num_clients = [400, 600]
 # num_clients = [400, 700, 1000]
 
 
-[[experiments]]
-name = "signed_raft_sig_50"
-repeats = 1
-num_nodes = 7
-node_distribution = "uniform"
-build_command = "make signed_raft_logger"
-duration = 60
+# [[experiments]]
+# name = "signed_raft_sig_50"
+# repeats = 1
+# num_nodes = 5
+# node_distribution = "uniform"
+# build_command = "make signed_raft_logger"
+# duration = 60
 
-[experiments.node_config.consensus_config]
-signature_max_delay_blocks = 50
+# [experiments.node_config.consensus_config]
+# signature_max_delay_blocks = 50
 
-[experiments.sweeping_parameters]
-num_clients = [400, 600]
+# [experiments.sweeping_parameters]
+# num_clients = [400, 600, 800]
 
 
 
-[[experiments]]
-name = "signed_raft_sig_10"
-repeats = 1
-num_nodes = 5
-node_distribution = "uniform"
-build_command = "make signed_raft_logger"
-duration = 60
+# [[experiments]]
+# name = "signed_raft_sig_10"
+# repeats = 1
+# num_nodes = 5
+# node_distribution = "uniform"
+# build_command = "make signed_raft_logger"
+# duration = 60
 
-[experiments.node_config.consensus_config]
-signature_max_delay_blocks = 10
+# [experiments.node_config.consensus_config]
+# signature_max_delay_blocks = 10
 
-[experiments.sweeping_parameters]
-num_clients = [400, 600]
+# [experiments.sweeping_parameters]
+# num_clients = [400, 600, 800]
 
 
 # [[experiments]]
@@ -171,7 +242,7 @@ num_clients = [400, 600]
 # signature_max_delay_blocks = 1
 
 # [experiments.sweeping_parameters]
-# num_clients = [400, 700, 1000]
+# num_clients = [400, 600, 800]
 
 
 [[results]]
@@ -184,15 +255,18 @@ force_parse = true
 
 [results.legends]
 # Experiment group to legend mapping
-pirateship_sig_1 = "ps(sig=1)+byz"
-pirateship_sig_10 = "ps(sig=10)+byz"
-pirateship_sig_50 = "ps(sig=50)+byz"
-pirateship_sig_100 = "ps(sig=100)+byz"
+pirateship_sig_1 = "ps(sig=1)"
+pirateship_sig_2 = "ps(sig=2)"
+pirateship_sig_5 = "ps(sig=5)"
+pirateship_sig_7 = "ps(sig=7)"
+pirateship_sig_10 = "ps(sig=10)"
+pirateship_sig_15 = "ps(sig=15)"
+pirateship_sig_20 = "ps(sig=20)"
 
-# signed_raft_sig_1 = "sr(sig=1)"
-signed_raft_sig_10 = "sr(sig=10)"
-signed_raft_sig_50 = "sr(sig=50)"
-signed_raft_sig_100 = "sr(sig=100)"
+# # signed_raft_sig_1 = "sr(sig=1)"
+# signed_raft_sig_10 = "sr(sig=10)"
+# signed_raft_sig_50 = "sr(sig=50)"
+# signed_raft_sig_100 = "sr(sig=100)"
 
 
 [results.font]
