@@ -3,6 +3,10 @@ use std::{sync::Arc, time::Duration};
 use pft::{client::{logger::{ClientStatLogger, ClientWorkerStat}, worker::ClientWorker, workload_generators::{BlankWorkloadGenerator, KVReadWriteUniformGenerator, KVReadWriteYCSBGenerator, MockSQLGenerator, PerWorkerWorkloadGenerator}}, config::{default_log4rs_config, ClientConfig, RequestConfig}, crypto::KeyStore, rpc::client::{Client, PinnedClient}, utils::channel::make_channel};
 use tokio::{sync::Mutex, task::JoinSet};
 
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+
+
 fn process_args() -> ClientConfig {
     macro_rules! usage_str {
         () => {
