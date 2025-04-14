@@ -703,7 +703,7 @@ class Result:
 
 
         num_lines = len(plot_dict)
-        colors = self.kwargs.get('colors', ['b', 'g', 'r', 'c', 'm', 'y', 'k', "orange", "black"])
+        colors = self.kwargs.get('colors', ['b', 'g', 'r', 'c', 'm', 'y', 'k', "orange", "c"])
         markers = self.kwargs.get('markers', ['o', 's', 'D', '^', 'v', 'p', 'P', '*', 'X', 'H'])
         while len(colors) < num_lines:
             colors += colors
