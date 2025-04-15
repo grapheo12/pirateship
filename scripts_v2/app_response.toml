@@ -44,7 +44,7 @@ byzantine_start_block = 0
 [client_config]
 getDistribution = 50
 workers_per_client = 8
-workload = "svr3"
+workload = "kms"
 
 
 

@@ -405,7 +405,9 @@ class Deployment:
         nodes_per_region = layout["nodes_per_region"]
         curr_vms_per_region = [0] * len(nodes_per_region)
         vms = []
-        for node in self.get_all_node_vms():
+        all_nodes = self.get_all_node_vms()
+        all_nodes.sort(key=lambda x: (x.region_id, x.tee_type, x.name))
+        for node in all_nodes:
             if curr_vms_per_region[node.region_id] < nodes_per_region[node.region_id]:
                 vms.append(node)
                 curr_vms_per_region[node.region_id] += 1

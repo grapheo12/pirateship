@@ -3,8 +3,8 @@ project_home = "https://github.com/grapheo12/pirateship"
 
 [deployment_config]
 # mode = "lan"
-# mode = "lan-nontee"
-mode = "lan-tdx"
+mode = "lan-nontee"
+# mode = "lan-tdx"
 ssh_key = "cluster_key.pem"
 ssh_user = "pftadmin"
 node_port_base = 3000

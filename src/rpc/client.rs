@@ -6,7 +6,7 @@ use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt,
 use log::{debug, info, trace, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
 use std::{
-    collections::{HashMap, HashSet}, fs::File, future::Future, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::Arc, time::Duration
+    collections::{HashMap, HashSet}, fs::File, future::Future, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::{atomic::{AtomicUsize, Ordering}, Arc}, time::Duration
 };
 use tokio::{
     io::{split, AsyncReadExt, AsyncWriteExt, BufWriter, ReadHalf, WriteHalf},
@@ -188,7 +188,8 @@ pub struct Client {
     pub worker_ready: PinnedHashSet<String>,
     pub key_store: AtomicKeyStore,
     do_auth: bool,
-    graveyard_tx: Mutex<Option<UnboundedSender<BoxFuture<'static, ()>>>>
+    graveyard_tx: Mutex<Option<UnboundedSender<BoxFuture<'static, ()>>>>,
+    rr_start: AtomicUsize,
 }
 
 #[derive(Clone)]
@@ -239,6 +240,7 @@ impl Client {
             worker_ready: PinnedHashSet::new(),
             key_store: AtomicKeyStore::new(key_store.to_owned()),
             graveyard_tx: Mutex::new(None),
+            rr_start: AtomicUsize::new(0),
         }
     }
 
@@ -255,6 +257,7 @@ impl Client {
             worker_ready: PinnedHashSet::new(),
             key_store,
             graveyard_tx: Mutex::new(None),
+            rr_start: AtomicUsize::new(0),
         }
     }
 
@@ -271,6 +274,7 @@ impl Client {
             replying_chan_map: PinnedHashMap::new(),
             worker_ready: PinnedHashSet::new(),
             graveyard_tx: Mutex::new(None),
+            rr_start: AtomicUsize::new(0),
         }
     }
 
@@ -887,7 +891,10 @@ impl PinnedClient {
             let lchans = client.0.chan_map.0.read().await;
             let mut total_success = 0;
             // let mut futs = FuturesUnordered::new();
-            for name in names {
+            let _rr_idx = client.0.rr_start.fetch_add(1, Ordering::Relaxed);
+            for i in 0..names.len() {
+                let idx = (_rr_idx + i) % names.len();
+                let name = &names[idx];
                 let chan = lchans.get(name).unwrap();
                 // chans.push(chan.clone());
                 if total_success < min_success {

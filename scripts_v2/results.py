@@ -757,9 +757,9 @@ class Result:
                 y_range_total = max([v[3] for v in bounding_boxes.values()]) - min([v[2] for v in bounding_boxes.values()])
                 # if y_range_total > 200:
                 # plt.yscale("log")
-                # plt.ylim((0, 300))
+                plt.ylim((0, 125))
                 # plt.xlim((50, 550))
-                plt.legend(loc='upper center', bbox_to_anchor=(0.5, 3.0), ncol=legends_ncols, fontsize=70)
+                plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=legends_ncols, fontsize=70)
                 plt.xticks(fontsize=70)
                 plt.yticks(fontsize=70)
 
@@ -777,8 +777,8 @@ class Result:
 
     def plot_partitions(self, cft_partitions, bft_partitions, plot_dict, colors, markers, legends_ncols):
         # Two figures side by side
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(30, 12))
-        fig.subplots_adjust(hspace=0.1, wspace=0.3)
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 12))
+        fig.subplots_adjust(hspace=0.1, wspace=0.5)
 
         for i, (legend, stat_list) in enumerate(plot_dict.items()):
             tputs = [stat.mean_tput for stat in stat_list]
@@ -790,16 +790,24 @@ class Result:
 
         ax1.grid()
         ax2.grid()
-        ax1.set_xlabel("Throughput (k req/s)")
-        ax1.set_ylabel("Latency (ms)")
-        ax2.set_xlabel("Throughput (k req/s)")
-        ax2.set_ylabel("Latency (ms)")
-        fig.legend(loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=legends_ncols, fontsize=55, columnspacing=1)
+        ax1.set_xlabel("Throughput (k req/s)", fontsize=90)
+        ax1.set_ylabel("Latency (ms)", fontsize=90)
+        ax2.set_xlabel("Throughput (k req/s)", fontsize=90)
+        ax2.set_ylabel("Latency (ms)", fontsize=90)
+        fig.legend(loc='upper center', bbox_to_anchor=(0.5, 1.32), ncol=legends_ncols, fontsize=70, columnspacing=0.5)
 
         ax1.set_ylim(top=130)
         ax2.set_ylim(top=130)
         ax1.set_xlim(right=600)
         ax2.set_xlim(right=600)
+        ax1.set_yticks([25, 50, 75, 100, 125])
+        ax2.set_yticks([25, 50, 75, 100, 125])
+        ax1.set_xticks([200, 400, 600])
+        ax2.set_xticks([200, 400, 600])
+        ax1.set_yticklabels([25, 50, 75, 100, 125], fontsize=90)
+        ax2.set_yticklabels([25, 50, 75, 100, 125], fontsize=90)
+        ax1.set_xticklabels([200, 400, 600], fontsize=90)
+        ax2.set_xticklabels([200, 400, 600], fontsize=90)
 
 
 
@@ -863,12 +871,13 @@ class Result:
         # Assumption: xlabels are in the same order as the subexperiments in each group
         plot_matrix = np.zeros((len(xlabels), len(plot_dict))) # Rows are xlabels, columns are legends
         max_tput = 0
+        plot_dict_items = list(sorted(plot_dict.items(), key=lambda x: int(x[0].split(" ")[0])))
         
         for i, xlabel in enumerate(xlabels):
-            for j, (legend, stat_list) in enumerate(plot_dict.items()):
+            for j, (legend, stat_list) in enumerate(plot_dict_items):
                 for k, stat in enumerate(stat_list):
                     if i == k:
-                        plot_matrix[i, j] = stat.mean_tput
+                        plot_matrix[i, j] = int(stat.mean_tput)
                         if stat.mean_tput > max_tput:
                             max_tput = stat.mean_tput
 
@@ -881,27 +890,38 @@ class Result:
         block_size = 2 * gap_between_bars + len(plot_dict) * bar_width
 
         bar_start_pos = np.array([i * block_size for i in range(len(xlabels))])
-        label_pos = [i * block_size + (len(plot_dict) // 2) * bar_width - gap_between_bars for i in range(len(xlabels))]
+        label_pos = [i * block_size + (len(plot_dict) // 2) * bar_width - 0 * gap_between_bars for i in range(len(xlabels))]
 
         font = self.kwargs.get('font', {
-            'size'   : 40
+            'size'   : 90,
+            'family': 'serif',
+            'serif': ["Linux Libertine O"],
         })
         matplotlib.rc('font', **font)
         matplotlib.rc("axes.formatter", limits=(-99, 99))
-
+        matplotlib.rcParams['ps.useafm'] = True
+        matplotlib.rcParams['pdf.use14corefonts'] = True
+        matplotlib.rcParams['text.usetex'] = True
+        # matplotlib.rcParams["text.latex.preview"] = True
+        matplotlib.rcParams['text.latex.preamble'] = r"""
+        \usepackage{libertine}
+        \usepackage[libertine]{newtxmath}
+        """
 
         fig, ax = plt.subplots(layout="constrained")
-        for i, (legend, stats) in enumerate(plot_dict.items()):
+        for i, (legend, stats) in enumerate(plot_dict_items):
             rects = ax.bar(
                 bar_start_pos + (gap_between_bars + i * bar_width), # Where to start the bar
                 plot_matrix[:, i], # Heights of the bars
                 width=bar_width, label=legend, zorder=3)
-            ax.bar_label(rects, padding=3)
+            ax.bar_label(rects, padding=3, fontsize=90)
 
         ax.set_xticks(label_pos, xlabels)
-        plt.ylim(0, ylim)
-        plt.ylabel("Throughput (k req/s)")
-        plt.legend(loc="upper center", ncols=3, bbox_to_anchor=(0.5, 1.1))
+        plt.ylim(0, ylim+50)
+        plt.ylabel("Throughput (k req/s)", fontsize=90)
+        plt.xticks(fontsize=90)
+        plt.yticks(fontsize=90)
+        plt.legend(loc="upper center", ncols=3, bbox_to_anchor=(0.5, 1.2), fontsize=60)
         plt.grid(zorder=0)
 
         plt.gcf().set_size_inches(

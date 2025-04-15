@@ -24,3 +24,11 @@ GROUP BY 1, name
 ORDER BY 1, 2) b
 
 ON a.time = b.time;
+
+----
+
+SELECT time_bucket('2.000s',"time") AS "time", 
+ avg(response_time)
+FROM request 
+GROUP BY 1
+ORDER BY 1, 2

@@ -67,20 +67,21 @@ num_requests = 100_000_000
 request_config = "Blanks"
 max_concurrent_requests = 32
 
-# [[experiments]]
-# name = "c1"
-# repeats = 1
-# num_nodes = 4
-# node_distribution = "c1"
-# client_region = 0
-# build_command = "make"
-# duration = 60
+[[experiments]]
+name = "c1"
+repeats = 1
+num_nodes = 4
+node_distribution = "c1"
+client_region = 0
+build_command = "make"
+duration = 120
 
-# [experiments.node_config.consensus_config]
-# liveness_u = 1
+[experiments.node_config.consensus_config]
+liveness_u = 1
 
-# [experiments.sweeping_parameters]
+[experiments.sweeping_parameters]
 # num_clients = [100, 200, 400, 500, 700, 1000]
+num_clients = [500]
 
 # [[experiments]]
 # name = "c2"
@@ -96,7 +97,7 @@ max_concurrent_requests = 32
 # liveness_u = 2
 
 # [experiments.sweeping_parameters]
-# # num_clients = [60, 80, 100, 120, 150]
+# num_clients = [60, 80, 100, 120, 150, 160, 170, 180, 200]
 # num_clients = [160, 170, 180, 200]
 
 
@@ -107,15 +108,15 @@ num_nodes = 9
 node_distribution = "c3"
 client_region = 0
 build_command = "make"
-duration = 60
-seq_start = 9
+duration = 120
+# seq_start = 9
 
 [experiments.node_config.consensus_config]
 liveness_u = 3
 
 [experiments.sweeping_parameters]
-# num_clients = [80, 100, 120, 150, 170, 200, 220, 250, 270, 300, 320, 350]
-num_clients = [320, 330, 340, 350]
+# num_clients = [150, 170, 200, 220, 250, 270, 300, 320, 330, 340, 350]
+num_clients = [340]
 
 
 [[results]]
