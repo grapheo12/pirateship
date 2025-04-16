@@ -1,10 +1,11 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, utils::channel::make_channel};
+use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, utils::{channel::make_channel, AtomicStruct}};
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt, TryFutureExt};
 use log::{debug, info, trace, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
+use serde_cbor::ser::SliceWrite;
 use std::{
     collections::{HashMap, HashSet}, fs::File, future::Future, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::{atomic::{AtomicUsize, Ordering}, Arc}, time::Duration
 };
@@ -177,6 +178,8 @@ impl PinnedTlsStream {
         )))))
     }
 }
+
+pub type AtomicString = AtomicStruct<Option<String>>;
 pub struct Client {
     pub config: AtomicConfig,
     pub full_duplex: bool,
@@ -189,7 +192,7 @@ pub struct Client {
     pub key_store: AtomicKeyStore,
     do_auth: bool,
     graveyard_tx: Mutex<Option<UnboundedSender<BoxFuture<'static, ()>>>>,
-    rr_start: AtomicUsize,
+    slowest_peer: AtomicString,
 }
 
 #[derive(Clone)]
@@ -240,7 +243,7 @@ impl Client {
             worker_ready: PinnedHashSet::new(),
             key_store: AtomicKeyStore::new(key_store.to_owned()),
             graveyard_tx: Mutex::new(None),
-            rr_start: AtomicUsize::new(0),
+            slowest_peer: AtomicString::new(None),
         }
     }
 
@@ -257,7 +260,7 @@ impl Client {
             worker_ready: PinnedHashSet::new(),
             key_store,
             graveyard_tx: Mutex::new(None),
-            rr_start: AtomicUsize::new(0),
+            slowest_peer: AtomicStruct::new(None),
         }
     }
 
@@ -274,7 +277,7 @@ impl Client {
             replying_chan_map: PinnedHashMap::new(),
             worker_ready: PinnedHashSet::new(),
             graveyard_tx: Mutex::new(None),
-            rr_start: AtomicUsize::new(0),
+            slowest_peer: AtomicString::new(None),
         }
     }
 
@@ -891,12 +894,19 @@ impl PinnedClient {
             let lchans = client.0.chan_map.0.read().await;
             let mut total_success = 0;
             // let mut futs = FuturesUnordered::new();
-            let _rr_idx = client.0.rr_start.fetch_add(1, Ordering::Relaxed);
-            for i in 0..names.len() {
-                let idx = (_rr_idx + i) % names.len();
-                let name = &names[idx];
-                let chan = lchans.get(name).unwrap();
+            let slowest_peer = client.0.slowest_peer.get();
+            let slowest_peer = slowest_peer.as_slice();
+            let mut slowest_time = Duration::new(0, 0);
+            let mut new_slowest_peer = String::from("");
+
+            // Always start sending from the slowest peer.
+            // This is a rate control mechanism.
+            // Better everybody be slow than some be fast and some slow.
+            // Saves from the queue congestion.
+            if slowest_peer.len() > 0 && names.contains(&slowest_peer[0]) {
+                let chan = lchans.get(&slowest_peer[0]).unwrap();
                 // chans.push(chan.clone());
+                let __start = Instant::now();
                 if total_success < min_success {
                     if let Err(e) = chan.send((data.clone(), profile.clone())).await {
                         warn!("Broadcast error: {}", e);
@@ -908,10 +918,52 @@ impl PinnedClient {
                     }
                 }
 
+                let __duration = __start.elapsed();
+                if __duration > slowest_time {
+                    slowest_time = __duration;
+                    new_slowest_peer = slowest_peer[0].clone();
+                }
+
                 // futs.push(chan.send((data.clone(), profile.clone())));
 
                 total_success += 1;
             }
+
+            for name in names {
+                if slowest_peer.len() > 0 && *name == slowest_peer[0] {
+                    // We already sent this before.
+                    continue;
+                }
+                let chan = lchans.get(name).unwrap();
+
+                let __start = Instant::now();
+                // chans.push(chan.clone());
+                if total_success < min_success {
+                    if let Err(e) = chan.send((data.clone(), profile.clone())).await {
+                        warn!("Broadcast error: {}", e);
+                    }
+                } else {
+                    if let Err(e) = chan.send((data.clone(), profile.clone())).await {
+                        // Best effort only
+                        trace!("Broadcast error: {}", e);
+                    }
+                }
+                let __duration = __start.elapsed();
+                if __duration > slowest_time {
+                    slowest_time = __duration;
+                    new_slowest_peer = name.clone();
+                }
+
+                // futs.push(chan.send((data.clone(), profile.clone())));
+
+                total_success += 1;
+            }
+
+            if new_slowest_peer.len() > 0 {
+                client.0.slowest_peer.set(Box::new(Some(new_slowest_peer)));
+            }
+
+
 
             // while let Some(res) = futs.next().await {
             //     if res.is_ok() {
