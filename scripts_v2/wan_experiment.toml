@@ -32,14 +32,14 @@ channel_depth = 1000
 
 [node_config.consensus_config]
 commit_index_gap_soft = 1000
-commit_index_gap_hard = 500000
+commit_index_gap_hard = 5000
 liveness_u = 2
 max_backlog_batch_size = 1000
 signature_max_delay_blocks = 10
-signature_max_delay_ms = 1002 # roughly batch_max_delay_ms * signature_max_delay_blocks
+signature_max_delay_ms = 10002 # roughly batch_max_delay_ms * signature_max_delay_blocks
 num_crypto_workers = 5
 view_timeout_ms = 30000
-batch_max_delay_ms = 5
+batch_max_delay_ms = 50
 
 [node_config.consensus_config.log_storage_config.RocksDB]
 write_buffer_size = 2147483648
