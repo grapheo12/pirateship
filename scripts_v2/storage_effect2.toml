@@ -31,8 +31,9 @@ view_timeout_ms = 40000
 batch_max_delay_ms = 2
 
 [node_config.consensus_config.log_storage_config.RocksDB]
-write_buffer_size = 2147483648
-max_write_buffer_number = 1
+# write_buffer_size = 2_147_483_648
+write_buffer_size = 67_108_864
+max_write_buffer_number = 8
 max_write_buffers_to_merge = 1
 
 [node_config.app_config]
@@ -58,11 +59,11 @@ max_concurrent_requests = 32
 
 [[experiments]]
 name = "async_disk"
-repeats = 3
+repeats = 1
 num_nodes = 7
 node_distribution = "uniform"
 build_command = "make"
-duration = 60
+duration = 180
 
 [experiments.sweeping_parameters]
 num_clients = [800]
@@ -78,16 +79,16 @@ num_clients = [800]
 # [experiments.sweeping_parameters]
 # num_clients = [800]
 
-[[experiments]]
-name = "no_disk"
-repeats = 3
-num_nodes = 7
-node_distribution = "uniform"
-build_command = "make pirateship_logger_nostorage"
-duration = 60
+# [[experiments]]
+# name = "no_disk"
+# repeats = 1
+# num_nodes = 7
+# node_distribution = "uniform"
+# build_command = "make pirateship_logger_nostorage"
+# duration = 180
 
-[experiments.sweeping_parameters]
-num_clients = [800]
+# [experiments.sweeping_parameters]
+# num_clients = [800]
 
 
 
