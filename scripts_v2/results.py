@@ -751,15 +751,22 @@ class Result:
                     latencies = [stat.median_latency for stat in stat_list]
                     axes.plot(tputs, latencies, label=legend, color=colors[i], marker=markers[i], mew=6, ms=12, linewidth=6)
 
+                    # if "Audit" in legend:
+                    #     n_points = len(tputs)
+                    #     labels = ["sig=1", "sig=2", "sig=5", "sig=10", "sig=20", "sig=50"]
+                    #     for i in range(n_points):
+                    #         axes.annotate(labels[i], (tputs[i], latencies[i]), textcoords="offset points", xytext=(0,10), ha='center', fontsize=50)
+
+
                 plt.xlabel("Throughput (k req/s)", fontsize=70)
                 plt.ylabel("Latency (ms)", fontsize=70)
 
                 y_range_total = max([v[3] for v in bounding_boxes.values()]) - min([v[2] for v in bounding_boxes.values()])
                 # if y_range_total > 200:
                 # plt.yscale("log")
-                plt.ylim((0, 125))
+                # plt.ylim((0, 125))
                 # plt.xlim((50, 550))
-                plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=legends_ncols, fontsize=70)
+                plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.4), ncol=legends_ncols, fontsize=70)
                 plt.xticks(fontsize=70)
                 plt.yticks(fontsize=70)
 
@@ -870,14 +877,19 @@ class Result:
     def stacked_bar_graph_plot(self, plot_dict: OrderedDict[str, List[Stats]], output: str | None, xlabels: List[str]):
         # Assumption: xlabels are in the same order as the subexperiments in each group
         plot_matrix = np.zeros((len(xlabels), len(plot_dict))) # Rows are xlabels, columns are legends
+        stdev_matrix = np.zeros((len(xlabels), len(plot_dict))) # Rows are xlabels, columns are legends
+        latency_matrix = np.zeros((len(xlabels), len(plot_dict))) # Rows are xlabels, columns are legends
         max_tput = 0
-        plot_dict_items = list(sorted(plot_dict.items(), key=lambda x: int(x[0].split(" ")[0])))
+        # plot_dict_items = list(sorted(plot_dict.items(), key=lambda x: int(x[0].split(" ")[0])))
+        plot_dict_items = list(plot_dict.items())
         
         for i, xlabel in enumerate(xlabels):
             for j, (legend, stat_list) in enumerate(plot_dict_items):
                 for k, stat in enumerate(stat_list):
                     if i == k:
                         plot_matrix[i, j] = int(stat.mean_tput)
+                        stdev_matrix[i, j] = int(stat.stdev_tput)
+                        latency_matrix[i, j] = float("{:.1f}".format(stat.mean_latency))
                         if stat.mean_tput > max_tput:
                             max_tput = stat.mean_tput
 
@@ -913,15 +925,25 @@ class Result:
             rects = ax.bar(
                 bar_start_pos + (gap_between_bars + i * bar_width), # Where to start the bar
                 plot_matrix[:, i], # Heights of the bars
-                width=bar_width, label=legend, zorder=3)
-            ax.bar_label(rects, padding=3, fontsize=90)
+                width=bar_width, label=legend, zorder=3,
+
+                # Error bars
+                yerr=stdev_matrix[:, i], # Error bars
+                capsize=5, linewidth=5,   
+            )
+            ax.bar_label(rects, labels=latency_matrix[:, i], padding=3, fontsize=90)
 
         ax.set_xticks(label_pos, xlabels)
         plt.ylim(0, ylim+50)
         plt.ylabel("Throughput (k req/s)", fontsize=90)
+        if "xtitle" in self.kwargs:
+            plt.xlabel(self.kwargs["xtitle"], fontsize=90)
         plt.xticks(fontsize=90)
+        # plt.yticks([0, 500, 1000, 1500, 2000], fontsize=90)
         plt.yticks(fontsize=90)
-        plt.legend(loc="upper center", ncols=3, bbox_to_anchor=(0.5, 1.2), fontsize=60)
+
+        if len(plot_dict_items) > 1:
+            plt.legend(loc="upper center", ncols=3, bbox_to_anchor=(0.5, 1.25), fontsize=60)
         plt.grid(zorder=0)
 
         plt.gcf().set_size_inches(
