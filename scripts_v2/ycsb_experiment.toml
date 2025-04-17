@@ -100,11 +100,12 @@ plotter = "stacked_bar_graph"
 ramp_up = 15
 ramp_down = 15
 output = "ycsb.pdf"
-xlabels = ["0\\%", "25\\%", "50\\%", "75\\%", "100\\%"]
+xlabels = ["0", "0.25", "0.5", "0.75", "1"]
 xtitle = "Read Ratio"
 # xlabels = ["25R-75W", "50R-50W"]
 force_parse = true
+output_width = 15
 
 [results.legends]
-pirateship = "pirateship(n=7)"
-signed_raft = "signed_raft(n=5)"
+pirateship = "pirateship"
+signed_raft = "signed_raft"

@@ -133,6 +133,7 @@ xlabels = ["1", "2", "5", "10", "20", "50"]
 xtitle = "Signature Intervals"
 # xlabels = ["25R-75W", "50R-50W"]
 force_parse = true
+output_width = 15
 
 [results.legends]
 pirateship_cr_5 = "pirateship(n=7)+Audit+onlybyz"

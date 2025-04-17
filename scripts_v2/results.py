@@ -797,24 +797,24 @@ class Result:
 
         ax1.grid()
         ax2.grid()
-        ax1.set_xlabel("Throughput (k req/s)", fontsize=90)
-        ax1.set_ylabel("Latency (ms)", fontsize=90)
-        ax2.set_xlabel("Throughput (k req/s)", fontsize=90)
-        ax2.set_ylabel("Latency (ms)", fontsize=90)
+        ax1.set_xlabel("Throughput (k req/s)", fontsize=70)
+        ax1.set_ylabel("Latency (ms)", fontsize=70)
+        ax2.set_xlabel("Throughput (k req/s)", fontsize=70)
+        ax2.set_ylabel("Latency (ms)", fontsize=70)
         fig.legend(loc='upper center', bbox_to_anchor=(0.5, 1.32), ncol=legends_ncols, fontsize=70, columnspacing=0.5)
 
-        ax1.set_ylim(top=130)
-        ax2.set_ylim(top=130)
+        ax1.set_ylim(top=130, bottom=0)
+        ax2.set_ylim(top=130, bottom=0)
         ax1.set_xlim(right=600)
         ax2.set_xlim(right=600)
         ax1.set_yticks([25, 50, 75, 100, 125])
         ax2.set_yticks([25, 50, 75, 100, 125])
         ax1.set_xticks([200, 400, 600])
         ax2.set_xticks([200, 400, 600])
-        ax1.set_yticklabels([25, 50, 75, 100, 125], fontsize=90)
-        ax2.set_yticklabels([25, 50, 75, 100, 125], fontsize=90)
-        ax1.set_xticklabels([200, 400, 600], fontsize=90)
-        ax2.set_xticklabels([200, 400, 600], fontsize=90)
+        ax1.set_yticklabels([25, 50, 75, 100, 125], fontsize=70)
+        ax2.set_yticklabels([25, 50, 75, 100, 125], fontsize=70)
+        ax1.set_xticklabels([200, 400, 600], fontsize=70)
+        ax2.set_xticklabels([200, 400, 600], fontsize=70)
 
 
 
@@ -889,7 +889,7 @@ class Result:
                     if i == k:
                         plot_matrix[i, j] = int(stat.mean_tput)
                         stdev_matrix[i, j] = int(stat.stdev_tput)
-                        latency_matrix[i, j] = float("{:.1f}".format(stat.mean_latency))
+                        latency_matrix[i, j] = int(float("{:.1f}".format(stat.mean_latency)))
                         if stat.mean_tput > max_tput:
                             max_tput = stat.mean_tput
 
@@ -931,19 +931,22 @@ class Result:
                 yerr=stdev_matrix[:, i], # Error bars
                 capsize=5, linewidth=5,   
             )
-            ax.bar_label(rects, labels=latency_matrix[:, i], padding=3, fontsize=90)
+            # _latencies = list(latency_matrix[:, i])
+            # _latencies = [str(int(x)) for x in _latencies]
+            # ax.bar_label(rects, labels=_latencies, padding=3, fontsize=90)
+            # ax.bar_label(rects, padding=3, fontsize=90)
 
         ax.set_xticks(label_pos, xlabels)
         plt.ylim(0, ylim+50)
         plt.ylabel("Throughput (k req/s)", fontsize=90)
         if "xtitle" in self.kwargs:
             plt.xlabel(self.kwargs["xtitle"], fontsize=90)
-        plt.xticks(fontsize=90)
-        # plt.yticks([0, 500, 1000, 1500, 2000], fontsize=90)
-        plt.yticks(fontsize=90)
+        plt.xticks(fontsize=80)
+        plt.yticks([0, 500, 1000, 1500, 2000], fontsize=90)
+        # plt.yticks(fontsize=90)
 
         if len(plot_dict_items) > 1:
-            plt.legend(loc="upper center", ncols=3, bbox_to_anchor=(0.5, 1.25), fontsize=60)
+            plt.legend(loc="upper center", ncols=2, bbox_to_anchor=(0.5, 1.28), fontsize=60, columnspacing=0.3)
         plt.grid(zorder=0)
 
         plt.gcf().set_size_inches(

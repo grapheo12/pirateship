@@ -143,7 +143,7 @@ class Experiment:
             config["net_config"]["name"] = name
             config["net_config"]["addr"] = listen_addr
             # config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"{log_dir}/{name}-db"
-            config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"/mnt/rocksdb/{name}-db"
+            config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"/data/{name}-db"
 
 
             node_configs[name] = config
@@ -325,9 +325,6 @@ SCP_CMD="scp -o StrictHostKeyChecking=no -i {self.dev_ssh_key}"
                         binary_name = "controller"
 
                     _script += f"""
-# Create the db dir
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'sudo mkdir -p /mnt/rocksdb' || true
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'sudo chmod -R 777 /mnt/rocksdb' || true
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'RUST_BACKTRACE=full {self.remote_workdir}/build/{binary_name} {self.remote_workdir}/configs/{bin}_config.json > {self.remote_workdir}/logs/{repeat_num}/{bin}.log 2> {self.remote_workdir}/logs/{repeat_num}/{bin}.err' &
 PID="$PID $!"
 """
@@ -360,7 +357,7 @@ sleep 10
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -2 -c {binary_name}' || true
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -15 -c {binary_name}' || true
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -9 -c {binary_name}' || true
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'rm -rf /mnt/rocksdb/*' || true
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'rm -rf /data/*' || true
 $SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_num}/{bin}.log {self.remote_workdir}/logs/{repeat_num}/{bin}.log || true
 $SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_num}/{bin}.err {self.remote_workdir}/logs/{repeat_num}/{bin}.err || true
 """
