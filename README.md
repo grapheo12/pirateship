@@ -1,42 +1,40 @@
-# Local setup
+# PirateShip
 
-Install Rust, jq, Python (with pip and virtualenv), clang, llvm, cmake and protoc.
-On an Ubuntu machine you can just run `sudo make install-deps-ubuntu` to install all dependencies.
+This is a prototype implementation of the PirateShip consensus protocol for VM-based TEEs (eg, AMD SEV-SNP and Intel TDX).
 
-To build, just run `make`.
+> WARNING: Code is still under development and is not audited. DO NOT use it in production.
 
-To run a setup, you need to have a `nodelist.txt` with a tab separated value of node names and IP addresses as follows:
-```tsv
-clientpool_vm0  10.2.7.5
-clientpool_vm1  10.2.7.4
-nodepool_vm0    10.2.6.7
-nodepool_vm1    10.2.6.4
-nodepool_vm2    10.2.6.5
-nodepool_vm3    10.2.6.6
-```
+## Supported protocols
 
-Machines whose name starts with `client` will be used as client machines and nodes whose name starts with `node` will be used a consensus nodes.
-These IP addresses NEED NOT be unique.
-If you want to reuse a machine to simulate more number of nodes (or want to perform local testing),
-feel free to copy the IP addresses of existing machines (or use `127.0.0.1`) and use a new name.
+We use Rust features to use the same codebase to implement multiple protocols for benchmarking.
+Protocols currently available are:
 
-To be compliant with the terraform script that I generally use to create test VMs,
-you need to have an user called `pftadmin` in each of these VMs.
-Further, one must be able to SSH into `pftadmin@ip` using a common SSH key.
-Generate and save this key as `cluster_key.pem`.
+- PirateShip
+- Raft (also called `lucky_raft`)
+- Signed Raft
+- PBFT (Linearized version)
+- Jolteon
+- Hotstuff
+- Engraft
 
-Save the `nodelist.txt` and `cluster_key.pem` and copy the path onto `scripts/run_all_protocols.sh`.
+All protocols except PirateShip only have their steady-states implemented without leader election/view change.
 
-Now you can an experiment with all protocols using:
+## Building
 
-```bash
-virtualenv scripts/venv
-source scripts/venv/bin/activate
-pip install -r scripts/requirements.txt
+PirateShip uses Rust. So `cargo build` should suffice.
+For convenience, we have provided a `Makefile` with multiple targets for different protocols and PirateShip with different features/apps.
 
-sh scripts/run_all_protocols.sh
-```
+See `Makefile` for more details.
 
-# Current status
 
-![Performance of Pirateship wrt other protocols; Non-TEE and LAN setup](perf.png)
+## Deployment
+
+See `scripts` for instructions on how to deploy and run PirateShip experiments.
+The `deployment` directory is tailor-made for deploying VMs in Azure using Terraform.
+However, porting to another cloud is possible: subclass the `Deployment` class in `scripts` to use your own deployment scripts.
+
+## Current Performance Results
+
+**Setup**: 7 node LAN setup with 16 core SEV nodes with 64 GB RAM and 10 Gbps NIC capacity.
+
+![PirateShip Performance](perf.png)

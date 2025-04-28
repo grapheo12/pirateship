@@ -16,7 +16,7 @@ use tokio::{
 };
 use tokio_rustls::{client, server};
 
-use super::{client::PinnedClient, proto::auth::ProtoHandshakeResponse, server::{GetServerKeys, Server}};
+use super::{client::PinnedClient, proto::auth::ProtoHandshakeResponse, server::{ServerContextType, Server}};
 
 #[derive(Clone, Debug)]
 pub(crate) struct HandshakeResponse {
@@ -25,21 +25,23 @@ pub(crate) struct HandshakeResponse {
 }
 
 impl HandshakeResponse {
-    pub(crate) fn serialize(&self) -> Vec<u8> {
+    pub(crate) fn serialize(&self, is_reply_channel: bool, client_sub_id: u64) -> Vec<u8> {
         let proto = ProtoHandshakeResponse {
             name: self.name.clone(),
             signature: self.signature.to_vec(),
+            is_reply_channel,
+            client_sub_id
         };
         proto.encode_to_vec()
     }
 
-    pub(crate) fn deserialize(arr: &Vec<u8>) -> Result<HandshakeResponse, Error> {
+    pub(crate) fn deserialize(arr: &Vec<u8>) -> Result<(HandshakeResponse, bool, u64), Error> {
         let proto = ProtoHandshakeResponse::decode(arr.as_slice());
         let deser = match proto {
-            Ok(d) => HandshakeResponse {
+            Ok(d) => (HandshakeResponse {
                 name: d.name,
                 signature: Bytes::from(d.signature),
-            },
+            }, d.is_reply_channel, d.client_sub_id),
             Err(e) => {
                 return Err(Error::new(
                     ErrorKind::InvalidData,
@@ -70,9 +72,9 @@ fn construct_payload(nonce: u32, name: &String) -> Vec<u8> {
 pub async fn handshake_server<S>(
     server: &Arc<Server<S>>,
     stream: &mut server::TlsStream<TcpStream>,
-) -> Result<String, Error>
+) -> Result<(String, bool /* is_reply_channel for full duplex */, u64 /* client sub id */), Error>
 where
-    S: GetServerKeys + Send + Sync + 'static,
+    S: ServerContextType + Send + Sync + 'static,
 {
     let mut rng = rand::rngs::OsRng;
     let nonce: u32 = rng.gen();
@@ -88,14 +90,14 @@ where
 
     let resp = HandshakeResponse::deserialize(&buf)?;
 
-    let name = resp.name;
+    let name = resp.0.name;
     // String::from(std::str::from_utf8(resp.name).unwrap_or(""));
     if server.key_store.get().get_pubkey(&name).is_none() {
         return Err(Error::new(ErrorKind::InvalidData, format!("unknown peer: {}", name)));
     }
 
     let payload = construct_payload(nonce, &name);
-    let sig: &[u8; SIGNATURE_LENGTH] = resp
+    let sig: &[u8; SIGNATURE_LENGTH] = resp.0
         .signature
         .as_ref()
         .try_into()
@@ -106,12 +108,15 @@ where
         return Err(Error::new(ErrorKind::InvalidData, "invalid signature"));
     }
 
-    Ok(name)
+
+    Ok((name, resp.1, resp.2))
 }
 
 pub async fn handshake_client(
     client: &PinnedClient,
     stream: &mut client::TlsStream<TcpStream>,
+    is_reply_chan: bool,
+    client_sub_id: u64
 ) -> Result<(), Error> {
     let nonce = stream.read_u32().await?;
     debug!("Received nonce: {}", nonce);
@@ -121,7 +126,7 @@ pub async fn handshake_client(
     let signature = Bytes::from(Vec::from(signature));
     let name = cfg.net_config.name.clone();
     let resp = HandshakeResponse { name, signature };
-    let resp_buf = resp.serialize();
+    let resp_buf = resp.serialize(is_reply_chan, client_sub_id);
 
     stream.write_u32(resp_buf.len() as u32).await?;
     stream.write_all(resp_buf.as_slice()).await?;

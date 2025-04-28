@@ -1,11 +1,11 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use std::{fs::File, io::{self, Cursor, Error}, path, sync::Arc, time::{Duration, Instant}};
+use std::{collections::HashMap, fs::File, future::Future, io::{self, Cursor, Error}, path, sync::{atomic::AtomicBool, Arc}, time::{Duration, Instant}};
 
 use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, rpc::auth, utils::AtomicStruct};
 use indexmap::IndexMap;
-use tokio::{io::{BufWriter, ReadHalf}, sync::mpsc};
+use tokio::{io::{BufWriter, ReadHalf}, sync::{mpsc, oneshot}};
 use log::{debug, info, trace, warn};
 use rustls::{
     crypto::aws_lc_rs,
@@ -64,7 +64,7 @@ impl LatencyProfile {
 }
 
 
-pub type MsgAckChan = mpsc::UnboundedSender<(PinnedMessage, LatencyProfile)>;
+pub type MsgAckChan = mpsc::Sender<(PinnedMessage, LatencyProfile)>;
 
 pub enum RespType {
     Resp = 1,
@@ -81,33 +81,35 @@ pub type HandlerType<ServerContext> = fn(
         RespType,                   // Should the caller wait for a response from the channel?
         Error>;                 // Should this connection be dropped?
 
-pub trait GetServerKeys {
+pub trait ServerContextType {
     fn get_server_keys(&self) -> Arc<Box<KeyStore>>;
+    fn handle_rpc(&self, msg: MessageRef, ack_chan: MsgAckChan) -> impl Future<Output = Result<RespType, Error>> + Send;
 }
 
 pub struct Server<ServerContext>
 where
-    ServerContext: GetServerKeys + Send + Sync + 'static,
+    ServerContext: ServerContextType + Send + Sync + 'static,
 {
     pub config: AtomicConfig,
     pub tls_certs: Vec<CertificateDer<'static>>,
     pub tls_keys: PrivateKeyDer<'static>,
     pub key_store: AtomicKeyStore,
-    pub msg_handler: HandlerType<ServerContext>, // Can't be a closure as msg_handler is called from another thread.
+    pub ctx: ServerContext,
+    // pub msg_handler: HandlerType<ServerContext>, // Can't be a closure as msg_handler is called from another thread.
     do_auth: bool,
 }
 
-pub struct FrameReader<'a> {
+pub struct FrameReader {
     pub buffer: Vec<u8>,
-    pub stream: ReadHalf<&'a mut TlsStream<TcpStream>>,
+    pub stream: ReadHalf<TlsStream<TcpStream>>,
     pub offset: usize,
     pub bound: usize
 }
 
-impl<'a> FrameReader<'a> {
-    pub fn new(stream: ReadHalf<&'a mut TlsStream<TcpStream>>) -> FrameReader<'a> {
+impl FrameReader {
+    pub fn new(stream: ReadHalf<TlsStream<TcpStream>>) -> FrameReader {
         FrameReader {
-            buffer: vec![0u8; 4096],
+            buffer: vec![0u8; 65536],
             stream,
             offset: 0,
             bound: 0
@@ -167,11 +169,27 @@ impl<'a> FrameReader<'a> {
 }
 
 
+macro_rules! ok_or_exit {
+    ($e: expr) => {
+        match $e {
+            Ok(r) => r,
+            Err(_) => return
+        }
+    };
+}
 
+macro_rules! some_or_exit {
+    ($e: expr) => {
+        match $e {
+            Some(r) => r,
+            None => return
+        }
+    };
+}
 
 impl<S> Server<S>
 where
-    S: GetServerKeys + Send + Clone + Sync + 'static,
+    S: ServerContextType + Send + Clone + Sync + 'static,
 {
     // Following two functions ported from: https://github.com/rustls/tokio-rustls/blob/main/examples/server.rs
     fn load_certs(path: &String) -> Vec<CertificateDer<'static>> {
@@ -224,42 +242,60 @@ where
 
     pub fn new(
         cfg: &Config,
-        handler: HandlerType<S>,
+        ctx: S,
         key_store: &KeyStore,
     ) -> Server<S> {
         Server {
             config: AtomicConfig::new(cfg.clone()),
             tls_certs: Server::<S>::load_certs(&cfg.net_config.tls_cert_path),
             tls_keys: Server::<S>::load_keys(&cfg.net_config.tls_key_path),
-            msg_handler: handler,
+            ctx,
             do_auth: true,
             key_store: AtomicKeyStore::new(key_store.to_owned()),
         }
     }
 
-    pub fn new_unauthenticated(cfg: &Config, handler: HandlerType<S>) -> Server<S> {
+    pub fn new_atomic(
+        config: AtomicConfig,
+        ctx: S,
+        key_store: AtomicKeyStore,
+    ) -> Server<S> {
+        Server {
+            config: config.clone(),
+            tls_certs: Server::<S>::load_certs(&config.get().net_config.tls_cert_path),
+            tls_keys: Server::<S>::load_keys(&config.get().net_config.tls_key_path),
+            ctx,
+            do_auth: true,
+            key_store,
+        }
+    }
+
+    pub fn new_unauthenticated(cfg: &Config, ctx: S) -> Server<S> {
         Server {
             config: AtomicConfig::new(cfg.clone()),
             tls_certs: Server::<S>::load_certs(&cfg.net_config.tls_cert_path),
             tls_keys: Server::<S>::load_keys(&cfg.net_config.tls_key_path),
-            msg_handler: handler,
+            ctx,
             do_auth: false,
             key_store: AtomicStruct::new(KeyStore::empty().to_owned()),
         }
     }
 
-    pub async fn handle_stream(
+    pub async fn handle_auth(
         server: Arc<Self>,
-        ctx: &S,
         stream: &mut TlsStream<TcpStream>,
-        addr: core::net::SocketAddr,
-    ) -> io::Result<()> {
+        addr: core::net::SocketAddr
+    ) -> io::Result<(SenderType, bool, u64)> {
         let mut sender = SenderType::Anon;
+        let mut reply_chan = false;
+        let mut client_sub_id = 0;
         if server.do_auth {
             let res = auth::handshake_server(&server, stream).await;
             let name = match res {
-                Ok(nam) => {
+                Ok((nam, is_reply_chan, _client_sub_id)) => {
                     trace!("Authenticated {} at Addr {}", nam, addr);
+                    reply_chan = is_reply_chan;
+                    client_sub_id = _client_sub_id;
                     nam
                 }
                 Err(e) => {
@@ -267,13 +303,106 @@ where
                     return Err(e);
                 }
             };
-            sender = SenderType::Auth(name);
-        }
+            sender = SenderType::Auth(name, client_sub_id);
+        };
+        
+
+        Ok((sender, reply_chan, client_sub_id))
+    }
+
+    pub async fn handle_stream(
+        server: Arc<Self>,
+        stream: TlsStream<TcpStream>,
+        stream_out: Option<TlsStream<TcpStream>>,
+        addr: core::net::SocketAddr,
+        sender: SenderType
+    ) -> io::Result<()> {
         let (rx, mut _tx) = split(stream);
         let mut read_buf = vec![0u8; server.config.get().rpc_config.recv_buffer_size as usize];
-        let mut tx_buf = BufWriter::new(_tx);
+        let mut tx_buf = if stream_out.is_some() {
+            let (__stream_out_rx, stream_out_tx) = split(stream_out.unwrap());
+            BufWriter::new(stream_out_tx)
+        } else {
+            BufWriter::new(_tx)
+        };
         let mut rx_buf = FrameReader::new(rx);
-        let (ack_tx, mut ack_rx) = mpsc::unbounded_channel();
+        let (ack_tx, mut ack_rx) = mpsc::channel(1000);
+        let (resp_tx, mut resp_rx) = mpsc::channel(1000);
+        
+        let server2 = server.clone();
+        let hndl = tokio::spawn(async move {
+            while let Some(resp) = resp_rx.recv().await {
+                if let Ok(RespType::Resp) = resp {            
+                    debug!("Waiting for response!");
+                    let mref: (PinnedMessage, LatencyProfile) = some_or_exit!(ack_rx.recv().await);
+                    let mref = mref.0.as_ref();
+                    if let Err(_) = tx_buf.write_u32(mref.1 as u32).await { break; }
+                    if let Err(_) = tx_buf.write_all(&mref.0[..mref.1]).await { break; };
+                    match tx_buf.flush().await {
+                        Ok(_) => {},
+                        Err(e) => {
+                            warn!("Error sending response: {}", e);
+                            break;
+                        }
+                    };
+
+                }
+
+                else if let Ok(RespType::RespAndTrack) = resp {            
+                    debug!("Waiting for response!");
+                    let (mref, mut profile) = some_or_exit!(ack_rx.recv().await);
+                    profile.register("Ack Received");
+                    let mref = mref.as_ref();
+                    ok_or_exit!(tx_buf.write_u32(mref.1 as u32).await);
+                    ok_or_exit!(tx_buf.write_all(&mref.0[..mref.1]).await);
+                    match tx_buf.flush().await {
+                        Ok(_) => {},
+                        Err(e) => {
+                            warn!("Error sending response: {}", e);
+                            break;
+                        }
+                    };
+
+
+                    profile.register("Ack sent");
+                    profile.print();
+                }
+
+                else if let Ok(RespType::RespAndTrackAndReconf) = resp {            
+                    debug!("Waiting for response!");
+                    let (mref, mut profile) = some_or_exit!(ack_rx.recv().await);
+                    profile.register("Ack Received");
+                    let mref = mref.as_ref();
+                    ok_or_exit!(tx_buf.write_u32(mref.1 as u32).await);
+                    ok_or_exit!(tx_buf.write_all(&mref.0[..mref.1]).await);
+                    match tx_buf.flush().await {
+                        Ok(_) => {},
+                        Err(e) => {
+                            warn!("Error sending response: {}", e);
+                            break;
+                        }
+                    };
+
+
+                    profile.register("Ack sent");
+                    profile.print();
+
+                    // Reconfigure the server to use the new public keys.
+                    let new_keys = server2.ctx.get_server_keys();
+                    info!("Resp to: {:?}, Resp: {:?}", mref.2, mref.0);
+                    server2.key_store.set(new_keys.as_ref().clone());
+
+
+                }
+
+                else if let Ok(RespType::NoRespAndReconf) = resp {
+                    // Reconfigure the server to use the new public keys.
+                    let new_keys = server2.ctx.get_server_keys();
+                    server2.key_store.set(new_keys.as_ref().clone());
+                }
+            }
+        });
+        
         loop {
             // Message format: Size(u32) | Message
             // Message size capped at 4GiB.
@@ -288,90 +417,23 @@ where
                 },
             };
             
-            // This handler is called from within an async function, although it is not async itself.
-            // This is because:
-            // 1. I am not nearly good enough in Rust to store an async function pointer in the underlying Server struct
-            // 2. This function shouldn't have any blocking code at all. This should be a short running function to send messages to proper channel.
-            let resp = (server.msg_handler)(ctx, MessageRef::from(&read_buf, sz, &sender), ack_tx.clone());
+            let resp = server.ctx.handle_rpc(MessageRef::from(&read_buf, sz, &sender), ack_tx.clone()).await;
             if let Err(e) = resp {
                 warn!("Dropping connection: {}", e);
                 break;
             }
 
-            if let Ok(RespType::Resp) = resp {            
-                debug!("Waiting for response!");
-                let mref = ack_rx.recv().await.unwrap();
-                let mref = mref.0.as_ref();
-                tx_buf.write_u32(mref.1 as u32).await?;
-                tx_buf.write_all(&mref.0[..mref.1]).await?;
-                match tx_buf.flush().await {
-                    Ok(_) => {},
-                    Err(e) => {
-                        warn!("Error sending response: {}", e);
-                        break;
-                    }
-                };
+            let _ = resp_tx.send(resp).await;
 
-            }
-
-            if let Ok(RespType::RespAndTrack) = resp {            
-                debug!("Waiting for response!");
-                let (mref, mut profile) = ack_rx.recv().await.unwrap();
-                profile.register("Ack Received");
-                let mref = mref.as_ref();
-                tx_buf.write_u32(mref.1 as u32).await?;
-                tx_buf.write_all(&mref.0[..mref.1]).await?;
-                match tx_buf.flush().await {
-                    Ok(_) => {},
-                    Err(e) => {
-                        warn!("Error sending response: {}", e);
-                        break;
-                    }
-                };
-
-
-                profile.register("Ack sent");
-                profile.print();
-            }
-
-            if let Ok(RespType::RespAndTrackAndReconf) = resp {            
-                debug!("Waiting for response!");
-                let (mref, mut profile) = ack_rx.recv().await.unwrap();
-                profile.register("Ack Received");
-                let mref = mref.as_ref();
-                tx_buf.write_u32(mref.1 as u32).await?;
-                tx_buf.write_all(&mref.0[..mref.1]).await?;
-                match tx_buf.flush().await {
-                    Ok(_) => {},
-                    Err(e) => {
-                        warn!("Error sending response: {}", e);
-                        break;
-                    }
-                };
-
-
-                profile.register("Ack sent");
-                profile.print();
-
-                // Reconfigure the server to use the new public keys.
-                let new_keys = ctx.get_server_keys();
-                info!("Resp to: {:?}, Resp: {:?}", mref.2, mref.0);
-                server.key_store.set(new_keys.as_ref().clone());
-
-
-            }
-
-            if let Ok(RespType::NoRespAndReconf) = resp {
-                // Reconfigure the server to use the new public keys.
-                let new_keys = ctx.get_server_keys();
-                server.key_store.set(new_keys.as_ref().clone());
-            }
+            
         }
+
+        hndl.abort();
 
         warn!("Dropping connection from {:?}", addr);
         Ok(())
     }
-    pub async fn run(server: Arc<Self>, ctx: S) -> io::Result<()> {
+    pub async fn run(server: Arc<Self>) -> io::Result<()> {
         let server_addr = &server.config.get().net_config.addr;
         info!("Listening on {}", server_addr);
 
@@ -389,17 +451,32 @@ where
 
         let listener = TcpListener::bind(server_addr).await?;
 
+        let mut parked_streams = HashMap::new();
+
         loop {
             let (socket, addr) = listener.accept().await?;
             socket.set_nodelay(true)?;
             let acceptor = tls_acceptor.clone();
             let server_ = server.clone();
-            let ctx_ = ctx.clone();
+            let mut stream = acceptor.accept(socket).await?;
+            let (sender, is_reply_chan, client_sub_id) = Self::handle_auth(server.clone(), &mut stream, addr).await?;
+            
+            let map_name = sender.to_string() + "#" + &client_sub_id.to_string();
+            
+            if is_reply_chan {
+                parked_streams.insert(map_name, stream);
+                continue;
+            }
+
+            let stream_out = parked_streams.remove(&map_name);
             // It is cheap to open a lot of green threads in tokio
             // No need to have a list of sockets to select() from.
             tokio::spawn(async move {
-                let mut stream = acceptor.accept(socket).await?;
-                Self::handle_stream(server_, &ctx_, &mut stream, addr).await?;
+                Self::handle_stream(server_, stream, stream_out, addr, sender.clone()).await?;
+                // if let Some(stream_out) = ret {
+                //     let stream = acceptor.accept(socket).await?;
+                //     Self::handle_stream(server_, stream, Some(stream_out), addr).await?;
+                // }
                 Ok(()) as io::Result<()>
             });
         }
