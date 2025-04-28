@@ -1,7 +1,7 @@
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
 use tokio::sync::mpsc;
 use log::{debug, warn};
-use pft::consensus_v2::batch_proposal::TxWithAckChanTag;
+use pft::consensus::batch_proposal::TxWithAckChanTag;
 use prost::Message;
 use serde::Deserialize;
 use sha2::digest::typenum::Integer;

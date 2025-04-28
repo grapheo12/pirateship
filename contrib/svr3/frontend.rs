@@ -4,7 +4,7 @@ use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
 use chrono::{DateTime, TimeZone};
 use hex::ToHex;
 use log::{debug, warn};
-use pft::consensus_v2::batch_proposal::TxWithAckChanTag;
+use pft::consensus::batch_proposal::TxWithAckChanTag;
 use prost::Message;
 use serde::ser::Error;
 use serde_json::value;

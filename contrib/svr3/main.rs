@@ -3,13 +3,13 @@
 
 use log::{debug, error, info};
 use pft::config::{self, Config};
-use pft::consensus_v2;
-use pft::consensus_v2::batch_proposal::TxWithAckChanTag;
+use pft::consensus;
+use pft::consensus::batch_proposal::TxWithAckChanTag;
 use pft::utils::channel::{make_channel, Receiver, Sender};
 use tokio::{runtime, signal};
 use std::io::Write;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
-use pft::consensus_v2::engines::kvs::KVSAppEngine;
+use pft::consensus::engines::kvs::KVSAppEngine;
 mod frontend;
 
 mod payloads;
@@ -57,7 +57,7 @@ async fn test_run() {
 
 
 async fn run_main(config: Config, batch_proposer_tx: Sender<TxWithAckChanTag>, batch_proposer_rx: Receiver<TxWithAckChanTag>) -> io::Result<()> {    
-    let mut node = consensus_v2::ConsensusNode::<KVSAppEngine>::mew(config.clone(), batch_proposer_tx, batch_proposer_rx);
+    let mut node = consensus::ConsensusNode::<KVSAppEngine>::mew(config.clone(), batch_proposer_tx, batch_proposer_rx);
 
     // let mut handles = consensus::ConsensusNode::run(node);
     let mut handles = node.run().await;

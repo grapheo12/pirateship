@@ -4,7 +4,7 @@ use log::{error, info, trace, warn};
 use prost::Message as _;
 
 use crate::{
-    consensus_v2::{
+    consensus::{
         block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, fork_receiver::ForkReceiverCommand, pacemaker::PacemakerCommand
     }, crypto::{default_hash, CachedBlock, HashType}, proto::{consensus::{HalfSerializedBlock, ProtoFork, ProtoForkValidation, ProtoQuorumCertificate, ProtoViewChange}, rpc::ProtoPayload}, rpc::{client::PinnedClient, server::LatencyProfile, PinnedMessage, SenderType}, utils::{deserialize_proto_block, get_parent_hash_in_proto_block_ser}
 };
@@ -149,7 +149,7 @@ impl Staging {
         if self.ci > retain_n {
             self.ci = retain_n;
             // Signal rollback.
-            self.app_tx.send(crate::consensus_v2::app::AppCommand::Rollback(self.ci)).await.unwrap();
+            self.app_tx.send(crate::consensus::app::AppCommand::Rollback(self.ci)).await.unwrap();
         }
 
         // Send the chosen fork to sequencer.

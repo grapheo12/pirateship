@@ -47,7 +47,7 @@ For each new shell thereafter, run `source .venv/bin/activate` before running an
 
 Run the following from the root of the repo.
 ```bash
-python3 scripts_v2 -c path/to/experiment.toml
+python3 scripts -c path/to/experiment.toml
 ```
 
 It will create a timestamped directory in the working directory specified in the config. (Henceforth we will call that `workdir`.)
@@ -66,32 +66,32 @@ The progress happens in dev VM anyway.
 If you don't, the experiments run to completion, the logs are copied back to your local machine
 and the results are plotted (in `workdir/results`).
 
-Finally, teardown the setup using `python3 scripts_v2 teardown -c path/to/toml -d path/to/workdir`
+Finally, teardown the setup using `python3 scripts teardown -c path/to/toml -d path/to/workdir`
 
 
 # Running experiments one step at a time.
 
-To deploy: `python3 scripts_v2 deploy -c path/to/toml`
+To deploy: `python3 scripts deploy -c path/to/toml`
 
-To deploy experiments: `python3 scripts_v2 deploy-experiments -c path/to/toml -d path/to/workdir`
+To deploy experiments: `python3 scripts deploy-experiments -c path/to/toml -d path/to/workdir`
 
-To run experiments: `python3 scripts_v2 run-experiments -c path/to/toml -d path/to/workdir`
+To run experiments: `python3 scripts run-experiments -c path/to/toml -d path/to/workdir`
 
-To check running status of experiments: `python3 scripts_v2 status -c path/to/toml -d path/to/workdir`
+To check running status of experiments: `python3 scripts status -c path/to/toml -d path/to/workdir`
 
-To copy logs back to local VM: `python3 scripts_v2 sync-local -c path/to/toml -d path/to/workdir`
+To copy logs back to local VM: `python3 scripts sync-local -c path/to/toml -d path/to/workdir`
 
-To plot results: `python3 scripts_v2 results -c path/to/toml -d path/to/workdir`
+To plot results: `python3 scripts results -c path/to/toml -d path/to/workdir`
 
 # Helper methods
 
-To clean dev VM: `python3 scripts_v2 clean-dev -c path/to/toml -d path/to/workdir`
+To clean dev VM: `python3 scripts clean-dev -c path/to/toml -d path/to/workdir`
 
-To SSH into a VM: `python3 scripts_v2 ssh -c path/to/toml -d path/to/workdir [-n name_of_vm]`
+To SSH into a VM: `python3 scripts ssh -c path/to/toml -d path/to/workdir [-n name_of_vm]`
 
-To run a command in all VMs: `python3 scripts_v2 run-command -c path/to/toml -d path/to/workdir -cmd "command"`
+To run a command in all VMs: `python3 scripts run-command -c path/to/toml -d path/to/workdir -cmd "command"`
 
-To reuse the same deployment in a new experiment setup: `python3 scripts_v2 reuse-deployment -c path/to/new/experiment/toml -d path/to/old/workdir`
+To reuse the same deployment in a new experiment setup: `python3 scripts reuse-deployment -c path/to/new/experiment/toml -d path/to/old/workdir`
 
 
 # What if something goes wrong?

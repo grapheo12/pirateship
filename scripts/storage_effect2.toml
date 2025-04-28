@@ -20,8 +20,8 @@ recv_buffer_size = 32768
 channel_depth = 1000
 
 [node_config.consensus_config]
-commit_index_gap_soft = 250
-commit_index_gap_hard = 500
+commit_index_gap_soft = 100
+commit_index_gap_hard = 5000
 liveness_u = 2
 max_backlog_batch_size = 1000
 signature_max_delay_blocks = 10
@@ -31,8 +31,8 @@ view_timeout_ms = 40000
 batch_max_delay_ms = 2
 
 [node_config.consensus_config.log_storage_config.RocksDB]
-# write_buffer_size = 2_147_483_648
-write_buffer_size = 67_108_864
+write_buffer_size = 2_147_483_648
+# write_buffer_size = 67_108_864
 max_write_buffer_number = 8
 max_write_buffers_to_merge = 1
 
@@ -63,10 +63,10 @@ repeats = 1
 num_nodes = 7
 node_distribution = "uniform"
 build_command = "make"
-duration = 180
+duration = 60
 
 [experiments.sweeping_parameters]
-num_clients = [800]
+num_clients = [10, 20, 30, 50, 100, 200, 400, 500, 600]
 
 # [[experiments]]
 # name = "sync_disk"
@@ -105,7 +105,7 @@ force_parse = true
 
 [results.legends]
 # Experiment group to legend mapping
-async_disk = "async_disk"
+async_disk = "async_disk+byz"
 # sync_disk = "sync_disk"
 no_disk = "no_disk"
 

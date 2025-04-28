@@ -47,6 +47,8 @@ echo "*	hard	nofile	50000" >> /etc/security/limits.conf
 
 
 # Mount the data disk
+
+
 sudo mkfs.ext4 /dev/sdc
 sudo mkdir /data
 sudo mount /dev/sdc /data

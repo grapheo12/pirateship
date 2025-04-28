@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
 
-use crate::{consensus_v2::app::AppEngine, proto::{client::ProtoByzResponse, execution::{ProtoTransactionOpResult, ProtoTransactionPhase, ProtoTransactionResult}}};
+use crate::{consensus::app::AppEngine, proto::{client::ProtoByzResponse, execution::{ProtoTransactionOpResult, ProtoTransactionPhase, ProtoTransactionResult}}};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NullApp;
