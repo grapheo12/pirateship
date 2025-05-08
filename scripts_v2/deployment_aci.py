@@ -264,8 +264,9 @@ class AciDeployment(Deployment):
           print("Launching "+ str(launch_count) + " node containers")
           base_port = self.node_port_base
           for i in range(0, launch_count):
+            base_port = base_port + 1
             nodepool_container_tag_i = self.generate_node_container_tag(total_idx,platform_idx, i)
-            #cu.launchDeployment(self.template, self.resource_group, nodepool_container_tag_i, self.registry_name, self.image_name, self.ssh_pub_key, token , location, base_port, docker_ssh, self.local, self.confidential)
+         #   cu.launchDeployment(self.template, self.resource_group, nodepool_container_tag_i, self.registry_name, self.image_name, self.ssh_pub_key, token , location, base_port, docker_ssh, self.local, self.confidential)
             ip = cu.obtainIpAddress(self.resource_group, nodepool_container_tag_i, self.local)
             nodelist[nodepool_container_tag_i] = {
                 "private_ip": "127.0.0.1" if self.local else ip ,
@@ -274,7 +275,6 @@ class AciDeployment(Deployment):
                 "region_id": platform_idx,
                 "ssh_port": base_port
             }
-            base_port = base_port + 1
             # This line is only relevant when running in local mode
             docker_ssh = docker_ssh + 1 if self.local else docker_ssh
             total_idx = total_idx + 1
@@ -284,8 +284,9 @@ class AciDeployment(Deployment):
           print("Launching "+ str(launch_count) + " client containers")
           total_idx = 0
           for i in range(0, launch_count):
+              base_port = base_port + 1
               client_container_tag_i = self.generate_client_container_tag(total_idx,platform_idx,i)
-              #cu.launchDeployment(self.template, self.resource_group, client_container_tag_i, self.registry_name, self.image_name, self.ssh_pub_key, token , location, base_port, docker_ssh, self.local, self.confidential)
+        #      cu.launchDeployment(self.template, self.resource_group, client_container_tag_i, self.registry_name, self.image_name, self.ssh_pub_key, token , location, base_port, docker_ssh, self.local, self.confidential)
               ip = cu.obtainIpAddress(self.resource_group, client_container_tag_i, self.local)
               nodelist[client_container_tag_i] = {
                 "private_ip":  ip,
@@ -294,7 +295,6 @@ class AciDeployment(Deployment):
                 "region_id": platform_idx,
                 "ssh_port": base_port
               }
-              base_port = base_port + 1
               # This line is only relevant when running in local mode
               docker_ssh = docker_ssh + 1 if self.local else docker_ssh
              
@@ -354,6 +354,8 @@ class AciDeployment(Deployment):
 
 
     def populate_raw_node_list_from_azure(self):
+        #TODO(natacha): This function does not collect
+        # the port numbers 
         found_path = self.find_azure_aci_dir()
 
         if found_path is None:
@@ -397,6 +399,7 @@ class AciDeployment(Deployment):
 
 
     def populate_nodelist(self):
+        #TODO(natacha); this function loses the port numbers
         if self.mode != "manual":
             self.populate_raw_node_list_from_azure()
     
@@ -451,11 +454,17 @@ class AciDeployment(Deployment):
             s += f"{name}: {layout}\n"
 
         return s
-    
+
+    # Returns a (lexicographically) sorted list of all server nodes 
     def get_all_node_vms(self):
-        return [
-            vm for vm in self.nodelist if "node" in vm.name
-        ]
+        server_nodes = (vm for vm in self.nodelist if "node" in vm.name)
+        # Sort list of VMs by name
+        # This is a hack to ensure that the nodes are sorted
+        # TODO(fix): Find a more robust way to assign port numbers
+        # as ports must be opened at launch time
+        sorted_nodes = sorted(server_nodes, key=lambda x: x.name)
+        print(f"Sorted nodes: {[node.name for node in sorted_nodes]}")
+        return sorted_nodes
     
     def get_all_client_vms(self):
         return [

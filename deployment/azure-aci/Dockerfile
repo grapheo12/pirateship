@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y \
     python3-virtualenv \
     ca-certificates \ 
     protobuf-compiler \
+    htop \
     net-tools \ 
     libssl-dev \ 
     librocksdb-dev \
