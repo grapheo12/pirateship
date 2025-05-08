@@ -1,0 +1,133 @@
+workdir = "deployment_artifacts"
+project_home = "https://github.com/grapheo12/pirateship"
+deployment_setup = "docker"
+
+
+[deployment_config]
+mode = "manual" # "lan", "dev", "wan", "lan-small", "lan-nontee" etc.
+ssh_key = "cluster_key.pem"
+ssh_user = "pftadmin"
+node_port_base = 3000
+
+
+[deployment_config.node_list]
+
+[deployment_config.node_list.nodepool_vm0] 
+private_ip = "127.0.0.1"
+public_ip = "127.0.0.1"
+tee_type = "nontee"
+region_id = 0
+
+[deployment_config.node_list.clientpool_vm0]
+private_ip = "127.0.0.1"
+public_ip = "127.0.0.1"
+
+[node_config]
+
+[node_config.net_config]
+client_max_retry = 10
+
+[node_config.rpc_config]
+recv_buffer_size = 32768
+channel_depth = 1000
+
+[node_config.consensus_config]
+commit_index_gap_soft = 250
+commit_index_gap_hard = 500
+liveness_u = 1
+max_backlog_batch_size = 1000
+signature_max_delay_blocks = 50
+signature_max_delay_ms = 1000
+num_crypto_workers = 5
+view_timeout_ms = 1000
+
+[node_config.consensus_config.log_storage_config.RocksDB]
+write_buffer_size = 2147483648
+max_write_buffer_number = 1
+max_write_buffers_to_merge = 1
+
+[node_config.app_config]
+logger_stats_report_ms = 100
+
+[node_config.evil_config]
+simulate_byzantine_behavior = false
+byzantine_start_block = 0
+
+
+[client_config]
+
+[client_config.net_config]
+client_max_retry = 10
+
+[client_config.workload_config]
+num_requests = 100_000_000
+
+[client_config.workload_config.request_config.KVReadWriteYCSB]
+num_keys = 300_000
+num_fields = 1
+val_size = 100
+read_ratio = 0.5
+linearizable_reads = false
+byz_commit_ratio = 0.0
+load_phase = true
+zipf_exponent = 0.99
+
+
+[[experiments]]
+name = "pirateship"
+repeats = 3
+num_nodes = 5
+node_distribution = "uniform"  # "sev_only", "tdx_only", "nontee_only", "wan_1", "wan_2", "wan_3"
+build_command = "make"
+duration = 120
+
+[experiments.sweeping_parameters.client_config.workload_config]
+payload_size = [512]
+num_requests = [50, 100000]
+
+[experiments.sweeping_parameters]
+num_clients = [10, 50]
+
+
+# Overrides specific to this experiment.
+[experiments.node_config.consensus_config]
+max_backlog_batch_size = 500
+
+[[experiments]]
+name = "pbft"
+repeats = 3
+num_nodes = 5
+node_distribution = "uniform"  # "sev_only", "tdx_only", "nontee_only", "wan_1", "wan_2", "wan_3"
+build_command = "make chained_pbft_logger"
+duration = 120
+
+[experiments.sweeping_parameters]
+num_clients = [10, 20, 50]
+
+[experiments.node_config.consensus_config]
+max_backlog_batch_size = 1000
+
+
+[[experiments]]
+name = "test"
+repeats = 1
+num_nodes = 49
+node_distribution = "uniform"  # "sev_only", "tdx_only", "nontee_only", "wan_1", "wan_2", "wan_3"
+build_command = "make"
+git_hash = "73cb5ae2bfa2e2eb03124f821834637c6de63eb8" # v0.2-beta tag
+duration = 120
+
+[experiments.sweeping_parameters]
+num_clients = [10]
+
+
+
+
+[[results]]
+name = "tput_latency_client_sweep"
+plotter = "tput_latency_sweep"
+ramp_up = 30
+ramp_down = 30
+legends = ["pirateship+byz", "pbft+onlybyz"]
+output = "lan_experiment.pdf"
+

@@ -1,0 +1,29 @@
+{
+    "net_config": {
+        "name": "client",
+        "tls_root_ca_cert_path": "test/configs/",
+        "client_max_retry": 10,
+        "nodes": {}
+    },
+    "rpc_config": {
+        "signing_priv_key_path": "tests/configs/"
+    },
+    "workload_config": {
+        "num_clients": 1,
+        "num_requests": 10000000,
+        "request_config": {
+            "KVReadWriteYCSB": {
+                "num_keys": 300000,
+                "num_fields": 1,
+                "val_size": 100,
+                "read_ratio": 0.75,
+                "linearizable_reads": false,
+                "byz_commit_ratio": 0.0,
+                "load_phase": true,
+                "zipf_exponent": 0.99
+            }
+        }
+    },
+    "full_duplex": true,
+    "client_sub_id": 0
+}

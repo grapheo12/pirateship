@@ -242,6 +242,47 @@ resource "azurerm_network_interface_security_group_association" "nonteepool_nic_
   network_security_group_id = azurerm_network_security_group.pft_nsg[local.nonteepool_ids_flattened_[count.index][0]].id
 }
 
+# Create managed disk
+resource "azurerm_managed_disk" "sevpool_disk" {
+  name                 = "sevpoolDataDisk${count.index}"
+  count                = length(local.sevpool_ids_flattened_)
+  location             = var.platform_locations[local.sevpool_ids_flattened_[count.index][0]]
+  resource_group_name  = azurerm_resource_group.rg.name
+  storage_account_type = "Premium_LRS"
+  disk_size_gb         = 2048 # P40 ssd Gives enough throughput for NIC bottleneck in 7+ machine clusters.
+  create_option = "Empty"
+}
+
+resource "azurerm_managed_disk" "tdxpool_disk" {
+  name                 = "tdxpoolDataDisk${count.index}"
+  count                = length(local.sevpool_ids_flattened_)
+  location             = var.platform_locations[local.sevpool_ids_flattened_[count.index][0]]
+  resource_group_name  = azurerm_resource_group.rg.name
+  storage_account_type = "Premium_LRS"
+  disk_size_gb         = 2048 # P40 ssd Gives enough throughput for NIC bottleneck in 7+ machine clusters.
+  create_option = "Empty"
+}
+
+resource "azurerm_managed_disk" "nonteepool_disk" {
+  name                 = "nonteepoolDataDisk${count.index}"
+  count                = length(local.sevpool_ids_flattened_)
+  location             = var.platform_locations[local.sevpool_ids_flattened_[count.index][0]]
+  resource_group_name  = azurerm_resource_group.rg.name
+  storage_account_type = "Premium_LRS"
+  disk_size_gb         = 2048 # P40 ssd Gives enough throughput for NIC bottleneck in 7+ machine clusters.
+  create_option = "Empty"
+}
+
+resource "azurerm_managed_disk" "clientpool_disk" {
+  name                 = "clientpoolDataDisk${count.index}"
+  count                = length(local.clientpool_ids_flattened_)
+  location             = var.platform_locations[local.clientpool_ids_flattened_[count.index][0]]
+  resource_group_name  = azurerm_resource_group.rg.name
+  storage_account_type = "StandardSSD_LRS"
+  disk_size_gb         = 4 # Clients do not need much space.
+  create_option = "Empty"
+}
+
 # Create virtual machine
 resource "azurerm_linux_virtual_machine" "sevpool_vm" {
   name                  = "nodepool_vm${count.index}_sev_loc${local.sevpool_ids_flattened_[count.index][0]}_id${local.sevpool_ids_flattened_[count.index][1]}"
@@ -249,10 +290,11 @@ resource "azurerm_linux_virtual_machine" "sevpool_vm" {
   location              = var.platform_locations[local.sevpool_ids_flattened_[count.index][0]]
   resource_group_name   = azurerm_resource_group.rg.name
   network_interface_ids = [azurerm_network_interface.sevpool_nic[count.index].id]
-  size                  = "Standard_DC8ads_v5"
+  size                  = "Standard_DC16ads_v5"
+  # size                  = "Standard_EC16eds_v5"
 
 #   delete_os_disk_on_termination    = true
-#   delete_data_disks_on_termination = true
+  # delete_data_disks_on_termination = true
   # priority = "Spot"
   # eviction_policy = "Deallocate"
 
@@ -263,10 +305,11 @@ resource "azurerm_linux_virtual_machine" "sevpool_vm" {
     security_encryption_type = "DiskWithVMGuestState"
   }
 
+
   source_image_reference {
     publisher = "canonical"
-    offer = "ubuntu-24_04-lts"
-    sku = "cvm"
+    offer = "0001-com-ubuntu-confidential-vm-jammy"
+    sku = "22_04-lts-cvm"
     version = "latest"
   }
 
@@ -289,13 +332,21 @@ resource "azurerm_linux_virtual_machine" "sevpool_vm" {
   custom_data = filebase64("./init.sh")
 }
 
+resource "azurerm_virtual_machine_data_disk_attachment" "sevpool_vm_disk_attach" {
+  count               = length(local.sevpool_ids_flattened_)
+  managed_disk_id     = azurerm_managed_disk.sevpool_disk[count.index].id
+  virtual_machine_id  = azurerm_linux_virtual_machine.sevpool_vm[count.index].id
+  caching             = "ReadOnly"
+  lun = 42
+}
+
 resource "azurerm_linux_virtual_machine" "tdxpool_vm" {
   name                  = "nodepool_vm${count.index}_tdx_loc${local.tdxpool_ids_flattened_[count.index][0]}_id${local.tdxpool_ids_flattened_[count.index][1]}"
   count                 = length(local.tdxpool_ids_flattened_)
   location              = var.platform_locations[local.tdxpool_ids_flattened_[count.index][0]]
   resource_group_name   = azurerm_resource_group.rg.name
   network_interface_ids = [azurerm_network_interface.tdxpool_nic[count.index].id]
-  size                  = "Standard_DC8eds_v5"
+  size                  = "Standard_DC16eds_v5"
 
 #   delete_os_disk_on_termination    = true
 #   delete_data_disks_on_termination = true
@@ -334,6 +385,14 @@ resource "azurerm_linux_virtual_machine" "tdxpool_vm" {
   custom_data = filebase64("./init.sh")
 }
 
+resource "azurerm_virtual_machine_data_disk_attachment" "tdxpool_vm_disk_attach" {
+  count               = length(local.tdxpool_ids_flattened_)
+  managed_disk_id     = azurerm_managed_disk.tdxpool_disk[count.index].id
+  virtual_machine_id  = azurerm_linux_virtual_machine.tdxpool_vm[count.index].id
+  caching             = "ReadOnly"
+  lun = 42
+}
+
 
 resource "azurerm_linux_virtual_machine" "clientpool_vm" {
   name                  = "clientpool_vm${count.index}_loc${local.clientpool_ids_flattened_[count.index][0]}_id${local.clientpool_ids_flattened_[count.index][1]}"
@@ -354,12 +413,20 @@ resource "azurerm_linux_virtual_machine" "clientpool_vm" {
     storage_account_type = "StandardSSD_LRS"
   }
 
+  # source_image_reference {
+  #   publisher = "Canonical"
+  #   offer     = "ubuntu-24_04-lts"
+  #   sku       = "server"
+  #   version   = "latest"
+  # }
+
   source_image_reference {
     publisher = "Canonical"
-    offer     = "ubuntu-24_04-lts"
-    sku       = "server"
-    version   = "latest"
+    offer     = "0001-com-ubuntu-server-focal"
+    sku       = "20_04-lts-gen2"
+    version   = "20.04.202410020"
   }
+  
 
   computer_name  = "client${count.index}"
   admin_username = var.username
@@ -376,13 +443,21 @@ resource "azurerm_linux_virtual_machine" "clientpool_vm" {
   custom_data = filebase64("./init.sh")
 }
 
+resource "azurerm_virtual_machine_data_disk_attachment" "clientpool_vm_disk_attach" {
+  count               = length(local.clientpool_ids_flattened_)
+  managed_disk_id     = azurerm_managed_disk.clientpool_disk[count.index].id
+  virtual_machine_id  = azurerm_linux_virtual_machine.clientpool_vm[count.index].id
+  caching             = "ReadOnly"
+  lun = 42
+}
+
 resource "azurerm_linux_virtual_machine" "nonteepool_vm" {
   name                  = "nodepool_vm${count.index}_nontee_loc${local.nonteepool_ids_flattened_[count.index][0]}_id${local.nonteepool_ids_flattened_[count.index][1]}"
   count                 = length(local.nonteepool_ids_flattened_)
   location              = var.platform_locations[local.nonteepool_ids_flattened_[count.index][0]]
   resource_group_name   = azurerm_resource_group.rg.name
   network_interface_ids = [azurerm_network_interface.nonteepool_nic[count.index].id]
-  size                  = "Standard_E8ds_v5"
+  size                  = "Standard_D16ads_v5"
 
 #   delete_os_disk_on_termination    = true
 #   delete_data_disks_on_termination = true
@@ -415,4 +490,12 @@ resource "azurerm_linux_virtual_machine" "nonteepool_vm" {
   # }
 
   custom_data = filebase64("./init.sh")
+}
+
+resource "azurerm_virtual_machine_data_disk_attachment" "nonteepool_vm_disk_attach" {
+  count               = length(local.nonteepool_ids_flattened_)
+  managed_disk_id     = azurerm_managed_disk.nonteepool_disk[count.index].id
+  virtual_machine_id  = azurerm_linux_virtual_machine.nonteepool_vm[count.index].id
+  caching             = "ReadOnly"
+  lun = 42
 }

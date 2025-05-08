@@ -1,0 +1,44 @@
+{
+  "net_config": {
+    "name": "node0",
+    "addr": "",
+    "tls_cert_path": "tests/configs/",
+    "tls_key_path": "tests/configs/",
+    "tls_root_ca_cert_path": "test/configs/",
+    "client_max_retry": 10,
+    "nodes": {}
+  },
+  "rpc_config": {
+    "allowed_keylist_path": "tests/configs/",
+    "signing_priv_key_path": "tests/configs/",
+    "recv_buffer_size": 32768,
+    "channel_depth": 50000
+  },
+  "consensus_config": {
+    "node_list": [],
+    "learner_list": [],
+    "quorum_diversity_k": 3,
+    "max_backlog_batch_size": 1200,
+    "signature_max_delay_blocks": 50,
+    "batch_max_delay_ms": 20,
+    "signature_max_delay_ms": 500,
+    "num_crypto_workers": 2,
+    "view_timeout_ms": 5000,
+    "liveness_u": 2,
+    "log_storage_config": {
+      "RocksDB": {
+        "db_path": "/tmp/testdb",
+        "write_buffer_size": 67108864,
+        "max_write_buffer_number": 4,
+        "max_write_buffers_to_merge": 1
+      }
+    }
+  },
+  "app_config": {
+    "logger_stats_report_ms": 100
+  },
+  "evil_config": {
+    "simulate_byzantine_behavior": false,
+    "byzantine_start_block": 0
+  }
+}

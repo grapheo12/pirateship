@@ -1,5 +1,5 @@
-platform_locations = ["centralus"]
-sevpool_count = [0]
-tdxpool_count = [7]
+platform_locations = ["eastus"]
+sevpool_count = [7]
+tdxpool_count = [0]
 nonteepool_count = [0]
 clientpool_count = [3]

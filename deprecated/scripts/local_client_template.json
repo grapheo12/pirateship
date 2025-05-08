@@ -1,0 +1,18 @@
+{
+    "net_config": {
+        "name": "client",
+        "tls_root_ca_cert_path": "test/configs/",
+        "client_max_retry": 10,
+        "nodes": {}
+    },
+    "rpc_config": {
+        "signing_priv_key_path": "tests/configs/"
+    },
+    "workload_config": {
+        "num_clients": 1,
+        "num_requests": 10000000,
+        "request_config": "Blanks"
+    },
+    "full_duplex": true,
+    "client_sub_id": 0
+}

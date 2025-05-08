@@ -1,27 +1,29 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use log::{debug, error, info, warn};
-use pft::{config::{self, Config}, consensus::{self, utils::get_everyone_except_me}, crypto::{AtomicKeyStore, KeyStore}, execution::engines::{kvs::PinnedKVStoreEngine, logger::PinnedLoggerEngine, sql::PinnedSQLEngine}, rpc::{client::{Client, PinnedClient}, server::{GetServerKeys, LatencyProfile, MsgAckChan, RespType, Server}, MessageRef, PinnedMessage}};
+use log::{debug, error, info};
+use pft::{config::{self, Config}, crypto::{AtomicKeyStore, KeyStore}, rpc::{client::{Client, PinnedClient}, server::{LatencyProfile, MsgAckChan, RespType, Server, ServerContextType}, MessageRef, PinnedMessage}};
 use tokio::{runtime, signal, task::JoinSet, time::sleep};
-use std::{env, fs, io::{self, Error}, path, pin::Pin, sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex}, time::{Duration, Instant}};
+use std::{env, fs, io::{self, Error}, path, pin::Pin, sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex}, time::Duration};
 use std::io::Write;
 
-#[global_allocator]
-static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+// #[global_allocator]
+// static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 /// Fetch json config file from command line path.
 /// Panic if not found or parsed properly.
-fn process_args() -> Config {
+const DEFAULT_PAYLOAD_SIZE: usize = 4096;
+
+fn process_args() -> (Config, usize) {
     macro_rules! usage_str {
         () => {
-            "\x1b[31;1mUsage: {} path/to/config.json\x1b[0m"
+            "\x1b[31;1mUsage: {} path/to/config.json [payload_size]\x1b[0m"
         };
     }
 
     let args: Vec<_> = env::args().collect();
 
-    if args.len() != 2 {
+    if args.len() != 2 && args.len() != 3 {
         panic!(usage_str!(), args[0]);
     }
 
@@ -32,7 +34,19 @@ fn process_args() -> Config {
 
     let cfg_contents = fs::read_to_string(cfg_path).expect("Invalid file path");
 
-    Config::deserialize(&cfg_contents)
+    let payload_size = if args.len() == 2 {
+        DEFAULT_PAYLOAD_SIZE
+    } else {
+        let res = usize::from_str_radix(&args[2], 10);
+        match res {
+            Ok(sz) => sz,
+            Err(_) => {
+                panic!(usage_str!(), args[0]);
+            },
+        }
+    };
+
+    (Config::deserialize(&cfg_contents), payload_size)
 }
 
 
@@ -47,9 +61,13 @@ struct ProfilerContext {
 #[derive(Clone)]
 pub struct PinnedProfilerContext(pub Arc<Pin<Box<ProfilerContext>>>);
 
-impl GetServerKeys for PinnedProfilerContext {
+impl ServerContextType for PinnedProfilerContext {
     fn get_server_keys(&self) -> Arc<Box<pft::crypto::KeyStore>> {
         self.0.key_store.get()
+    }
+    
+    async fn handle_rpc(&self, msg: MessageRef<'_>, ack_chan: MsgAckChan) -> Result<RespType, Error> {
+        profiler_rpc_handler(self, msg, ack_chan)
     }
 }
 
@@ -81,6 +99,7 @@ pub fn profiler_rpc_handler<'a>(
     Ok(RespType::NoResp)
 }
 
+
 impl ProfilerNode
 {
     pub fn new(config: &Config) -> ProfilerNode {
@@ -91,13 +110,13 @@ impl ProfilerNode
         
         let ctx = PinnedProfilerContext::new(config, &key_store);
         ProfilerNode {
-            server: Arc::new(Server::new(config, profiler_rpc_handler, &key_store)),
-            client: Client::new(config, &key_store).into(),
+            server: Arc::new(Server::new(config, ctx.clone(), &key_store)),
+            client: Client::new(config, &key_store, false, 0).into(),
             ctx: ctx.clone(),
         }
     }
 
-    pub fn run(node: Arc<Self>) -> JoinSet<()> {
+    pub fn run(node: Arc<Self>, payload_sz: usize) -> JoinSet<()> {
         // These are just increasing ref counts.
         // It is pointing to the same server instance.
         let mut js = JoinSet::new();
@@ -106,28 +125,33 @@ impl ProfilerNode
         let node3 = node.clone();
 
         js.spawn(async move {
-            let _ = Server::<PinnedProfilerContext>::run(node1.server.clone(), node1.ctx.clone())
+            let _ = Server::<PinnedProfilerContext>::run(node1.server.clone())
                 .await;
         });
 
         js.spawn(async move {
-            let payload = vec![2u8; 1024];
-            let msg = PinnedMessage::from(payload, 4096, pft::rpc::SenderType::Anon);
-            let send_list = get_everyone_except_me(
-                &node2.ctx.0.config.net_config.name,
-                &node2.ctx.0.config.consensus_config.node_list);
+            let payload = vec![2u8; payload_sz];
+            let msg = PinnedMessage::from(payload, payload_sz, pft::rpc::SenderType::Anon);
+            // let send_list = get_everyone_except_me(
+                // &node2.ctx.0.config.net_config.name,
+                // &node2.ctx.0.config.consensus_config.node_list);
+
+            let send_list = node2.ctx.0.config.consensus_config.node_list.iter()
+                .filter(|e| *e != &node2.ctx.0.config.net_config.name)
+                .map(|e| e.clone()).collect::<Vec<String>>();
             
             info!("{:?}", send_list);
             if node2.ctx.0.config.net_config.name == "node1" {
                 // I will broadcast
                 loop {
                     let mut profile = LatencyProfile::new();
+                    let min_success = send_list.len();
                     let _ = PinnedClient::broadcast(
                         &node2.client,
                         &send_list,
-                        &msg, &mut profile).await;
+                        &msg, &mut profile, min_success).await;
 
-                    node2.ctx.0.bytes_completed_bcasts.fetch_add(4096 * send_list.len(), Ordering::SeqCst);
+                    node2.ctx.0.bytes_completed_bcasts.fetch_add(payload_sz * send_list.len(), Ordering::SeqCst);
                 }
             }
 
@@ -155,9 +179,9 @@ impl ProfilerNode
 
 
 
-async fn run_main(cfg: Config) -> io::Result<()> {
+async fn run_main(cfg: Config, payload_sz: usize) -> io::Result<()> {
     let node = Arc::new(ProfilerNode::new(&cfg));
-    let mut handles = ProfilerNode::run(node);
+    let mut handles = ProfilerNode::run(node, payload_sz);
 
     match signal::ctrl_c().await {
         Ok(_) => {
@@ -180,7 +204,7 @@ const NUM_THREADS: usize = 8;
 fn main() {
     log4rs::init_config(config::default_log4rs_config()).unwrap();
 
-    let cfg = process_args();
+    let (cfg, payload_sz) = process_args();
 
     let core_ids = 
         Arc::new(Mutex::new(Box::pin(core_affinity::get_core_ids().unwrap())));
@@ -218,5 +242,5 @@ fn main() {
         .build()
         .unwrap();
 
-    let _ = runtime.block_on(run_main(cfg));
+    let _ = runtime.block_on(run_main(cfg, payload_sz));
 }
