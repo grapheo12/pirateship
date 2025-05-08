@@ -1,7 +1,7 @@
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
 use tokio::sync::mpsc;
 use log::{debug, warn};
-use pft::consensus_v2::batch_proposal::TxWithAckChanTag;
+use pft::consensus::batch_proposal::TxWithAckChanTag;
 use prost::Message;
 use serde::Deserialize;
 use sha2::digest::typenum::Integer;
@@ -151,12 +151,10 @@ async fn refresh(payload: web::Json<RegisterPayload>, data: web::Data<AppState>)
 
 #[post("/toggle_byz_wait")]
 async fn toggle_byz_wait(data: web::Data<AppState>) -> impl Responder {
-    let mut state = data.probe_for_byz_commit.load(Ordering::SeqCst);
-    state = !state;
-    data.probe_for_byz_commit.store(state, Ordering::SeqCst);
+    data.probe_for_byz_commit.fetch_not(Ordering::Relaxed);
     HttpResponse::Ok().json(serde_json::json!({
         "message": "byzantine wait toggled",
-        "probe_for_byz_commit": state,
+        "probe_for_byz_commit": data.probe_for_byz_commit.load(Ordering::Relaxed),
     }))
 }
 
@@ -321,11 +319,6 @@ async fn home(_data: web::Data<AppState>) -> impl Responder {
 }
 
 pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::channel::AsyncSenderWrapper<TxWithAckChanTag>, actix_threads: usize) -> std::io::Result<()> {
-    // Prepare keys.
-    let mut keys = KeyStore::empty();
-    keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
-    let keys = keys.clone();
-
     let addr = config.net_config.addr.clone();
     // Add 1000 to the port.
     let (host, port) = addr.split_once(':').unwrap();

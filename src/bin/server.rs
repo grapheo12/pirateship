@@ -3,15 +3,15 @@
 
 use log::{debug, error, info, warn};
 use pft::config::{self, Config};
-use pft::consensus_v2;
+use pft::consensus;
 use tokio::{runtime, signal};
 use std::process::exit;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
-use pft::consensus_v2::engines::{null_app::NullApp, kvs::KVSAppEngine};
+use pft::consensus::engines::{null_app::NullApp, kvs::KVSAppEngine};
 use std::io::Write;
 
-// #[global_allocator]
-// static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 /// Fetch json config file from command line path.
 /// Panic if not found or parsed properly.
@@ -58,12 +58,12 @@ fn get_feature_set() -> (&'static str, &'static str) {
 
 async fn run_main(cfg: Config) -> io::Result<()> {
     #[cfg(feature = "app_logger")]
-    let mut node = consensus_v2::ConsensusNode::<NullApp>::new(cfg);
+    let mut node = consensus::ConsensusNode::<NullApp>::new(cfg);
     // #[cfg(feature = "app_logger")]
     // let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
     
     #[cfg(feature = "app_kvs")]
-    let mut node = consensus_v2::ConsensusNode::<KVSAppEngine>::new(cfg);
+    let mut node = consensus::ConsensusNode::<KVSAppEngine>::new(cfg);
     
     #[cfg(feature = "app_sql")]
     let node = Arc::new(consensus::ConsensusNode::<PinnedSQLEngine>::new(&cfg));

@@ -1,25 +1,40 @@
-# WIP: Running Experiments
+# PirateShip
 
-## Setup script environment
+This is a prototype implementation of the PirateShip consensus protocol for VM-based TEEs (eg, AMD SEV-SNP and Intel TDX).
 
-```bash
-virtualenv .venv
-source .venv/bin/activate
-pip install -r scripts_v2/requirements.txt
-```
+> WARNING: Code is still under development and is not audited. DO NOT use it in production.
 
-## Running end-to-end experiment flow
+## Supported protocols
 
-(From the virutalenv)
+We use Rust features to use the same codebase to implement multiple protocols for benchmarking.
+Protocols currently available are:
 
-```bash
-python3 scripts_v2/main.py -c scripts_v2/conf.toml
-```
+- PirateShip
+- Raft (also called `lucky_raft`)
+- Signed Raft
+- PBFT (Linearized version)
+- Jolteon
+- Hotstuff
+- Engraft
 
-## Running stages separately
+All protocols except PirateShip only have their steady-states implemented without leader election/view change.
 
-Check `python3 scripts_v2/main.py -h` for commands that can be invoked standalone.
+## Building
 
-# Current status
+PirateShip uses Rust. So `cargo build` should suffice.
+For convenience, we have provided a `Makefile` with multiple targets for different protocols and PirateShip with different features/apps.
 
-![Performance of Pirateship wrt other protocols; Non-TEE and LAN setup](perf.png)
+See `Makefile` for more details.
+
+
+## Deployment
+
+See `scripts` for instructions on how to deploy and run PirateShip experiments.
+The `deployment` directory is tailor-made for deploying VMs in Azure using Terraform.
+However, porting to another cloud is possible: subclass the `Deployment` class in `scripts` to use your own deployment scripts.
+
+## Current Performance Results
+
+**Setup**: 7 node LAN setup with 16 core SEV nodes with 64 GB RAM and 10 Gbps NIC capacity.
+
+![PirateShip Performance](perf.png)

@@ -9,7 +9,11 @@ pub struct BlankWorkloadGenerator { }
 impl PerWorkerWorkloadGenerator for BlankWorkloadGenerator {
     fn next(&mut self) -> WorkloadUnit {
         // Sample 512 byte random payload
-        let payload = vec![thread_rng().gen(); 512];
+        let mut payload = vec![2u8; 512];
+        {
+            let mut rng = thread_rng();
+            rng.fill(&mut payload[..]);
+        }
         // let payload = vec![2u8; 512];
         WorkloadUnit {
             tx: ProtoTransaction{

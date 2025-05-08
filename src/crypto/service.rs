@@ -10,7 +10,7 @@ use rand::{thread_rng, Rng};
 use sha2::{Digest, Sha256, Sha512};
 use tokio::{sync::{mpsc::{channel, Receiver, Sender}, oneshot}, task::JoinSet};
 
-use crate::{config::AtomicConfig, consensus_v2::fork_receiver::{AppendEntriesStats, MultipartFork}, crypto::{default_hash, DIGEST_LENGTH}, proto::consensus::{HalfSerializedBlock, ProtoBlock, ProtoQuorumCertificate, ProtoViewChange}, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser, PerfCounter}};
+use crate::{config::AtomicConfig, consensus::fork_receiver::{AppendEntriesStats, MultipartFork}, crypto::{default_hash, DIGEST_LENGTH}, proto::consensus::{HalfSerializedBlock, ProtoBlock, ProtoQuorumCertificate, ProtoViewChange}, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser, PerfCounter}};
 
 use super::{hash, AtomicKeyStore, HashType, KeyStore};
 

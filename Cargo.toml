@@ -7,7 +7,7 @@ members = [".", "contrib"]
 
 [package]
 name = "pft"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 
 [dependencies]
@@ -51,6 +51,7 @@ num_cpus = "1.16.0"
 itertools = "0.14.0"
 async-channel = "2.3.1"
 hashbrown = {version = "0.15.2", features = ["serde", "allocator-api2", "default-hasher", "equivalent", "inline-more", "raw-entry"]}
+snmalloc-rs = "0.3.8"
 
 [build-dependencies]
 prost-build = { version = "0.12" }
