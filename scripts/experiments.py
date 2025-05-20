@@ -142,8 +142,9 @@ class Experiment:
             config = deepcopy(self.base_node_config)
             config["net_config"]["name"] = name
             config["net_config"]["addr"] = listen_addr
-            # config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"{log_dir}/{name}-db"
-            config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"/data/{name}-db"
+            #TODO(natacha): Remove hardcoded dependency on /data/
+            config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"{log_dir}/{name}-db"
+            #config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"/data/{name}-db"
 
 
             node_configs[name] = config
@@ -355,16 +356,22 @@ sleep 10
                 
                 # Copy the logs back
                     _script += f"""
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -2 -c {binary_name}' || true
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -15 -c {binary_name}' || true
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -9 -c {binary_name}' || true
+echo "Trying to kill things"
+result="1"
+while [ "$result" != "0" ]; do
+     $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -2 -c {binary_name}' || true
+     $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -15 -c {binary_name}' || true
+     $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -9 -c {binary_name}' || true
+     result=$(pgrep -x '{binary_name}' > /dev/null && echo '1' || echo '0')
+     sleep 5
+done
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'rm -rf /data/*' || true
 $SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_num}/{bin}.log {self.remote_workdir}/logs/{repeat_num}/{bin}.log || true
 $SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_num}/{bin}.err {self.remote_workdir}/logs/{repeat_num}/{bin}.err || true
 """
                     
             _script += f"""
-sleep 120
+sleep 30
 """
                     
             # pkill -9 -c server also kills tmux-server. So we can't run a server on the dev VM.
