@@ -38,3 +38,7 @@ However, porting to another cloud is possible: subclass the `Deployment` class i
 **Setup**: 7 node LAN setup with 16 core SEV nodes with 64 GB RAM and 10 Gbps NIC capacity.
 
 ![PirateShip Performance](perf.png)
+
+## Correctness
+
+PirateShip has been modelled in TLA+: https://github.com/heidihoward/pirateship-tla
