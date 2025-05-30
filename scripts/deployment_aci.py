@@ -435,6 +435,7 @@ class AciDeployment(Deployment):
         
     def teardown(self):
         if self.mode == "manual":
+            print("Teardown did nothing")
             return
         
         print(cu.deleteDeployment(self.resource_group, self.deployment_name))

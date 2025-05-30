@@ -186,8 +186,8 @@ pub struct Client {
     pub client_sub_id: u64,
     pub tls_ca_root_cert: RootCertStore,
     pub sock_map: PinnedHashMap<String, PinnedTlsStream>,
-    pub chan_map: PinnedHashMap<String, Sender<(PinnedMessage, LatencyProfile)>>,
-    pub replying_chan_map: PinnedHashMap<String, Sender<(PinnedMessage, oneshot::Sender<PinnedMessage>)>>,
+    pub chan_map: PinnedHashMap<String, UnboundedSender<(PinnedMessage, LatencyProfile)>>,
+    pub replying_chan_map: PinnedHashMap<String, UnboundedSender<(PinnedMessage, oneshot::Sender<PinnedMessage>)>>,
     pub worker_ready: PinnedHashSet<String>,
     pub key_store: AtomicKeyStore,
     do_auth: bool,
@@ -608,7 +608,7 @@ impl PinnedClient {
         // info!("Need to spawn workes for {:?}", need_to_spawn_workers);
 
         for name in &need_to_spawn_workers {
-            let (tx, mut rx) = mpsc::channel(10);
+            let (tx, mut rx) = mpsc::unbounded_channel();
             let mut lchans = client.0.replying_chan_map.0.write().await;
             lchans.insert(name.clone(), tx);
 
@@ -701,7 +701,7 @@ impl PinnedClient {
             for name in send_list {
                 let chan = lchans.get(name).unwrap();
                 let (tx, rx) = oneshot::channel();
-                if let Err(e) = chan.send((data.clone(), tx)).await {
+                if let Err(e) = chan.send((data.clone(), tx)) {
                     warn!("Broadcast error: {}", e);
                 }
 
@@ -798,7 +798,7 @@ impl PinnedClient {
         // info!("Need to spawn workes for {:?}", need_to_spawn_workers);
 
         for name in &need_to_spawn_workers {
-            let (tx, mut rx) = mpsc::channel(10);
+            let (tx, mut rx) = mpsc::unbounded_channel();
             let mut lchans = client.0.chan_map.0.write().await;
             lchans.insert(name.clone(), tx);
 
@@ -908,11 +908,11 @@ impl PinnedClient {
                 // chans.push(chan.clone());
                 let __start = Instant::now();
                 if total_success < min_success {
-                    if let Err(e) = chan.send((data.clone(), profile.clone())).await {
+                    if let Err(e) = chan.send((data.clone(), profile.clone())) {
                         warn!("Broadcast error: {}", e);
                     }
                 } else {
-                    if let Err(e) = chan.send((data.clone(), profile.clone())).await {
+                    if let Err(e) = chan.send((data.clone(), profile.clone())) {
                         // Best effort only
                         trace!("Broadcast error: {}", e);
                     }
@@ -939,11 +939,11 @@ impl PinnedClient {
                 let __start = Instant::now();
                 // chans.push(chan.clone());
                 if total_success < min_success {
-                    if let Err(e) = chan.send((data.clone(), profile.clone())).await {
+                    if let Err(e) = chan.send((data.clone(), profile.clone())) {
                         warn!("Broadcast error: {}", e);
                     }
                 } else {
-                    if let Err(e) = chan.send((data.clone(), profile.clone())).await {
+                    if let Err(e) = chan.send((data.clone(), profile.clone())) {
                         // Best effort only
                         trace!("Broadcast error: {}", e);
                     }

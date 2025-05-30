@@ -105,6 +105,8 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
             Self::checker_task(backpressure_tx, generator_rx, _client, _stat_tx, id).await;
         });
 
+        sleep(Duration::from_secs(5)).await;
+
         js.spawn(async move {
             worker.generator_task(generator_tx, backpressure_rx, _backpressure_tx, id).await;
         });

@@ -854,10 +854,6 @@ class Result:
         # Save plot dict
         with open(os.path.join(self.workdir, "plot_dict.pkl"), "wb") as f:
             pickle.dump(plot_dict, f)
-
-        output = self.kwargs.get('output', None)
-        self.tput_latency_sweep_plot(plot_dict, output)
-
         # Print a summary of the results
         with open(os.path.join(self.workdir, "summary.txt"), "w") as f:
             for legend, stats in plot_dict.items():
@@ -869,6 +865,10 @@ class Result:
                     f.write(f"Max Latency: {stat.max_latency} ms, Min Latency: {stat.min_latency} ms\n")
                     f.write(f"Stdev Tput: {stat.stdev_tput} ktx/s, Stdev Latency: {stat.stdev_latency} ms\n")
                     f.write("==================================\n")
+
+        output = self.kwargs.get('output', None)
+        #self.tput_latency_sweep_plot(plot_dict, output)
+
 
 
     def stacked_bar_graph_parse(self, ramp_up, ramp_down, legends) -> OrderedDict[str, List[Stats]]:

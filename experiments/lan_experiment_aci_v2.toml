@@ -43,7 +43,7 @@ max_write_buffers_to_merge = 1
 
 [node_config.app_config]
 logger_stats_report_ms = 100
-checkpoint_interval_ms = 1000
+checkpoint_interval_ms = 120000
 
 [node_config.evil_config]
 simulate_byzantine_behavior = false
@@ -63,22 +63,35 @@ request_config = "Blanks"
 max_concurrent_requests = 32
 
 [[experiments]]
+name = "pirateshipmem"
+repeats = 1
+num_nodes = 7 
+node_distribution = "uniform"
+build_command = "make pirateship_logger_nostorage"
+#build_command = "make"
+duration = 60
+
+[experiments.sweeping_parameters]
+num_clients = [10, 20, 50, 100, 150, 200, 250, 300, 400]
+#num_clients = [10, 20]
+
+[[experiments]]
 name = "pirateship"
 repeats = 1
 num_nodes = 7 
 node_distribution = "uniform"
-#build_command = "make pirateship_logger_nostorage"
 build_command = "make"
-duration = 60
+duration = 70
 
 [experiments.sweeping_parameters]
-#num_clients = [10, 20, 50, 100, 150, 200, 250, 300, 400, 450, 500]
-num_clients = [10, 20]
+num_clients = [10, 20, 50, 100, 150, 200, 250, 300, 400]
+#num_clients = [10, 20]
+
 
 [[results]]
 name = "tput_latency_client_sweep"
 plotter = "tput_latency_sweep"
-ramp_up = 15
+ramp_up = 25
 ramp_down = 15
 output = "lan_experiment.pdf"
 force_parse = true
@@ -86,8 +99,9 @@ force_parse = true
 
 [results.legends]
 # Experiment group to legend mapping
-#pirateship = "pirateship+byz"
-pirateship = "pirateship"
+pirateship = "pirateship+byz"
+pirateshipmem = "pirateshipmem+byz"
+
 
 
 

@@ -117,8 +117,8 @@
               ],
               "resources": {
                 "requests": {
-                  "memoryInGB": 16,
-                  "cpu": 8 ,
+                  "memoryInGB": 64,
+                  "cpu": 16 
                 }
               }
             }

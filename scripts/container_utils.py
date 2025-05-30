@@ -95,7 +95,8 @@ def launchDeployment(templateFile, resourceGroup, deploymentName, acrPrefix, pri
 def deleteDeployment(resourceGroup, deploymentName):
     resource_group = " --resource-group " + resourceGroup
     name = " --name " + deploymentName
-    print(executeCommand("az deployment group delete" + resource_group + name))
+    print("Executing command: az deployment group delete " + resource_group + " " +  name)
+    print(executeCommand("az deployment group delete " + resource_group + " " + name))
 
 # Obtains the public Ip address of all currently running containers in a specific deployment
 # and resource group
@@ -105,7 +106,7 @@ def obtainIpAddress(resourceGroup, deploymentName, local):
         print(result) 
     else:
         # Get Internal IP Address of Docker Container Using Docker Inspect
-        result = executeCommandArgs(["docker", "inspect", "-f",  "\'{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}\'", deploymentName])
+        result = unexecuteCommandArgs(["docker", "inspect", "-f",  "\'{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}\'", deploymentName])
     print("IP Address of " + deploymentName + " is " + result)
     return result 
 
