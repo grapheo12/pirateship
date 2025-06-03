@@ -316,20 +316,32 @@ impl PinnedClient {
                 .with_no_client_auth();
 
         let connector = TlsConnector::from(Arc::new(tls_cfg));
-
-        let stream = TcpStream::connect(&peer.addr).await?;
+        let stream = match TcpStream::connect(&peer.addr).await {
+            Ok(s) => s,
+            Err(e) => {
+                println!("Failed to connect: {}", e);
+                return Err(e); 
+        }
+        };
         stream.set_nodelay(true)?;
-
-        let domain = pki_types::ServerName::try_from(peer.domain.as_str())
+           let domain = pki_types::ServerName::try_from(peer.domain.as_str())
             .map_err(|_| Error::new(ErrorKind::InvalidInput, "invalid dnsname"))?
             .to_owned();
 
-        let mut stream = connector.connect(domain, stream).await?;
+        let mut stream = match connector.connect(domain, stream).await
+        {
+                Ok(s) => s,
+                Err(e) => {
+                  println!("Failed to connect (TLS): {}", e);
+                  return Err(e); 
+            }
+       };
 
         if client.0.do_auth {
             auth::handshake_client(&client, &mut stream, client.0.full_duplex, client.0.client_sub_id).await?;
         }
 
+        // println!("[{}] Client: Connected and Authenticated to {}:{}", client.0.client_sub_id, peer.domain, peer.addr);
 
 
         let stream_safe = PinnedTlsStream::new(stream.into());
@@ -384,6 +396,7 @@ impl PinnedClient {
 
         if sock.is_none() {
             let (_sock, _) = PinnedClient::connect(&client.clone(), name).await?;
+            println!("Reached here when trying to connect to {}", name);
             sock = Some(_sock);
         }
 

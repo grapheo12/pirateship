@@ -105,8 +105,6 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
             Self::checker_task(backpressure_tx, generator_rx, _client, _stat_tx, id).await;
         });
 
-        sleep(Duration::from_secs(5)).await;
-
         js.spawn(async move {
             worker.generator_task(generator_tx, backpressure_rx, _backpressure_tx, id).await;
         });
@@ -355,21 +353,18 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
     async fn send_request(&self, req: &mut OutstandingRequest, node_list: &Vec<String>, curr_leader_id: &mut usize, curr_round_robin_id: &mut usize, outstanding_requests: &mut HashMap<u64, OutstandingRequest>) {
         let buf = &req.payload;
         let sz = buf.len();
-
         let __executor_mode = req.executor_mode.clone();
         loop {
             let res = match req.executor_mode {
                 Executor::Leader => {
                     let curr_leader = &node_list[*curr_leader_id];
                     req.last_sent_to = curr_leader.clone();
-
-                    
                     PinnedClient::send(
                         &self.client,
                         &curr_leader,
                         MessageRef(buf, sz, &crate::rpc::SenderType::Anon),
                     ).await
-                },
+                    },
                 Executor::Any => {
                     let recv_node = &node_list[(*curr_round_robin_id) % node_list.len()];
                     // *curr_round_robin_id = *curr_round_robin_id + 1;
@@ -383,7 +378,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
             };
 
             if res.is_err() {
-                debug!("Error: {:?}", res);
+                println!("Error: {:?}", res);
                 match __executor_mode {
                     Executor::Leader => {
                         *curr_leader_id = (*curr_leader_id + 1) % node_list.len();

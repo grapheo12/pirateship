@@ -437,8 +437,10 @@ class AciDeployment(Deployment):
         if self.mode == "manual":
             print("Teardown did nothing")
             return
-        
-        print(cu.deleteDeployment(self.resource_group, self.deployment_name))
+
+        for  node in self.nodelist:
+            name = node.name
+            print(cu.deleteDeployment(self.resource_group, name))
 
     def __repr__(self):
         s = f"Mode: {self.mode}\n"
