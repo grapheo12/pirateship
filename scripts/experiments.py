@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from deployment import Deployment
+from deployment_aci import AciDeployment
 from ssh_utils import run_local, run_remote_public_ip, copy_remote_public_ip, copy_file_from_remote_public_ip, copy_dir_from_remote_public_ip
 from crypto import gen_keys_and_certs, TLS_CERT_SUFFIX, TLS_PRIVKEY_SUFFIX, ROOT_CERT_SUFFIX, PUB_KEYLIST_NAME, SIGN_PRIVKEY_SUFFIX
 from copy import deepcopy
@@ -233,7 +234,7 @@ class Experiment:
 
     def copy_back_build_files(self):
         remote_repo = f"/home/{self.dev_ssh_user}/repo"
-        TARGET_BINARIES = ["client", "controller", "server", "net-perf"]
+        TARGET_BINARIES = ["client", "server", "net-perf"]
 
         # Copy the target/release to build directory
         for bin in TARGET_BINARIES:
@@ -327,7 +328,7 @@ SCP_CMD="scp -o StrictHostKeyChecking=no -i {self.dev_ssh_key}"
                         binary_name = "controller"
 
                     _script += f"""
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'RUST_BACKTRACE=full  {self.remote_workdir}/build/{binary_name} {self.remote_workdir}/configs/{bin}_config.json > {self.remote_workdir}/logs/{repeat_num}/{bin}.log 2> {self.remote_workdir}/logs/{repeat_num}/{bin}.err' &
+$SSH_CMD {self.dev_ssh_user}@{vm.private_ip} 'RUST_BACKTRACE=full  {self.remote_workdir}/build/{binary_name} {self.remote_workdir}/configs/{bin}_config.json > {self.remote_workdir}/logs/{repeat_num}/{bin}.log 2> {self.remote_workdir}/logs/{repeat_num}/{bin}.err' &
 PID="$PID $!"
 """
                     
@@ -359,15 +360,15 @@ sleep 10
 echo "Trying to kill things"
 result="1"
 while [ "$result" != "0" ]; do
-     $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -2 -c {binary_name}' || true
-     $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -15 -c {binary_name}' || true
-     $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -9 -c {binary_name}' || true
-     result=$($SSH_CMD {self.dev_ssh_user}@{vm.public_ip} "pgrep -x '{binary_name}' > /dev/null && echo 1 || echo 0")
+     $SSH_CMD {self.dev_ssh_user}@{vm.private_ip} 'pkill -2 -c {binary_name}' || true
+     $SSH_CMD {self.dev_ssh_user}@{vm.private_ip} 'pkill -15 -c {binary_name}' || true
+     $SSH_CMD {self.dev_ssh_user}@{vm.private_ip} 'pkill -9 -c {binary_name}' || true
+     result=$($SSH_CMD {self.dev_ssh_user}@{vm.private_ip} "pgrep -x '{binary_name}' > /dev/null && echo 1 || echo 0")
      echo "Result: $result"
 done
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'rm -rf /data/*' || true
-$SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_num}/{bin}.log {self.remote_workdir}/logs/{repeat_num}/{bin}.log || true
-$SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_num}/{bin}.err {self.remote_workdir}/logs/{repeat_num}/{bin}.err || true
+$SSH_CMD {self.dev_ssh_user}@{vm.private_ip} 'rm -rf /data/*' || true
+$SCP_CMD {self.dev_ssh_user}@{vm.private_ip}:{self.remote_workdir}/logs/{repeat_num}/{bin}.log {self.remote_workdir}/logs/{repeat_num}/{bin}.log || true
+$SCP_CMD {self.dev_ssh_user}@{vm.private_ip}:{self.remote_workdir}/logs/{repeat_num}/{bin}.err {self.remote_workdir}/logs/{repeat_num}/{bin}.err || true
 """
                     
             _script += f"""
@@ -428,7 +429,6 @@ sleep 30
         # Hard dependency on Linux style paths
         self.remote_workdir = f"/home/{deployment.ssh_user}/{deployment.workdir}/experiments/{self.name}"
 
-        print("Reached here")
         # Clone repo in remote and build
         git_hash, git_diff, build_cmd = self.get_build_details()
         use_cached_build = git_hash == last_git_hash and git_diff == last_git_diff and build_cmd == last_build_command

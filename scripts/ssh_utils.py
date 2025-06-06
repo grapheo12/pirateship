@@ -13,6 +13,7 @@ class Node:
     region_id: int
     is_client: bool
     is_coordinator: bool
+    port: int = 22
 
     def __hash__(self) -> int:
         return hash(self.name)
@@ -35,6 +36,7 @@ def run_remote_public_ip(cmds: list, ssh_user, ssh_key, host: Node, hide=True):
     conn = Connection(
         host=host.public_ip,
         user=ssh_user,
+        port=host.port,
         connect_kwargs={
             "key_filename": ssh_key
         }
@@ -60,6 +62,7 @@ def copy_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
     '''
     conn = Connection(
         host=host.public_ip,
+        port=host.port,
         user=ssh_user,
         connect_kwargs={
             "key_filename": ssh_key
@@ -78,6 +81,7 @@ def copy_file_from_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
     '''
     conn = Connection(
         host=host.public_ip,
+        port=host.port,
         user=ssh_user,
         connect_kwargs={
             "key_filename": ssh_key
@@ -96,6 +100,7 @@ def copy_dir_from_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
     conn = Connection(
         host=host.public_ip,
         user=ssh_user,
+        port=host.port,
         connect_kwargs={
             "key_filename": ssh_key
         }

@@ -431,6 +431,12 @@ def deploy_experiments(config, workdir):
     cached_git_hash = ""
     cached_diff = ""
     cached_build_cmd = ""
+
+    must_reset_quota = False
+    if isinstance(deployment, AciDeployment) and deployment.local:
+        deployment.lift_dev_cpu_quota()
+        must_reset_quota = True
+
     for experiment in experiments:
         try:
             experiment.deploy(deployment, last_git_hash=cached_git_hash, last_git_diff=cached_diff, last_build_command=cached_build_cmd)
@@ -449,6 +455,8 @@ def deploy_experiments(config, workdir):
     # Copy over the entire directory to all nodes
     deployment.copy_all_to_remote_public_ip()
 
+    if must_reset_quota:
+        deployment.reset_cpu_quota()
 
 @main.command()
 @click.option(

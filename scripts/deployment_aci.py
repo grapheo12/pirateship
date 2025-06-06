@@ -205,7 +205,8 @@ class AciDeployment(Deployment):
 
     def deploy(self):
 
-        print("[WARNING]: To run this script, the user must be logged in to the Azure CLI. Please make sure to run az login from command line first")
+        if not self.local:
+            print("[WARNING]: To run this script, the user must be logged in to the Azure CLI. Please make sure to run az login from command line first")
 
         run_local([
             f"mkdir -p {self.workdir}",
@@ -219,7 +220,7 @@ class AciDeployment(Deployment):
             # There is no need to deploy.
             return
 
-       # Find the azure-tf directory relative to where the script is being called from
+        # Find the azure-tf directory relative to where the script is being called from
         found_path = self.find_azure_aci_dir()
 
         if found_path is None:
@@ -237,18 +238,13 @@ class AciDeployment(Deployment):
 
 
         # Get token that will allow connectiong to the Azure Container Registry
-        token = cu.getAcrToken(self.registry_name)
+        token = cu.getAcrToken(self.registry_name) if not self.local else None
 
         # Build containers
-        cu.buildImage(cu.getFullImageName(self.registry_name, self.image_name), found_path) #TODO: expects cluster_key.pub in same repo as called. FIX
-        cu.pushImage(self.registry_name, cu.getFullImageName(self.registry_name, self.image_name))
+        cu.buildImage(cu.getFullImageName(self.registry_name, self.image_name) if not self.local else self.image_name, found_path, self.ssh_pub_key)
+        if not self.local: cu.pushImage(self.registry_name, cu.getFullImageName(self.registry_name, self.image_name))
 
-        # Deploy containers on Azure or locally
-        # If deploying on Azure, the YAML configuration file is used
-        # to determine which/what containers to launch and where
-        # TODO(natacha) Local Option is not currently implemented in the v2 scripts.
-
-        docker_ssh = 22 if not self.local else docker_ssh # Reset SSH port to 22 if not in local mode
+        # Deploy containers on Azure or locally (no regions, everything should be localhost)
         extractConfigArgs = cu.extractConfig(deploy_config)['platforms']
         print(extractConfigArgs)
 
@@ -256,6 +252,7 @@ class AciDeployment(Deployment):
         total_idx = 0
         platform_idx = 0
         nodelist = {}
+        total_node_count = int(extractConfigArgs[0]["nodepool_count"]) + int(extractConfigArgs[0]["clientpool_count"]) if self.local else None
         for platform in extractConfigArgs:
           location = platform['location']
           print("Creating containers in " + location)
@@ -266,17 +263,16 @@ class AciDeployment(Deployment):
           for i in range(0, launch_count):
             base_port = base_port + 1
             nodepool_container_tag_i = self.generate_node_container_tag(total_idx,platform_idx, i)
-            #cu.launchDeployment(self.template, self.resource_group, nodepool_container_tag_i, self.registry_name, self.image_name, self.ssh_pub_key, token , location, base_port, docker_ssh, self.local, self.confidential)
+            cu.launchDeployment(self.template, self.resource_group, nodepool_container_tag_i, self.registry_name, self.image_name, self.ssh_pub_key, token , location, base_port, self.local, self.confidential, total_node_count)
             ip = cu.obtainIpAddress(self.resource_group, nodepool_container_tag_i, self.local)
             nodelist[nodepool_container_tag_i] = {
-                "private_ip": "127.0.0.1" if self.local else ip ,
-                "public_ip":  ip,
+                "private_ip": ip,
+                "public_ip":  ip if not self.local else "127.0.0.1",
                 "tee_type":  "aci" if not self.confidential else "caci",
                 "region_id": platform_idx,
-                "ssh_port": base_port
+                "ssh_port": base_port,
+                "name": nodepool_container_tag_i
             }
-            # This line is only relevant when running in local mode
-            docker_ssh = docker_ssh + 1 if self.local else docker_ssh
             total_idx = total_idx + 1
 
           # Launch Client Containers
@@ -286,17 +282,16 @@ class AciDeployment(Deployment):
           for i in range(0, launch_count):
               base_port = base_port + 1
               client_container_tag_i = self.generate_client_container_tag(total_idx,platform_idx,i)
-              #cu.launchDeployment(self.template, self.resource_group, client_container_tag_i, self.registry_name, self.image_name, self.ssh_pub_key, token , location, base_port, docker_ssh, self.local, self.confidential)
+              cu.launchDeployment(self.template, self.resource_group, client_container_tag_i, self.registry_name, self.image_name, self.ssh_pub_key, token , location, base_port, self.local, self.confidential, total_node_count)
               ip = cu.obtainIpAddress(self.resource_group, client_container_tag_i, self.local)
               nodelist[client_container_tag_i] = {
-                "private_ip":  ip,
-                "public_ip":  ip,
+                "private_ip": ip,
+                "public_ip":  ip if not self.local else "127.0.0.1",
                 "tee_type":  "aci" if not self.confidential else "caci",
                 "region_id": platform_idx,
-                "ssh_port": base_port
+                "ssh_port": base_port,
+                "name": client_container_tag_i
               }
-              # This line is only relevant when running in local mode
-              docker_ssh = docker_ssh + 1 if self.local else docker_ssh
              
           platform_idx = platform_idx + 1
         
@@ -334,7 +329,7 @@ class AciDeployment(Deployment):
             ], self.ssh_user, self.ssh_key, node)
 
         res = run_local([
-            f"rsync -avz -e 'ssh -o StrictHostKeyChecking=no -i {self.ssh_key}' {self.workdir}/* {self.ssh_user}@{node.public_ip}:~/{self.workdir}/"
+            f"rsync -avz -e 'ssh -o StrictHostKeyChecking=no -i {self.ssh_key} -p {node.port}' {self.workdir}/* {self.ssh_user}@{node.public_ip}:~/{self.workdir}/"
             for node in nodelist
         ], hide=True, asynchronous=True)
 
@@ -344,7 +339,7 @@ class AciDeployment(Deployment):
     def sync_local_to_dev_vm(self):
         # Use rsync to copy workdir from dev VM to local
         run_local([
-            f"rsync -avz -e 'ssh -o StrictHostKeyChecking=no -i {self.ssh_key}' {self.ssh_user}@{self.dev_vm.public_ip}:~/{self.workdir}/* {self.workdir}/"
+            f"rsync -avz -e 'ssh -o StrictHostKeyChecking=no -i {self.ssh_key} -p {self.dev_vm.port}' {self.ssh_user}@{self.dev_vm.public_ip}:~/{self.workdir}/* {self.workdir}/"
         ], hide=False)
 
     def clean_dev_vm(self):
@@ -400,7 +395,7 @@ class AciDeployment(Deployment):
 
     def populate_nodelist(self):
         #TODO(natacha); this function loses the port numbers
-        if self.mode != "manual":
+        if self.mode != "manual" and self.mode != "local":
             self.populate_raw_node_list_from_azure()
     
         first_client = False
@@ -417,7 +412,7 @@ class AciDeployment(Deployment):
                 dev_vm = True
             else:
                 is_coordinator = False
-            if not(is_client):
+            if not(is_client and self.local):
                 tee_type = info["tee_type"]
             else:
                 tee_type = "nontee"
@@ -427,7 +422,7 @@ class AciDeployment(Deployment):
             else:
                 region_id = 0
 
-            self.nodelist.append(Node(name, public_ip, private_ip, tee_type, region_id, is_client, is_coordinator))
+            self.nodelist.append(Node(name, public_ip, private_ip, tee_type, region_id, is_client, is_coordinator, port=info.get("ssh_port", 22)))
 
             if dev_vm:
                 self.dev_vm = self.nodelist[-1]
@@ -438,9 +433,8 @@ class AciDeployment(Deployment):
             print("Teardown did nothing")
             return
 
-        for  node in self.nodelist:
-            name = node.name
-            print(cu.deleteDeployment(self.resource_group, name))
+        for node in self.nodelist:
+            cu.deleteDeployment(self.resource_group, node.name, self.local)
 
     def __repr__(self):
         s = f"Mode: {self.mode}\n"
@@ -569,3 +563,15 @@ echo "Done {job_file}" >> status.txt
         if wait_till_end:
             self.wait_till_end(len(cmds))
             
+    def lift_dev_cpu_quota(self):
+        if not self.local:
+            raise ValueError("This function is only for local deployments")
+        self.previous_cpu_quota = cu.liftCpuQuota(self.dev_vm.name)
+
+    def reset_cpu_quota(self):
+        if not self.local:
+            raise ValueError("This function is only for local deployments")
+        if self.previous_cpu_quota is None:
+            raise ValueError("No previous CPU quota found. Did you call lift_dev_cpu_quota() before?")
+        
+        cu.setCpuQuota(self.dev_vm.name, self.previous_cpu_quota)

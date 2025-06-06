@@ -2,22 +2,23 @@
 
 
 import subprocess
-import sys
 import yaml
 from ssh_utils import executeCommand, executeCommandArgs
-import fabric
+from os import cpu_count
+from psutil import virtual_memory
 
 # Generate fully qualified registry image name from 'base' image name
 def getFullImageName(acrPrefix, imageName):
     return acrPrefix + ".azurecr.io/" + imageName
 
 # Build docker Image (no argments expected)
-def buildImage(fullImageName, dockerFolder):
+def buildImage(fullImageName, dockerFolder, ssh_public_key):
     print("Building docker image {}".format(fullImageName))
     try: 
-     print(executeCommand("docker build -t " + fullImageName + " " + dockerFolder))
+        print(executeCommand(f"cp {ssh_public_key} {dockerFolder}"))
+        print(executeCommand("docker build -t " + fullImageName + " " + dockerFolder))
     # print(executeCommand("docker build --no-cache -t " + fullImageName + " " + dockerFolder))
-     print("Docker image built")
+        print("Docker image built")
     except subprocess.CalledProcessError as e:
         print("Error building docker image: ", e.stderr)
 
@@ -64,7 +65,7 @@ def cancelDeployment(resourceGroup, deploymentName):
 
 # Update the ARM template with the appropriate primary image, region, deployment etc. 
 # and launch deployment
-def launchDeployment(templateFile, resourceGroup, deploymentName, acrPrefix, primary_image, sshKey, acrToken, location, server_port, docker_ssh, local, confidential, spot = True):
+def launchDeployment(templateFile, resourceGroup, deploymentName, acrPrefix, primary_image, sshKey, acrToken, location, server_port, local, confidential, total_node_count, spot=True):
     print("Launching deployment")
     if not local:  
         if (confidential): 
@@ -88,15 +89,21 @@ def launchDeployment(templateFile, resourceGroup, deploymentName, acrPrefix, pri
                                   "--parameters", acr_token]))
     
     else: 
-        print(executeCommandArgs(["docker", "run", "-d", "-p", str(docker_ssh) + ":22",  "--name", deploymentName, primary_image]))
+        # PirateShip is quite resource intensive... cpu and memory quotas can be a way to run clusters on a single local machine 
+        # if you think this is outside the scope od aci deployment (which it is), I can take it away and just create a utility script that handles this
+        print(executeCommand(f"docker run -d -p {str(server_port)}:22 --cpus={(cpu_count() - 0.5) / total_node_count:.2f} --memory={(virtual_memory().total - 500_000_000) // total_node_count}b --name {deploymentName} {primary_image}"))
+        # print(executeCommand(f"docker run -d -p {str(server_port)}:22 --memory={(virtual_memory().total - 500_000_000) // total_node_count}b --name {deploymentName} {primary_image}"))
         print("Container {} launched.".format(deploymentName))
-       
+
 # Cancels deloyments
-def deleteDeployment(resourceGroup, deploymentName):
-    resource_group = " --resource-group " + resourceGroup
-    name = " --name " + deploymentName
-    print("Executing command: az deployment group delete " + resource_group + " " +  name)
-    print(executeCommand("az deployment group delete " + resource_group + " " + name))
+def deleteDeployment(resourceGroup, deploymentName, local=False):
+    if not local:
+        resource_group = " --resource-group " + resourceGroup
+        name = " --name " + deploymentName
+        print("Executing command: az deployment group delete " + resource_group + " " +  name)
+        print(executeCommand("az deployment group delete " + resource_group + " " + name))
+    else:
+        print(executeCommandArgs(["docker", "rm", "-f", deploymentName]))
 
 # Obtains the public Ip address of all currently running containers in a specific deployment
 # and resource group
@@ -106,7 +113,8 @@ def obtainIpAddress(resourceGroup, deploymentName, local):
         print(result) 
     else:
         # Get Internal IP Address of Docker Container Using Docker Inspect
-        result = unexecuteCommandArgs(["docker", "inspect", "-f",  "\'{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}\'", deploymentName])
+        result = executeCommandArgs(["docker", "inspect", "-f",  "\'{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}\'", deploymentName])
+        result = result.strip("'")  # Remove single quotes around the IP address
     print("IP Address of " + deploymentName + " is " + result)
     return result 
 
@@ -137,3 +145,11 @@ def collectAllIpAddressJson(resourceGroup, local):
         #TODO(natacha): Local Json not implemented yet
     print(result)
     return result
+
+def liftCpuQuota(deploymentName):
+    previous_quota = executeCommandArgs(["docker", "inspect", "-f", "\'{{.HostConfig.CpuQuota}}\'", deploymentName])
+    executeCommandArgs(["docker", "update", "--cpus", str(cpu_count()), deploymentName])
+    return previous_quota
+
+def setCpuQuota(deploymentName, quota):
+    executeCommandArgs(["docker", "update", "--cpus", str(quota), deploymentName])
