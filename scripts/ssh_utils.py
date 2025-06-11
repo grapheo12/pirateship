@@ -122,7 +122,7 @@ def copy_dir_from_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
 
 # (Helper) Executes a bash command in Python. Takes in arguments as an array
 # Returns the output. 
-def executeCommandArgs(command):
+def execute_command_args(command):
     print("Executing command: ", command)
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode !=0: 
@@ -134,11 +134,11 @@ def executeCommandArgs(command):
 # (Helper) Execute a bash command in Python.  Takes in arguments as a string and
 # splits arguments into an array. Note that for some commands, this can create issues.
 # Using @executeCommandArgs is the recommended and more robust way to invoke a command.
-def executeCommand(command):
-    return executeCommandArgs(command.split())
+def execute_command(command):
+    return execute_command_args(command.split())
 
 # (Helper) Sends file to remote host
-def sendRemoteFile(local_file, user, h, remote_dir, key=None, port=None):
+def send_remote_file(local_file, user, h, remote_dir, key=None, port=None):
     port_string = "-P " + str(port)  + " " if port else " "
     if not key:
         cmd = "scp -O -o StrictHostKeyChecking=no  " + \
@@ -146,10 +146,10 @@ def sendRemoteFile(local_file, user, h, remote_dir, key=None, port=None):
     else:
         cmd = "scp -O -o StrictHostKeyChecking=no -i " + key + \
             " " + port_string + local_file + " " + user + "@" + h + ":" + remote_dir
-    return executeCommand(cmd)
+    return execute_command(cmd)
 
 # (Helper) Executes command on remote host
-def executeRemoteCommand(user, host, command, key=None, port=None):
+def execute_remote_command(user, host, command, key=None, port=None):
     if not key:
         if port:
           cmd = ["ssh","-o", "StrictHostKeyChecking=no", "-t " , "-p",  str(port), user + "@" + host, "\"" + command + "\""]

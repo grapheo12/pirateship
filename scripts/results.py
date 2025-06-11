@@ -867,7 +867,7 @@ class Result:
                     f.write("==================================\n")
 
         output = self.kwargs.get('output', None)
-        #self.tput_latency_sweep_plot(plot_dict, output)
+        self.tput_latency_sweep_plot(plot_dict, output)
 
 
 

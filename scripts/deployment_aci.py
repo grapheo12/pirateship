@@ -10,6 +10,8 @@ import re
 import container_utils as cu
 from ssh_utils import *
 from deployment import Deployment
+from concurrent.futures import ThreadPoolExecutor, wait
+from threading import Semaphore
 
 
 class AciDeployment(Deployment):
@@ -67,8 +69,8 @@ class AciDeployment(Deployment):
             ssh_key_name = os.path.basename(config["ssh_pub_key"])
             print(ssh_key_name)
             # Copy the key into workdir/deployment
-            print(executeCommandArgs(["mkdir", "-p", os.path.join(workdir, "deployment")]))
-            print(executeCommandArgs(["cp", config["ssh_pub_key"], os.path.join(workdir, "deployment",ssh_key_name)]))
+            print(execute_command_args(["mkdir", "-p", os.path.join(workdir, "deployment")]))
+            print(execute_command_args(["cp", config["ssh_pub_key"], os.path.join(workdir, "deployment",ssh_key_name)]))
             self.ssh_pub_key = os.path.join(workdir, "deployment", ssh_key_name)
             print(f"SSH KEY IS {self.ssh_pub_key}")
         else:
@@ -79,8 +81,8 @@ class AciDeployment(Deployment):
             ssh_key_name = os.path.basename(config["ssh_key"])
             print(ssh_key_name)
             # Copy the key into workdir/deployment
-            print(executeCommandArgs(["mkdir", "-p", os.path.join(workdir, "deployment")]))
-            print(executeCommandArgs(["cp", config["ssh_key"], os.path.join(workdir, "deployment",ssh_key_name)]))
+            print(execute_command_args(["mkdir", "-p", os.path.join(workdir, "deployment")]))
+            print(execute_command_args(["cp", config["ssh_key"], os.path.join(workdir, "deployment",ssh_key_name)]))
             self.ssh_key = os.path.join(workdir, "deployment", ssh_key_name)
             print(f"SSH KEY IS {self.ssh_key}")
         else:
@@ -238,14 +240,20 @@ class AciDeployment(Deployment):
 
 
         # Get token that will allow connectiong to the Azure Container Registry
-        token = cu.getAcrToken(self.registry_name) if not self.local else None
+        token = cu.get_acr_token(self.registry_name) if not self.local else None
 
         # Build containers
-        cu.buildImage(cu.getFullImageName(self.registry_name, self.image_name) if not self.local else self.image_name, found_path, self.ssh_pub_key)
-        if not self.local: cu.pushImage(self.registry_name, cu.getFullImageName(self.registry_name, self.image_name))
+        cu.build_image(cu.get_full_image_name(self.registry_name, self.image_name) if not self.local else self.image_name, found_path, self.ssh_pub_key)
+        if not self.local: cu.push_image(self.registry_name, cu.get_full_image_name(self.registry_name, self.image_name))
+
+        raw_ssh_key = execute_command("cat " + self.ssh_pub_key) if not self.local else None
+        if not self.local and self.confidential:
+            # Update the ARM template to include the CCE policy
+            # we only need to do this once for the image
+            self.template = cu.update_sku(self.template, self.image_name)
 
         # Deploy containers on Azure or locally (no regions, everything should be localhost)
-        extractConfigArgs = cu.extractConfig(deploy_config)['platforms']
+        extractConfigArgs = cu.extract_config(deploy_config)['platforms']
         print(extractConfigArgs)
 
         # Iterate over the configuration (regions)
@@ -253,47 +261,61 @@ class AciDeployment(Deployment):
         platform_idx = 0
         nodelist = {}
         total_node_count = int(extractConfigArgs[0]["nodepool_count"]) + int(extractConfigArgs[0]["clientpool_count"]) if self.local else None
-        for platform in extractConfigArgs:
-          location = platform['location']
-          print("Creating containers in " + location)
-          # Launch Node Containers
-          launch_count = int(platform["nodepool_count"])
-          print("Launching "+ str(launch_count) + " node containers")
-          base_port = self.node_port_base
-          for i in range(0, launch_count):
-            base_port = base_port + 1
-            nodepool_container_tag_i = self.generate_node_container_tag(total_idx,platform_idx, i)
-            cu.launchDeployment(self.template, self.resource_group, nodepool_container_tag_i, self.registry_name, self.image_name, self.ssh_pub_key, token , location, base_port, self.local, self.confidential, total_node_count)
-            ip = cu.obtainIpAddress(self.resource_group, nodepool_container_tag_i, self.local)
-            nodelist[nodepool_container_tag_i] = {
-                "private_ip": ip,
-                "public_ip":  ip if not self.local else "127.0.0.1",
-                "tee_type":  "aci" if not self.confidential else "caci",
-                "region_id": platform_idx,
-                "ssh_port": base_port,
-                "name": nodepool_container_tag_i
-            }
-            total_idx = total_idx + 1
 
-          # Launch Client Containers
-          launch_count = int(platform["clientpool_count"])
-          print("Launching "+ str(launch_count) + " client containers")
-          total_idx = 0
-          for i in range(0, launch_count):
-              base_port = base_port + 1
-              client_container_tag_i = self.generate_client_container_tag(total_idx,platform_idx,i)
-              cu.launchDeployment(self.template, self.resource_group, client_container_tag_i, self.registry_name, self.image_name, self.ssh_pub_key, token , location, base_port, self.local, self.confidential, total_node_count)
-              ip = cu.obtainIpAddress(self.resource_group, client_container_tag_i, self.local)
-              nodelist[client_container_tag_i] = {
-                "private_ip": ip,
-                "public_ip":  ip if not self.local else "127.0.0.1",
-                "tee_type":  "aci" if not self.confidential else "caci",
-                "region_id": platform_idx,
-                "ssh_port": base_port,
-                "name": client_container_tag_i
-              }
-             
-          platform_idx = platform_idx + 1
+        # (Joao) The idea was to do this async and just wait for all deployments to finish,
+        # but it seems that Azure does not handle that well. Working on an alternative, left the code here for now
+        CONCURRENT_DEPLOYMENTS = 1
+        semaphore = Semaphore(CONCURRENT_DEPLOYMENTS)
+        def deployment_task(container_name, base_port, location, platform_idx):
+            semaphore.acquire()
+            try:
+                cu.launchDeployment(self.template, self.resource_group, container_name, self.registry_name, self.image_name, raw_ssh_key, token , location, base_port, self.local, total_node_count)
+                ip = cu.obtain_ip_address(self.resource_group, container_name, self.local)
+            finally:
+                semaphore.release()
+            return (container_name, ip, base_port, platform_idx)
+        
+        with ThreadPoolExecutor(max_workers=CONCURRENT_DEPLOYMENTS) as executor:
+            deployment_tasks = []
+            for platform in extractConfigArgs:
+                location = platform['location']
+                print("Creating containers in " + location)
+
+                # Launch Node Containers
+                launch_count = int(platform["nodepool_count"])
+                print("Launching "+ str(launch_count) + " node containers")
+                base_port = self.node_port_base
+                for i in range(0, launch_count):
+                    base_port = base_port + 1
+                    nodepool_container_tag_i = self.generate_node_container_tag(total_idx,platform_idx, i)
+                    deployment_tasks.append(executor.submit(deployment_task, nodepool_container_tag_i, base_port, location, platform_idx))
+                    total_idx += 1
+
+                # Launch Client Containers
+                launch_count = int(platform["clientpool_count"])
+                print("Launching "+ str(launch_count) + " client containers")
+                total_idx = 0
+                for i in range(0, launch_count):
+                    base_port = base_port + 1
+                    client_container_tag_i = self.generate_client_container_tag(total_idx,platform_idx,i)
+                    deployment_tasks.append(executor.submit(deployment_task, client_container_tag_i, base_port, location, platform_idx))
+                    total_idx += 1
+
+                platform_idx += 1
+
+            # Wait for all deployments to be live and update nodelist info with ip addresses and ports
+            wait(deployment_tasks)
+            print("All deployments finished.")
+            for task in deployment_tasks:
+                container_name, ip, base_port, platform_idx = task.result()
+                nodelist[container_name] = {
+                    "private_ip": ip,
+                    "public_ip":  ip if not self.local else "127.0.0.1",
+                    "tee_type":  "aci" if not self.confidential else "caci",
+                    "region_id": platform_idx,
+                    "ssh_port": base_port,
+                    "name": container_name
+                }
         
         self.raw_config["node_list"] = nodelist
         pprint(nodelist)
@@ -356,7 +378,7 @@ class AciDeployment(Deployment):
         if found_path is None:
             raise FileNotFoundError("Azure Terraform directory not found")
 
-        ips = cu.collectAllIpAddressJson(self.resource_group, self.local)
+        ips = cu.collect_all_ip_address_json(self.resource_group, self.local)
         print(ips)
         ips = {} if ips=="" else json.loads(ips)
 
@@ -434,7 +456,7 @@ class AciDeployment(Deployment):
             return
 
         for node in self.nodelist:
-            cu.deleteDeployment(self.resource_group, node.name, self.local)
+            cu.delete_deployment(self.resource_group, node.name, self.local)
 
     def __repr__(self):
         s = f"Mode: {self.mode}\n"
@@ -566,7 +588,7 @@ echo "Done {job_file}" >> status.txt
     def lift_dev_cpu_quota(self):
         if not self.local:
             raise ValueError("This function is only for local deployments")
-        self.previous_cpu_quota = cu.liftCpuQuota(self.dev_vm.name)
+        self.previous_cpu_quota = cu.lift_cpu_quota(self.dev_vm.name)
 
     def reset_cpu_quota(self):
         if not self.local:
@@ -574,4 +596,4 @@ echo "Done {job_file}" >> status.txt
         if self.previous_cpu_quota is None:
             raise ValueError("No previous CPU quota found. Did you call lift_dev_cpu_quota() before?")
         
-        cu.setCpuQuota(self.dev_vm.name, self.previous_cpu_quota)
+        cu.set_cpu_quota(self.dev_vm.name, self.previous_cpu_quota)

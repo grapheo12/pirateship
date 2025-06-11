@@ -71,7 +71,7 @@ class Deployment:
             # Extract final name of file, removing path
             ssh_key_name = os.path.basename(config["ssh_key"])
             # Copy the key into workdir/deployment
-            executeCommandArgs(["cp", config["ssh_key"], os.path.join(workdir, "deployment",ssh_key_name)])
+            execute_command_args(["cp", config["ssh_key"], os.path.join(workdir, "deployment",ssh_key_name)])
             self.ssh_key = os.path.join(workdir, "deployment", ssh_key_name)
         else:
             self.ssh_key = os.path.join(workdir, "deployment", config["ssh_key"])
