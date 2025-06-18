@@ -7,6 +7,7 @@ from ssh_utils import execute_command, execute_command_args
 from os import cpu_count
 from psutil import virtual_memory
 import tempfile
+import re
 
 # Generate fully qualified registry image name from 'base' image name
 def get_full_image_name(acr_prefix, image_name):
@@ -120,14 +121,19 @@ def delete_deployment(resource_group, deployment_name, local=False):
 def obtain_ip_address(resource_group, deployment_name, local): 
     if not local: 
         result = execute_command("az container show -g " + resource_group + " -n " + deployment_name + " --query ipAddress.ip -o tsv") 
-        print(result) 
     else:
         # Get Internal IP Address of Docker Container Using Docker Inspect
         result = execute_command_args(["docker", "inspect", "-f",  "\'{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}\'", deployment_name])
         result = result.strip("'")  # Remove single quotes around the IP address
+    if not is_valid_ip(result):
+        print("Error: Invalid IP address obtained for deployment " + deployment_name)
+        return None
     print("IP Address of " + deployment_name + " is " + result)
     return result 
 
+def is_valid_ip(ip):
+    pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
+    return re.match(pattern, ip) is not None
 
 # Extracts deployment configuration. Takes in a yaml file
 # and returns a list of pairs where the first entry is the region
