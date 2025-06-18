@@ -1,4 +1,5 @@
 from copy import deepcopy
+import datetime
 import os
 from pprint import pprint
 import pickle
@@ -268,9 +269,13 @@ class AciDeployment(Deployment):
         semaphore = Semaphore(CONCURRENT_DEPLOYMENTS)
         def deployment_task(container_name, base_port, location, platform_idx):
             semaphore.acquire()
+            ip = None
             try:
-                cu.launchDeployment(self.template, self.resource_group, container_name, self.registry_name, self.image_name, raw_ssh_key, token , location, base_port, self.local, total_node_count)
                 ip = cu.obtain_ip_address(self.resource_group, container_name, self.local)
+                if ip is None:
+                    print(datetime.datetime.now())
+                    cu.launchDeployment(self.template, self.resource_group, container_name, self.registry_name, self.image_name, raw_ssh_key, token , location, base_port, self.local, total_node_count)
+                    ip = cu.obtain_ip_address(self.resource_group, container_name, self.local)
             finally:
                 semaphore.release()
             return (container_name, ip, base_port, platform_idx)
