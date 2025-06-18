@@ -24,8 +24,9 @@ from app_experiments import AppExperiment
 from ssh_utils import *
 from deployment import Deployment
 from deployment_aci import AciDeployment
-from experiments import Experiment
+from experiments import BaseExperiment, PirateShipExperiment
 from autobahn_experiments import AutobahnExperiment
+from ccf_experiments import CCFExperiment
 from results import *
 import pickle
 import re
@@ -139,11 +140,13 @@ def parse_config(path, workdir=None, existing_experiments=None):
         git_hash_override = e.get("git_hash", None)
         experiment_type = e.get("type", "pirateship")
         if experiment_type == "pirateship":
-            klass = Experiment
+            klass = PirateShipExperiment
         elif experiment_type == "app":
             klass = AppExperiment
         elif experiment_type == "autobahn":
             klass = AutobahnExperiment
+        elif experiment_type == "ccf":
+            klass = CCFExperiment
         project_home = toml_dict["project_home"]
 
         if "sweeping_parameters" in e:
@@ -422,7 +425,7 @@ def deploy_experiments(config, workdir):
             if f == "experiment.pkl":
                 with open(os.path.join(root, f), "rb") as f:
                     experiment = pickle.load(f)
-                    assert isinstance(experiment, Experiment)
+                    assert isinstance(experiment, BaseExperiment)
                     experiments.append(experiment)
 
     if len(experiments) == 0:
@@ -486,7 +489,7 @@ def run_experiments(config, workdir, name):
             if f == "experiment.pkl":
                 with open(os.path.join(root, f), "rb") as f:
                     experiment = pickle.load(f)
-                    assert isinstance(experiment, Experiment)
+                    assert isinstance(experiment, BaseExperiment)
                     experiments.append(experiment)
 
     script_lines = []
@@ -627,7 +630,7 @@ def clean_logs(config, workdir):
         if "experiment_pristine.pkl" in files:
             with open(os.path.join(root, "experiment_pristine.pkl"), "rb") as f:
                 experiment = pickle.load(f)
-                assert isinstance(experiment, Experiment)
+                assert isinstance(experiment, BaseExperiment)
             
             with open(os.path.join(root, "experiment.pkl"), "wb") as f:
                 pickle.dump(experiment, f)
@@ -657,7 +660,7 @@ def results(config, workdir):
             if f == "experiment.pkl":
                 with open(os.path.join(root, f), "rb") as f:
                     experiment = pickle.load(f)
-                    assert isinstance(experiment, Experiment)
+                    assert isinstance(experiment, BaseExperiment)
                     experiments.append(experiment)
 
     script_lines = []

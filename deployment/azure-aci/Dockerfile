@@ -8,7 +8,9 @@ FROM mcr.microsoft.com/mirror/docker/library/ubuntu:24.04
 
 ARG USER=pftadmin
 ARG PEM_KEY=cluster_key.pub
-ARG PYTHON_REQS=requirements.txt
+ARG CCF_VERSION="6.0.5"
+ARG CCF_PLATFORM="virtual"
+ARG SCITT_VERSION="tags/0.14.0"
 
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -35,16 +37,55 @@ RUN apt-get update && apt-get install -y \
     tmux \
     rsync \
     git \
-    sudo
+    # ccf dependencies start here
+    sudo \  
+    which \
+    procps \
+    alien \
+    rpm \
+    clang-tools \
+    ninja-build \
+    libuv1-dev \
+    libnghttp2-dev \
+    libcurl4-openssl-dev \
+    python3.12-venv \ 
+    lsb-release && \
+    curl -LO https://apache.jfrog.io/artifactory/arrow/ubuntu/apache-arrow-apt-source-latest-$(lsb_release -cs).deb && \
+    dpkg -i apache-arrow-apt-source-latest-$(lsb_release -cs).deb && \
+    apt update && \
+    apt install -y libarrow-dev libparquet-dev
+
+RUN curl -L "https://github.com/microsoft/CCF/releases/download/ccf-${CCF_VERSION}/ccf_${CCF_PLATFORM}_devel_${CCF_VERSION}_x86_64.rpm" -o ccf.rpm && \
+    alien --to-deb ccf.rpm && \
+    dpkg -i ./ccf*.deb && \
+    rm ./ccf.rpm ./ccf*.deb && \
+    apt --fix-broken install -y
+
+RUN git clone https://github.com/microsoft/scitt-ccf-ledger/ /opt/scitt-ccf-ledger && \
+    cd /opt/scitt-ccf-ledger && \
+    git checkout ${SCITT_VERSION} && \
+    PLATFORM=${CCF_PLATFORM} ./build.sh && \    
+    python3 -m venv venv && \
+    . venv/bin/activate && \
+    pip install --disable-pip-version-check -q -e ./pyscitt && \
+    pip install --disable-pip-version-check -q wheel && \
+    pip install --disable-pip-version-check -q -r test/requirements.txt && \
+    pip install ccf==${CCF_VERSION}
+
+COPY resolve.js /tmp/scitt/share/scitt/constitution/resolve.js
+# and finish here
 
 # Install Azure CLI
 RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
 
-
 # Create a new user
 RUN useradd -ms /bin/bash ${USER}
 # Change password
-RUN echo pftadmin:password1234 | chpasswd
+RUN echo ${USER}:password1234 | chpasswd
+
+# # Add user to sudoers
+# RUN usermod -aG sudo ${USER} && \
+#     echo "${USER} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 ## Setup SSH (this is not cloud-native, but is necessary to keep consistent with
 ## the rest of the experiments, which are cloud-native)
@@ -73,6 +114,5 @@ RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
 ENV PATH = "/home/${USER}/.cargo/bin:${PATH}"
 
 RUN mkdir -p /home/${USER}/testing_newscripts
-
 
 CMD ["/usr/sbin/sshd", "-D"]
