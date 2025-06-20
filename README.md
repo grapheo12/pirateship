@@ -41,4 +41,4 @@ However, porting to another cloud is possible: subclass the `Deployment` class i
 
 ## Correctness
 
-PirateShip has been modelled in TLA+: https://github.com/heidihoward/pirateship-tla
+PirateShip has been modelled in TLA+: https://github.com/PirateshipOrg/pirateship-tla
