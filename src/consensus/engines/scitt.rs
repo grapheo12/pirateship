@@ -43,20 +43,18 @@ impl TXID {
         Self { block_n, tx_idx }
     }
     pub fn to_vec(&self) -> Vec<u8> {
-        // let mut v = Vec::new();
-        // v.extend_from_slice(&self.block_n.to_be_bytes());
-        // v.extend_from_slice(&self.tx_idx.to_be_bytes());
-        // v
-        self.to_string().as_bytes().to_vec()
+        let mut v = Vec::new();
+        v.extend_from_slice(&self.block_n.to_be_bytes());
+        v.extend_from_slice(&self.tx_idx.to_be_bytes());
+        v
     }
     pub fn from_vec(v: &[u8]) -> Option<Self> {
-        // if v.len() < 12 {
-        //     return None; // 8 bytes for u64 + 4 bytes for usize
-        // }
-        // let block_n = u64::from_be_bytes(v[0..8].try_into().ok()?);
-        // let tx_idx = usize::from_be_bytes(v[8..12].try_into().ok()?);
-        // Some(Self { block_n, tx_idx })
-        TXID::from_string(&String::from_utf8_lossy(v))
+        if v.len() < 16 {
+            return None; // 8 bytes for u64 + 8 bytes for usize
+        }
+        let block_n = u64::from_be_bytes(v[0..8].try_into().ok()?);
+        let tx_idx = usize::from_be_bytes(v[8..16].try_into().ok()?);
+        Some(Self { block_n, tx_idx })
     }
     pub fn to_string(&self) -> String {
         format!("{}{}{}", self.block_n, Self::DELIMITER, self.tx_idx)
@@ -148,7 +146,7 @@ impl AppEngine for SCITTAppEngine {
                             if op.operands.len() != 1 {
                                 continue;
                             }
-                            let key = TXID::from_vec(&op.operands[0].to_vec());
+                            let key = TXID::from_vec(&op.operands[0]);
                             let mut result = None;
                             if let Some(txid) = key {
                                 result = self.read(&txid);
@@ -163,8 +161,8 @@ impl AppEngine for SCITTAppEngine {
                             if op.operands.len() != 2 {
                                 continue;
                             }
-                            let from = TXID::from_vec(&op.operands[0].to_vec());
-                            let to = TXID::from_vec(&op.operands[1].to_vec());
+                            let from = TXID::from_vec(&op.operands[0]);
+                            let to = TXID::from_vec(&op.operands[1]);
                             let mut scan_result = Vec::new();
                             if let (Some(from), Some(to)) = (&from, &to) {
                                 for (key, versions) in self.state.ci_state.iter() {
@@ -182,8 +180,6 @@ impl AppEngine for SCITTAppEngine {
                                     }
                                 }
                             }
-                            warn!("scanned from: {}, to: {}, result: {:?}", 
-                                  from.unwrap().to_string(), to.unwrap().to_string(), scan_result);
                             txn_result.result.push(ProtoTransactionOpResult {
                                 success: true,
                                 values: scan_result,
@@ -310,7 +306,7 @@ impl AppEngine for SCITTAppEngine {
                 success: false,
                 values: vec![],
             };
-            let key = TXID::from_vec(&op.operands[0].to_vec());
+            let key = TXID::from_vec(&op.operands[0]);
             let mut result = None;
             if let Some(txid) = key {
                 result = self.read(&txid);
@@ -349,5 +345,18 @@ impl SCITTAppEngine {
         } else {
             return None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_txid_encode_decode() {
+        let txid = TXID::new(420, 69);
+        let encoded = txid.to_vec();
+        let decoded = TXID::from_vec(&encoded).unwrap();
+        assert_eq!(txid, decoded);
     }
 }

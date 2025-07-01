@@ -13,7 +13,6 @@ use std::{
 use tokio::{runtime, signal};
 
 mod frontend;
-mod payloads;
 mod cbor_utils;
 
 /// Fetch json config file from command line path.

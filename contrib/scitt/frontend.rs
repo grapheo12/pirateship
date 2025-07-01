@@ -1,5 +1,4 @@
-use crate::cbor_utils::{cbor_to_operation_props, operation_props_to_cbor};
-use crate::payloads::EntryPayload;
+use crate::cbor_utils::operation_props_to_cbor;
 
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
 use log::{debug, warn};
@@ -7,20 +6,15 @@ use pft::config::Config;
 use pft::consensus::batch_proposal::TxWithAckChanTag;
 use pft::consensus::engines::scitt::TXID;
 use pft::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase};
-use pft::rpc::{MessageRef, PinnedMessage, SenderType};
+use pft::rpc::SenderType;
 use pft::{
-    config::ClientConfig,
-    proto::{
-        client::{self, ProtoClientReply, ProtoClientRequest},
-        rpc::ProtoPayload,
-    },
-    rpc::client::PinnedClient,
-    utils::channel::{make_channel, Receiver, Sender},
+    proto::client::{self, ProtoClientReply},
+    utils::channel::Sender,
 };
 use prost::Message;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
@@ -392,7 +386,7 @@ pub async fn run_actix_server(
         App::new()
             .app_data(web::Data::new(state))
             .service(register_signed_statement)
-            .service(get_entries_tx_ids)
+            .service(get_entries_tx_ids) // The order matters. If this is registered after get_entry_receipt, it will match the same path and never work
             .service(get_entry_receipt)
             .service(get_entry_statement)
             .service(get_operation_with_status)
