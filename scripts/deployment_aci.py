@@ -251,7 +251,10 @@ class AciDeployment(Deployment):
         if not self.local and self.confidential:
             # Update the ARM template to include the CCE policy
             # we only need to do this once for the image
-            self.template = cu.update_sku(self.template, self.image_name)
+            self.node_template = cu.update_sku(self.template, self.image_name)
+        else:
+            # For non-confidential deployments, we can use the original template
+            self.node_template = self.template
 
         # Deploy containers on Azure or locally (no regions, everything should be localhost)
         extractConfigArgs = cu.extract_config(deploy_config)['platforms']
@@ -267,14 +270,15 @@ class AciDeployment(Deployment):
         # but it seems that Azure does not handle that well. Working on an alternative, left the code here for now
         CONCURRENT_DEPLOYMENTS = 1
         semaphore = Semaphore(CONCURRENT_DEPLOYMENTS)
-        def deployment_task(container_name, base_port, location, platform_idx):
+        def deployment_task(container_name, base_port, location, platform_idx, is_client=False):
             semaphore.acquire()
             ip = None
             try:
                 ip = cu.obtain_ip_address(self.resource_group, container_name, self.local)
                 if ip is None:
                     print(datetime.datetime.now())
-                    cu.launchDeployment(self.template, self.resource_group, container_name, self.registry_name, self.image_name, raw_ssh_key, token , location, base_port, self.local, total_node_count)
+                    # nodes are possibly confidential containers, clients are not
+                    cu.launchDeployment(self.template if is_client else self.node_template, self.resource_group, container_name, self.registry_name, self.image_name, raw_ssh_key, token , location, base_port, self.local, total_node_count)
                     ip = cu.obtain_ip_address(self.resource_group, container_name, self.local)
             finally:
                 semaphore.release()
@@ -303,7 +307,7 @@ class AciDeployment(Deployment):
                 for i in range(0, launch_count):
                     base_port = base_port + 1
                     client_container_tag_i = self.generate_client_container_tag(total_idx,platform_idx,i)
-                    deployment_tasks.append(executor.submit(deployment_task, client_container_tag_i, base_port, location, platform_idx))
+                    deployment_tasks.append(executor.submit(deployment_task, client_container_tag_i, base_port, location, platform_idx, is_client=True))
                     total_idx += 1
 
                 platform_idx += 1
