@@ -75,6 +75,11 @@ RUN git clone https://github.com/microsoft/scitt-ccf-ledger/ /opt/scitt-ccf-ledg
 COPY resolve.js /tmp/scitt/share/scitt/constitution/resolve.js
 # and finish here
 
+RUN git clone https://github.com/scottchiefbaker/dool /opt/dool && \
+    cd /opt/dool && \
+    git checkout v1.3.4 && \
+    make install
+
 # Install Azure CLI
 RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
 

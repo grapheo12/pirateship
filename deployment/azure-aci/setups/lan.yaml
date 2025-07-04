@@ -1,5 +1,5 @@
 platforms: 
- - location: "East US"
+ - location: "Sweden Central"
    nodepool_count: "7"
-   clientpool_count: "3" 
+   clientpool_count: "3"
  
