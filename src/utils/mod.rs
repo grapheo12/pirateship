@@ -76,7 +76,20 @@ pub mod channel {
                     Err(_) => None,
                 }
             }
+
+            /// Get the number of messages currently waiting in the channel
+            #[cfg(feature = "channel_monitoring")]
+            pub fn len(&self) -> usize {
+                self.0.len()
+            }
+
+            /// Check if the channel is empty
+            #[cfg(feature = "channel_monitoring")]
+            pub fn is_empty(&self) -> bool {
+                self.0.is_empty()
+            }
         }
+
 
         impl <T> AsyncSenderWrapper<T> {
 
@@ -91,7 +104,17 @@ pub mod channel {
                 self.0.send((Instant::now(), e)).await
             }
 
+            /// Get the number of messages currently waiting in the channel
+            #[cfg(feature = "channel_monitoring")]
+            pub fn len(&self) -> usize {
+                self.0.len()
+            }
 
+            /// Check if the channel is empty
+            #[cfg(feature = "channel_monitoring")]
+            pub fn is_empty(&self) -> bool {
+                self.0.is_empty()
+            }
         }
 
 
